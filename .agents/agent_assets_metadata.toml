@@ -1,0 +1,8 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "UBK4iIY8EqtwC7Q5nDag7"
+uri = "file://bot-deploy.zip"
+type = "unspecified"
+title = "bot-deploy.zip — arquivos para o GitHub/Render"
