@@ -199,11 +199,11 @@ async function fetchAnime(selected: Set<string>, isAdult: boolean, page: number)
 
   if (!res.ok) throw new Error(`AniList HTTP ${res.status}`);
   const json = (await res.json()) as {
-    data: { Page: { media: AnimeMedia[] } };
+    data?: { Page?: { media?: AnimeMedia[] } };
     errors?: { message: string }[];
   };
   if (json.errors?.length) throw new Error(json.errors[0].message);
-  return json.data.Page.media ?? [];
+  return json.data?.Page?.media ?? [];
 }
 
 function buildEmbed(media: AnimeMedia[], selected: Set<string>, isAdult: boolean, page: number): EmbedBuilder {
@@ -265,15 +265,10 @@ function buildGenreRows(selected: Set<string>, isAdult: boolean): ActionRowBuild
     );
   }
 
-  // Última linha: gênero 21 + +18 + Limpar + Buscar
-  const last = GENRES[20];
+  // Última linha: apenas controles (+18, Limpar, Buscar)
+  // O loop acima já cobre todos os 20 gêneros (índices 0-19)
   rows.push(
     new ActionRowBuilder<ButtonBuilder>().addComponents(
-      new ButtonBuilder()
-        .setCustomId(`nt_genre_${last?.value ?? ""}`)
-        .setLabel(last?.label ?? "")
-        .setEmoji(last?.emoji ?? "")
-        .setStyle(selected.has(last?.value ?? "") ? ButtonStyle.Primary : ButtonStyle.Secondary),
       new ButtonBuilder()
         .setCustomId(ID_ADULT)
         .setLabel("+18")
@@ -334,7 +329,12 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     components: buildGenreRows(selected, isAdult),
   });
 
-  const collector = interaction.channel?.createMessageComponentCollector({
+  if (!interaction.channel) {
+    await interaction.editReply({ content: "❌ Não foi possível iniciar o coletor de botões neste canal.", components: [] });
+    return;
+  }
+
+  const collector = interaction.channel.createMessageComponentCollector({
     componentType: ComponentType.Button,
     filter: (i) =>
       (i.customId.startsWith("nt_genre_") ||
@@ -414,6 +414,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 
     // ── Paginação ─────────────────────────────────────────────────────────────
     if (phase === "results" && (btn.customId === "nt_prev" || btn.customId === "nt_next")) {
+      const prevPage = page;
       if (btn.customId === "nt_prev") page = Math.max(1, page - 1);
       else page++;
 
@@ -421,7 +422,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
       try {
         const media = await fetchAnime(selected, isAdult, page);
         if (!media.length) {
-          page = Math.max(1, page - 1);
+          page = prevPage; // restaura estado se não houver resultados
           await btn.followUp({ content: "❌ Sem mais resultados nessa página.", ephemeral: true });
           return;
         }
@@ -430,6 +431,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
           components: [buildNavRow(page)],
         });
       } catch {
+        page = prevPage; // restaura estado em caso de erro
         await btn.followUp({ content: "❌ Erro ao paginar. Tente novamente.", ephemeral: true });
       }
       return;
