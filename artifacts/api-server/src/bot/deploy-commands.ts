@@ -16,6 +16,7 @@ import { data as similarData } from "./commands/similar.js";
 import { data as buscarData } from "./commands/buscar.js";
 import { data as animeData } from "./commands/anime.js";
 import { data as vnData } from "./commands/vn.js";
+import { data as noticiasData } from "./commands/noticias.js";
 import { logger } from "../lib/logger.js";
 
 export async function deployCommands(clientId: string, token: string) {
@@ -37,6 +38,7 @@ export async function deployCommands(clientId: string, token: string) {
     buscarData.toJSON(),
     animeData.toJSON(),
     vnData.toJSON(),
+    noticiasData.toJSON(),
   ];
   const rest = new REST().setToken(token);
 
