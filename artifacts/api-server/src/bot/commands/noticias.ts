@@ -128,7 +128,7 @@ interface AnimeMedia {
   genres: string[];
   averageScore: number | null;
   siteUrl: string;
-  externalLinks: ExternalLink[];
+  externalLinks: ExternalLink[] | null;
 }
 
 function seasonLabel(season: string | null, year: number | null): string {
@@ -257,8 +257,8 @@ function buildEmbed(media: AnimeMedia[], selected: Set<string>, isAdult: boolean
 function buildGenreRows(selected: Set<string>, isAdult: boolean): ActionRowBuilder<ButtonBuilder>[] {
   const rows: ActionRowBuilder<ButtonBuilder>[] = [];
 
-  // 4 linhas de gêneros (5 por linha = 20 gêneros)
-  for (let i = 0; i < 20; i += 5) {
+  // Linhas de gêneros (5 por linha)
+  for (let i = 0; i < GENRES.length; i += 5) {
     const slice = GENRES.slice(i, i + 5);
     if (!slice.length) break;
     rows.push(
@@ -353,6 +353,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
   });
 
   collector.on("collect", async (btn: ButtonInteraction) => {
+    try {
 
     // ── +18 ──────────────────────────────────────────────────────────────────
     if (btn.customId === ID_ADULT) {
@@ -469,6 +470,18 @@ export async function execute(interaction: ChatInputCommandInteraction) {
         selected.add(genreValue);
       }
       await btn.update({ components: buildGenreRows(selected, isAdult) });
+    }
+
+    } catch (err) {
+      console.error("[noticias] Erro inesperado no handler:", err);
+      // Tenta responder ao usuário se ainda não foi respondido
+      try {
+        if (!btn.replied && !btn.deferred) {
+          await btn.reply({ content: "❌ Ocorreu um erro inesperado. Tente novamente.", ephemeral: true });
+        }
+      } catch {
+        // Silencia erro de resposta duplicada
+      }
     }
   });
 
