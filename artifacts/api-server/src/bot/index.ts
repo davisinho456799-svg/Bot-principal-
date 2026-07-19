@@ -26,7 +26,6 @@ import * as animeCommand from "./commands/anime.js";
 import * as vnCommand from "./commands/vn.js";
 import * as adminCommand from "./commands/admin.js";
 import * as noticiasCommand from "./commands/noticias.js";
-import * as animegeneroCommand from "./commands/animegenero.js";
 import { startNotificacaoService } from "./notificacao-service.js";
 import { logUsage } from "./usage-logger.js";
 
@@ -56,7 +55,6 @@ const commands = new Map<string, Command>([
   [vnCommand.data.name, vnCommand],
   [adminCommand.data.name, adminCommand],
   [noticiasCommand.data.name, noticiasCommand],
-  [animegeneroCommand.data.name, animegeneroCommand],
 ]);
 
 export async function startBot() {
