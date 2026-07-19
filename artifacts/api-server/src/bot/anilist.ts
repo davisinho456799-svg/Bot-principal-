@@ -224,16 +224,14 @@ export async function translateToPtBr(text: string): Promise<string> {
   const truncated = text.slice(0, 500);
 
   try {
-    const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(truncated)}&langpair=en|pt-BR`;
+    const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=pt-BR&dt=t&q=${encodeURIComponent(truncated)}`;
     const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
-    if (!res.ok) throw new Error("MyMemory error");
-    const json = (await res.json()) as {
-      responseStatus: number;
-      responseData: { translatedText: string };
-    };
-    if (json.responseStatus !== 200) throw new Error("Translation failed");
-    const translated = json.responseData.translatedText;
-    return (text.length > 500 ? translated + "..." : translated);
+    if (!res.ok) throw new Error("Translate error");
+    const json = (await res.json()) as unknown[][];
+    const translated = (json[0] as unknown[][])
+      .map((x: unknown[]) => String(x[0] ?? ""))
+      .join("");
+    return translated || truncated;
   } catch {
     return truncated.slice(0, 400) + (text.length > 400 ? "..." : "");
   }
