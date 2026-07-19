@@ -190,9 +190,17 @@ async function fetchAnime(selected: Set<string>, isAdult: boolean, page: number)
     body = { query: UPCOMING_ALL_QUERY, variables: { page, isAdult } };
   }
 
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Accept: "application/json",
+  };
+  if (process.env.ANILIST_TOKEN) {
+    headers["Authorization"] = `Bearer ${process.env.ANILIST_TOKEN}`;
+  }
+
   const res = await fetch(ANILIST_API, {
     method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    headers,
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(10000),
   });
