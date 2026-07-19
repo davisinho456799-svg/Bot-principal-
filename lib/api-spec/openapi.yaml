@@ -10,6 +10,10 @@ servers:
 tags:
   - name: health
     description: Health operations
+  - name: auth
+    description: Autenticação do painel web
+  - name: admin
+    description: Dados administrativos
 paths:
   /healthz:
     get:
@@ -24,7 +28,180 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  /auth/login:
+    post:
+      operationId: loginAdmin
+      tags: [auth]
+      summary: Login no painel
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginInput"
+      responses:
+        "200":
+          description: Token JWT
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+        "401":
+          description: Credenciais inválidas
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /auth/me:
+    get:
+      operationId: getMe
+      tags: [auth]
+      summary: Retorna o admin logado
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Admin logado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminInfo"
+        "401":
+          description: Não autenticado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /admin/stats:
+    get:
+      operationId: getStats
+      tags: [admin]
+      summary: Estatísticas gerais do bot
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Estatísticas
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Stats"
+
+  /admin/logs:
+    get:
+      operationId: getLogs
+      tags: [admin]
+      summary: Logs de uso dos comandos
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: userId
+          in: query
+          schema:
+            type: string
+        - name: command
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+      responses:
+        "200":
+          description: Lista de logs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/LogEntry"
+
+  /admin/usuarios:
+    get:
+      operationId: getUsuarios
+      tags: [admin]
+      summary: Usuários mais ativos
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Lista de usuários
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/UsuarioStat"
+
+  /admin/bot-admins:
+    get:
+      operationId: getBotAdmins
+      tags: [admin]
+      summary: Lista de admins do bot
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Lista de admins
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/BotAdmin"
+    post:
+      operationId: addBotAdmin
+      tags: [admin]
+      summary: Adiciona admin do bot
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BotAdminInput"
+      responses:
+        "201":
+          description: Admin adicionado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BotAdmin"
+
+  /admin/bot-admins/{discordUserId}:
+    delete:
+      operationId: removeBotAdmin
+      tags: [admin]
+      summary: Remove admin do bot
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: discordUserId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Removido
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
   schemas:
     HealthStatus:
       type: object
@@ -34,3 +211,116 @@ components:
       required:
         - status
 
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
+
+    SuccessResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+      required:
+        - ok
+
+    LoginInput:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+        password:
+          type: string
+
+    LoginResponse:
+      type: object
+      required: [token, name]
+      properties:
+        token:
+          type: string
+        name:
+          type: string
+
+    AdminInfo:
+      type: object
+      required: [id, email, name]
+      properties:
+        id:
+          type: integer
+        email:
+          type: string
+        name:
+          type: string
+
+    Stats:
+      type: object
+      required: [totalComandos, totalUsuarios, totalFavoritos, comandoMaisUsado]
+      properties:
+        totalComandos:
+          type: integer
+        totalUsuarios:
+          type: integer
+        totalFavoritos:
+          type: integer
+        comandoMaisUsado:
+          type: ["string", "null"]
+
+    LogEntry:
+      type: object
+      required: [id, discordUserId, discordUsername, command, createdAt]
+      properties:
+        id:
+          type: integer
+        discordUserId:
+          type: string
+        discordUsername:
+          type: string
+        guildId:
+          type: ["string", "null"]
+        command:
+          type: string
+        query:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+          format: date-time
+
+    UsuarioStat:
+      type: object
+      required: [discordUserId, discordUsername, total]
+      properties:
+        discordUserId:
+          type: string
+        discordUsername:
+          type: string
+        total:
+          type: integer
+        ultimoUso:
+          type: ["string", "null"]
+
+    BotAdmin:
+      type: object
+      required: [discordUserId, discordUsername, addedBy, addedAt]
+      properties:
+        discordUserId:
+          type: string
+        discordUsername:
+          type: string
+        addedBy:
+          type: string
+        addedAt:
+          type: string
+          format: date-time
+
+    BotAdminInput:
+      type: object
+      required: [discordUserId, discordUsername]
+      properties:
+        discordUserId:
+          type: string
+        discordUsername:
+          type: string

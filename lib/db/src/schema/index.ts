@@ -101,6 +101,48 @@ export const titleAliases = pgTable(
 // ─── Tabela: description_matches ─────────────────────────────────────────────
 // Aprendizado histórico: associa hashes de descrições a títulos encontrados.
 
+// ─── Tabela: admin_users ──────────────────────────────────────────────────────
+// Usuários do Discord com permissão de admin no bot.
+
+export const adminUsersTable = pgTable("admin_users", {
+  discordUserId: text("discord_user_id").primaryKey(),
+  discordUsername: text("discord_username").notNull(),
+  addedBy: text("added_by").notNull(),
+  addedAt: timestamp("added_at").notNull().defaultNow(),
+});
+
+export type AdminUser = typeof adminUsersTable.$inferSelect;
+
+// ─── Tabela: usage_logs ───────────────────────────────────────────────────────
+// Registro de uso de comandos por usuários.
+
+export const usageLogsTable = pgTable("usage_logs", {
+  id: serial("id").primaryKey(),
+  discordUserId: text("discord_user_id").notNull(),
+  discordUsername: text("discord_username").notNull(),
+  guildId: text("guild_id"),
+  command: text("command").notNull(),
+  query: text("query"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+export type UsageLog = typeof usageLogsTable.$inferSelect;
+
+// ─── Tabela: web_admins ───────────────────────────────────────────────────────
+// Contas de login do painel web administrativo.
+
+export const webAdminsTable = pgTable("web_admins", {
+  id: serial("id").primaryKey(),
+  email: text("email").notNull().unique(),
+  passwordHash: text("password_hash").notNull(),
+  name: text("name").notNull(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+export type WebAdmin = typeof webAdminsTable.$inferSelect;
+
+// ─── Tabela: description_matches ─────────────────────────────────────────────
+
 export const descriptionMatches = pgTable(
   "description_matches",
   {

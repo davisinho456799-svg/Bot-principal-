@@ -24,7 +24,9 @@ import * as similarCommand from "./commands/similar.js";
 import * as buscarCommand from "./commands/buscar.js";
 import * as animeCommand from "./commands/anime.js";
 import * as vnCommand from "./commands/vn.js";
+import * as adminCommand from "./commands/admin.js";
 import { startNotificacaoService } from "./notificacao-service.js";
+import { logUsage } from "./usage-logger.js";
 
 type Command = {
   data: { name: string };
@@ -50,6 +52,7 @@ const commands = new Map<string, Command>([
   [buscarCommand.data.name, buscarCommand],
   [animeCommand.data.name, animeCommand],
   [vnCommand.data.name, vnCommand],
+  [adminCommand.data.name, adminCommand],
 ]);
 
 export async function startBot() {
@@ -110,6 +113,20 @@ export async function startBot() {
 
     const command = commands.get(interaction.commandName);
     if (!command) return;
+
+    // Log de uso (fire-and-forget, nunca bloqueia o comando)
+    void logUsage({
+      discordUserId: interaction.user.id,
+      discordUsername: interaction.user.username,
+      guildId: interaction.guildId,
+      command: interaction.commandName,
+      query: interaction.options.getString("titulo")
+        ?? interaction.options.getString("busca")
+        ?? interaction.options.getString("nome")
+        ?? interaction.options.getString("query")
+        ?? interaction.options.getString("obra")
+        ?? null,
+    });
 
     try {
       await command.execute(interaction);
