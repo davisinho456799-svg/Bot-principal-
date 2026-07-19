@@ -14,49 +14,51 @@ import { buildScanLinksExternal } from "./search.js";
 
 const ANILIST_API = "https://graphql.anilist.co";
 
+// "genre" = campo genre_in da AniList | "tag" = campo tag_in da AniList
 interface GenreOption {
   label: string;
   value: string;
   emoji: string;
+  kind: "genre" | "tag";
 }
 
-// 21 gêneros — 4 rows de 5 + última row com 1 gênero + botões de ação
 const GENRES: GenreOption[] = [
-  { label: "Ação",         value: "Action",       emoji: "⚔️" },
-  { label: "Aventura",     value: "Adventure",    emoji: "🗺️" },
-  { label: "Comédia",      value: "Comedy",       emoji: "😂" },
-  { label: "Drama",        value: "Drama",        emoji: "😢" },
-  { label: "Fantasia",     value: "Fantasy",      emoji: "🧙" },
-  { label: "Horror",       value: "Horror",       emoji: "😱" },
-  { label: "Mistério",     value: "Mystery",      emoji: "🔍" },
-  { label: "Psicológico",  value: "Psychological",emoji: "🧠" },
-  { label: "Romance",      value: "Romance",      emoji: "💕" },
-  { label: "Sci-Fi",       value: "Sci-Fi",       emoji: "🚀" },
-  { label: "Slice of Life",value: "Slice of Life",emoji: "☕" },
-  { label: "Mecha",        value: "Mecha",        emoji: "🤖" },
-  { label: "Mahou Shoujo", value: "Mahou Shoujo", emoji: "🌟" },
-  { label: "Ecchi",        value: "Ecchi",        emoji: "💋" },
-  { label: "Super Poder",  value: "Super Power",  emoji: "🦸" },
-  { label: "Gore",         value: "Gore",         emoji: "🩸" },
-  { label: "Reencarnação", value: "Reincarnation",emoji: "⏰" },
-  { label: "Game",         value: "Video Games",  emoji: "🎮" },
-  { label: "Zumbi",        value: "Zombies",      emoji: "🧟" },
-  { label: "Survival",     value: "Survival",     emoji: "🗡️" },
-  { label: "Escola",       value: "School Life",  emoji: "🏫" },
+  { label: "Ação",         value: "Action",        emoji: "⚔️",  kind: "genre" },
+  { label: "Aventura",     value: "Adventure",     emoji: "🗺️",  kind: "genre" },
+  { label: "Comédia",      value: "Comedy",        emoji: "😂",  kind: "genre" },
+  { label: "Drama",        value: "Drama",         emoji: "😢",  kind: "genre" },
+  { label: "Fantasia",     value: "Fantasy",       emoji: "🧙",  kind: "genre" },
+  { label: "Horror",       value: "Horror",        emoji: "😱",  kind: "genre" },
+  { label: "Mistério",     value: "Mystery",       emoji: "🔍",  kind: "genre" },
+  { label: "Psicológico",  value: "Psychological", emoji: "🧠",  kind: "genre" },
+  { label: "Romance",      value: "Romance",       emoji: "💕",  kind: "genre" },
+  { label: "Sci-Fi",       value: "Sci-Fi",        emoji: "🚀",  kind: "genre" },
+  { label: "Slice of Life",value: "Slice of Life", emoji: "☕",  kind: "genre" },
+  { label: "Mecha",        value: "Mecha",         emoji: "🤖",  kind: "genre" },
+  { label: "Mahou Shoujo", value: "Mahou Shoujo",  emoji: "🌟",  kind: "genre" },
+  { label: "Ecchi",        value: "Ecchi",         emoji: "💋",  kind: "genre" },
+  // Tags (tag_in)
+  { label: "Super Poder",  value: "Super Power",   emoji: "🦸",  kind: "tag"   },
+  { label: "Gore",         value: "Gore",          emoji: "🩸",  kind: "tag"   },
+  { label: "Reencarnação", value: "Reincarnation", emoji: "⏰",  kind: "tag"   },
+  { label: "Game",         value: "Video Games",   emoji: "🎮",  kind: "tag"   },
+  { label: "Zumbi",        value: "Zombies",       emoji: "🧟",  kind: "tag"   },
+  { label: "Survival",     value: "Survival",      emoji: "🗡️",  kind: "tag"   },
+  { label: "Escola",       value: "School Life",   emoji: "🏫",  kind: "tag"   },
 ];
 
 const ID_ADULT  = "rec_adult18";
 const ID_CLEAR  = "rec_clear";
 const ID_SEARCH = "rec_search";
 
-// Query padrão — filtra por origem KR e score ≥ 70
 const RECOMMEND_QUERY = `
-query RecommendManhwa($genres: [String], $page: Int) {
+query RecommendManhwa($genres: [String], $tags: [String], $page: Int) {
   Page(page: $page, perPage: 6) {
     media(
       type: MANGA
       countryOfOrigin: KR
       genre_in: $genres
+      tag_in: $tags
       sort: SCORE_DESC
       averageScore_greater: 70
     ) {
@@ -69,19 +71,18 @@ query RecommendManhwa($genres: [String], $page: Int) {
       chapters
       status
       siteUrl
-      startDate { year month day }
     }
   }
 }
 `;
 
-// Query +18 — sem filtro de origem, inclui Ecchi, score ≥ 60
 const RECOMMEND_ADULT_QUERY = `
-query RecommendAdult($genres: [String], $page: Int) {
+query RecommendAdult($genres: [String], $tags: [String], $page: Int) {
   Page(page: $page, perPage: 6) {
     media(
       type: MANGA
       genre_in: $genres
+      tag_in: $tags
       sort: SCORE_DESC
       averageScore_greater: 60
     ) {
@@ -94,7 +95,6 @@ query RecommendAdult($genres: [String], $page: Int) {
       chapters
       status
       siteUrl
-      startDate { year month day }
     }
   }
 }
@@ -110,7 +110,6 @@ interface AniListMedia {
   chapters: number | null;
   status: string | null;
   siteUrl: string;
-  startDate: { year: number | null };
 }
 
 function cleanDesc(raw: string | null): string {
@@ -127,20 +126,28 @@ function cleanDesc(raw: string | null): string {
 }
 
 async function fetchRecommendations(
-  genres: string[],
+  selected: Set<string>,
   isAdult: boolean
 ): Promise<AniListMedia[]> {
-  // Modo +18: usa query sem restrição de origem e inclui Ecchi automaticamente
-  let finalGenres: string[] | null;
+  // Separar gêneros de tags
+  const genreValues = [...selected].filter(
+    (v) => GENRES.find((g) => g.value === v)?.kind === "genre"
+  );
+  const tagValues = [...selected].filter(
+    (v) => GENRES.find((g) => g.value === v)?.kind === "tag"
+  );
+
+  let genres: string[] | null = genreValues.length > 0 ? genreValues : null;
+  let tags: string[] | null = tagValues.length > 0 ? tagValues : null;
   let query: string;
 
   if (isAdult) {
-    const adultGenres = new Set(genres);
+    // Força Ecchi no genre para trazer conteúdo maduro
+    const adultGenres = new Set(genreValues);
     adultGenres.add("Ecchi");
-    finalGenres = [...adultGenres];
+    genres = [...adultGenres];
     query = RECOMMEND_ADULT_QUERY;
   } else {
-    finalGenres = genres.length > 0 ? genres : null;
     query = RECOMMEND_QUERY;
   }
 
@@ -149,15 +156,18 @@ async function fetchRecommendations(
     headers: { "Content-Type": "application/json", Accept: "application/json" },
     body: JSON.stringify({
       query,
-      variables: { genres: finalGenres, page: 1 },
+      variables: { genres, tags, page: 1 },
     }),
     signal: AbortSignal.timeout(10000),
   });
+
   if (!res.ok) throw new Error(`AniList HTTP ${res.status}`);
+
   const json = (await res.json()) as {
     data: { Page: { media: AniListMedia[] } };
     errors?: { message: string }[];
   };
+
   if (json.errors?.length) throw new Error(json.errors[0].message);
   return json.data.Page.media ?? [];
 }
@@ -167,12 +177,13 @@ async function buildEmbed(
   selected: Set<string>,
   isAdult: boolean
 ): Promise<EmbedBuilder> {
-  const genreLabels = [...selected]
-    .map((v) => {
-      const g = GENRES.find((x) => x.value === v);
-      return g ? `${g.emoji} ${g.label}` : v;
-    })
-    .join(", ") || "Todos os gêneros";
+  const genreLabels =
+    [...selected]
+      .map((v) => {
+        const g = GENRES.find((x) => x.value === v);
+        return g ? `${g.emoji} ${g.label}` : v;
+      })
+      .join(", ") || "Todos os gêneros";
 
   const lines = await Promise.all(
     results.map(async (m) => {
@@ -181,28 +192,28 @@ async function buildEmbed(
       const chapters = m.chapters ? `📖 ${m.chapters} caps` : "";
       const status = statusLabel(m.status);
       const rawDesc = cleanDesc(m.description);
-      const desc = rawDesc ? await translateToPtBr(rawDesc.slice(0, 200)) : "Sem sinopse.";
+      const desc = rawDesc
+        ? await translateToPtBr(rawDesc.slice(0, 200)).catch(() => rawDesc.slice(0, 120))
+        : "Sem sinopse.";
       const shortDesc = desc.slice(0, 120) + (desc.length > 120 ? "..." : "");
       const scanLinks = buildScanLinksExternal(title);
-      return `**[${title}](${m.siteUrl})** — ${score} ${chapters ? `| ${chapters}` : ""} | ${status}\n> ${shortDesc}\n> 🔎 ${scanLinks}`;
+      return `**[${title}](${m.siteUrl})** — ${score}${chapters ? ` | ${chapters}` : ""} | ${status}\n> ${shortDesc}\n> 🔎 ${scanLinks}`;
     })
   );
 
   return new EmbedBuilder()
     .setTitle(isAdult ? "🔞 Recomendações +18 de Manhwa" : "📚 Recomendações de Manhwa")
-    .setDescription(`**Gêneros:** ${genreLabels}\n\n${lines.join("\n\n")}`)
+    .setDescription(`**Gêneros:** ${genreLabels}\n\n${lines.join("\n\n")}`.slice(0, 4000))
     .setColor(isAdult ? 0xff4444 : 0x7b68ee)
     .setFooter({ text: "Fonte: AniList • Sinopses traduzidas automaticamente" });
 }
 
-// Constrói as 5 linhas de botões com estado atual
 function buildRows(
   selected: Set<string>,
   isAdult: boolean
 ): ActionRowBuilder<ButtonBuilder>[] {
   const rows: ActionRowBuilder<ButtonBuilder>[] = [];
 
-  // Rows 1–4: 5 gêneros cada
   for (let i = 0; i < 20; i += 5) {
     rows.push(
       new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -217,15 +228,14 @@ function buildRows(
     );
   }
 
-  // Row 5: último gênero (Escola) + botões de ação
-  const lastGenre = GENRES[20];
+  const last = GENRES[20];
   rows.push(
     new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder()
-        .setCustomId(`rec_genre_${lastGenre.value}`)
-        .setLabel(lastGenre.label)
-        .setEmoji(lastGenre.emoji)
-        .setStyle(selected.has(lastGenre.value) ? ButtonStyle.Primary : ButtonStyle.Secondary),
+        .setCustomId(`rec_genre_${last.value}`)
+        .setLabel(last.label)
+        .setEmoji(last.emoji)
+        .setStyle(selected.has(last.value) ? ButtonStyle.Primary : ButtonStyle.Secondary),
       new ButtonBuilder()
         .setCustomId(ID_ADULT)
         .setLabel("+18")
@@ -247,8 +257,8 @@ function buildRows(
   return rows;
 }
 
-function isNsfwChannel(interaction: ChatInputCommandInteraction | ButtonInteraction): boolean {
-  const ch = interaction.channel;
+function isNsfwChannel(btn: ButtonInteraction): boolean {
+  const ch = btn.channel;
   return !!(ch && "nsfw" in ch && (ch as TextChannel).nsfw);
 }
 
@@ -277,6 +287,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
   });
 
   collector?.on("collect", async (btn: ButtonInteraction) => {
+
     // ── +18 ──────────────────────────────────────────────────────────────────
     if (btn.customId === ID_ADULT) {
       if (!isNsfwChannel(btn)) {
@@ -305,13 +316,14 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     // ── Buscar ────────────────────────────────────────────────────────────────
     if (btn.customId === ID_SEARCH) {
       collector.stop("searched");
-      await btn.update({
+      await btn.deferUpdate();
+      await interaction.editReply({
         content: "⏳ Buscando recomendações...",
         components: [],
       });
 
       try {
-        const results = await fetchRecommendations([...selected], isAdult);
+        const results = await fetchRecommendations(selected, isAdult);
 
         if (!results.length) {
           await interaction.editReply({
@@ -321,8 +333,9 @@ export async function execute(interaction: ChatInputCommandInteraction) {
         }
 
         const embed = await buildEmbed(results, selected, isAdult);
-        await interaction.editReply({ content: null, embeds: [embed] });
-      } catch {
+        await interaction.editReply({ content: "", embeds: [embed] });
+      } catch (err) {
+        console.error("[recomendar] Erro ao buscar:", err);
         await interaction.editReply({
           content: "❌ Erro ao buscar recomendações. Tente novamente.",
         });
