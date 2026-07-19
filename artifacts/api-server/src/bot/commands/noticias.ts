@@ -154,8 +154,8 @@ function formatDate(airingAt: number | null, startDate: AnimeMedia["startDate"])
   return "Em breve";
 }
 
-function getStreamingLinks(links: ExternalLink[]): string {
-  const sites = links
+function getStreamingLinks(links: ExternalLink[] | null | undefined): string {
+  const sites = (links ?? [])
     .filter(
       (l) =>
         l.type === "STREAMING" ||
@@ -234,13 +234,22 @@ function buildEmbed(media: AnimeMedia[], selected: Set<string>, isAdult: boolean
     return line;
   });
 
-  const title = isAdult ? "🔞 Notícias de Animes +18" : "📡 Notícias de Animes";
+  const embedTitle = isAdult ? "🔞 Notícias de Animes +18" : "📡 Notícias de Animes";
+  const header = `**Gêneros:** ${genreLabels}\n\n`;
+  const maxBody = 4000 - header.length;
+
+  // Junta linhas completas sem cortar no meio de um link
+  let body = "";
+  for (const line of lines) {
+    const chunk = (body ? "\n\n" : "") + line;
+    if (body.length + chunk.length > maxBody) break;
+    body += chunk;
+  }
 
   return new EmbedBuilder()
-    .setTitle(title)
-    .setDescription(
-      `**Gêneros:** ${genreLabels}\n\n${lines.join("\n\n")}`.slice(0, 4000)
-    )
+    .setTitle(embedTitle)
+    .setDescription(header + (body || "Nenhum resultado."))
+
     .setColor(isAdult ? 0xff4444 : 0x3498db)
     .setFooter({ text: `Fonte: AniList • Página ${page} • Status: Lançando / Em breve` });
 }
@@ -343,7 +352,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     time: 180_000,
   });
 
-  collector?.on("collect", async (btn: ButtonInteraction) => {
+  collector.on("collect", async (btn: ButtonInteraction) => {
 
     // ── +18 ──────────────────────────────────────────────────────────────────
     if (btn.customId === ID_ADULT) {
@@ -372,22 +381,24 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 
     // ── Buscar ────────────────────────────────────────────────────────────────
     if (btn.customId === ID_SEARCH) {
-      phase = "results";
-      page = 1;
       await btn.deferUpdate();
       await interaction.editReply({ content: "⏳ Buscando notícias...", components: [] });
 
       try {
-        const media = await fetchAnime(selected, isAdult, page);
+        const media = await fetchAnime(selected, isAdult, 1);
 
         if (!media.length) {
+          // Volta para seleção de gêneros em vez de deixar o usuário preso
           await interaction.editReply({
-            content: "❌ Nenhum anime encontrado para esses gêneros. Tente outros!",
-            components: [],
+            content: "❌ Nenhum anime encontrado para esses gêneros. Tente outros!\n\n📡 **Notícias de Animes**\nSelecione os gêneros para filtrar (opcional) e clique em **Buscar**:",
+            embeds: [],
+            components: buildGenreRows(selected, isAdult),
           });
           return;
         }
 
+        phase = "results";
+        page = 1;
         await interaction.editReply({
           content: "",
           embeds: [buildEmbed(media, selected, isAdult, page)],
@@ -395,7 +406,12 @@ export async function execute(interaction: ChatInputCommandInteraction) {
         });
       } catch (err) {
         console.error("[noticias] Erro ao buscar:", err);
-        await interaction.editReply({ content: "❌ Erro ao buscar. Tente novamente!", components: [] });
+        // Volta para seleção em vez de deixar sem botões
+        await interaction.editReply({
+          content: "❌ Erro ao buscar. Tente novamente!\n\n📡 **Notícias de Animes**\nSelecione os gêneros para filtrar (opcional) e clique em **Buscar**:",
+          embeds: [],
+          components: buildGenreRows(selected, isAdult),
+        });
       }
       return;
     }
@@ -456,7 +472,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     }
   });
 
-  collector?.on("end", async (_col, reason) => {
+  collector.on("end", async (_col, reason) => {
     if (reason === "time") {
       await interaction.editReply({ components: [] }).catch(() => null);
     }
