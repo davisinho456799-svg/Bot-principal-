@@ -49,16 +49,41 @@ const ID_ADULT  = "rec_adult18";
 const ID_CLEAR  = "rec_clear";
 const ID_SEARCH = "rec_search";
 
+// Query padrão — filtra por origem KR e score ≥ 70
 const RECOMMEND_QUERY = `
-query RecommendManhwa($genres: [String], $isAdult: Boolean, $page: Int) {
+query RecommendManhwa($genres: [String], $page: Int) {
   Page(page: $page, perPage: 6) {
     media(
       type: MANGA
       countryOfOrigin: KR
       genre_in: $genres
-      isAdult: $isAdult
       sort: SCORE_DESC
       averageScore_greater: 70
+    ) {
+      id
+      title { romaji english native }
+      description(asHtml: false)
+      coverImage { large color }
+      averageScore
+      genres
+      chapters
+      status
+      siteUrl
+      startDate { year month day }
+    }
+  }
+}
+`;
+
+// Query +18 — sem filtro de origem, inclui Ecchi, score ≥ 60
+const RECOMMEND_ADULT_QUERY = `
+query RecommendAdult($genres: [String], $page: Int) {
+  Page(page: $page, perPage: 6) {
+    media(
+      type: MANGA
+      genre_in: $genres
+      sort: SCORE_DESC
+      averageScore_greater: 60
     ) {
       id
       title { romaji english native }
@@ -105,20 +130,30 @@ async function fetchRecommendations(
   genres: string[],
   isAdult: boolean
 ): Promise<AniListMedia[]> {
+  // Modo +18: usa query sem restrição de origem e inclui Ecchi automaticamente
+  let finalGenres: string[] | null;
+  let query: string;
+
+  if (isAdult) {
+    const adultGenres = new Set(genres);
+    adultGenres.add("Ecchi");
+    finalGenres = [...adultGenres];
+    query = RECOMMEND_ADULT_QUERY;
+  } else {
+    finalGenres = genres.length > 0 ? genres : null;
+    query = RECOMMEND_QUERY;
+  }
+
   const res = await fetch(ANILIST_API, {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json" },
     body: JSON.stringify({
-      query: RECOMMEND_QUERY,
-      variables: {
-        genres: genres.length > 0 ? genres : null,
-        isAdult,
-        page: 1,
-      },
+      query,
+      variables: { genres: finalGenres, page: 1 },
     }),
     signal: AbortSignal.timeout(10000),
   });
-  if (!res.ok) throw new Error(`AniList error: ${res.status}`);
+  if (!res.ok) throw new Error(`AniList HTTP ${res.status}`);
   const json = (await res.json()) as {
     data: { Page: { media: AniListMedia[] } };
     errors?: { message: string }[];
