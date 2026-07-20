@@ -172,21 +172,12 @@ function buildNewsLinks(title: string, isAdult: boolean): string {
     .join(" • ");
 }
 
-class AniListAuthError extends Error {
-  constructor(msg: string) { super(msg); this.name = "AniListAuthError"; }
-}
-
 async function fetchAnime(
   selected: Set<string>,
   isAdult: boolean,
   page: number,
   statusFilter: StatusFilter,
 ): Promise<AnimeMedia[]> {
-  // Conteúdo adulto exige token válido
-  if (isAdult && !process.env.ANILIST_TOKEN) {
-    throw new AniListAuthError("ANILIST_TOKEN não configurado no servidor.");
-  }
-
   const genreValues = [...selected].filter(
     (v) => GENRES.find((g) => g.value === v)?.kind === "genre"
   );
@@ -196,9 +187,15 @@ async function fetchAnime(
 
   const variables: Record<string, unknown> = {
     page,
-    isAdult,
     status: statusValues(statusFilter),
   };
+
+  // Modo normal: filtra explicitamente conteúdo não-adulto.
+  // Modo +18: NÃO envia isAdult — a AniList retorna resultados vazios
+  //   silenciosamente quando isAdult:true sem uma conta OAuth com adult
+  //   content habilitado. Sem o filtro, mostra tudo (gate já é o canal NSFW).
+  if (!isAdult) variables["isAdult"] = false;
+
   if (genreValues.length > 0) variables["genres"] = genreValues;
   if (tagValues.length > 0) variables["tags"] = tagValues;
 
@@ -233,14 +230,6 @@ async function fetchAnime(
   if (json.errors?.length) {
     const err = json.errors[0];
     console.error("[noticias] AniList GraphQL error:", JSON.stringify(err));
-    // 401 / Unauthorized / Forbidden → problema de autenticação
-    if (
-      err.status === 401 ||
-      err.status === 403 ||
-      /unauthorized|forbidden|not.*allow|adult/i.test(err.message)
-    ) {
-      throw new AniListAuthError(err.message);
-    }
     throw new Error(err.message);
   }
 
