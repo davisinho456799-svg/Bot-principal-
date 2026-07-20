@@ -190,11 +190,9 @@ async function fetchAnime(
     status: statusValues(statusFilter),
   };
 
-  // Modo normal: filtra explicitamente conteúdo não-adulto.
-  // Modo +18: NÃO envia isAdult — a AniList retorna resultados vazios
-  //   silenciosamente quando isAdult:true sem uma conta OAuth com adult
-  //   content habilitado. Sem o filtro, mostra tudo (gate já é o canal NSFW).
-  if (!isAdult) variables["isAdult"] = false;
+  // isAdult:false → somente conteúdo não-adulto
+  // isAdult:true  → somente conteúdo adulto (requer token com "Show Adult Content" ativo)
+  variables["isAdult"] = isAdult;
 
   if (genreValues.length > 0) variables["genres"] = genreValues;
   if (tagValues.length > 0) variables["tags"] = tagValues;
