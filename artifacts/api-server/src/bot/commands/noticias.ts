@@ -391,20 +391,33 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     time: 180_000,
   });
 
+  // Retorna true se o erro for "Unknown interaction" (10062) — interação expirou
+  function isUnknownInteraction(err: unknown): boolean {
+    return (
+      typeof err === "object" &&
+      err !== null &&
+      "code" in err &&
+      (err as { code: unknown }).code === 10062
+    );
+  }
+
   collector.on("collect", async (btn: ButtonInteraction) => {
     try {
 
     // ── Lançando ──────────────────────────────────────────────────────────────
     if (btn.customId === ID_RELEASING) {
-      statusFilter = statusFilter === "releasing" ? "all" : "releasing";
-      await btn.update({ components: buildGenreRows(selected, isAdult, statusFilter) });
+      // Calcula novo valor ANTES, aplica ao estado SÓ se Discord aceitar
+      const next: StatusFilter = statusFilter === "releasing" ? "all" : "releasing";
+      await btn.update({ components: buildGenreRows(selected, isAdult, next) });
+      statusFilter = next;
       return;
     }
 
     // ── Anúncios ──────────────────────────────────────────────────────────────
     if (btn.customId === ID_ANNOUNCED) {
-      statusFilter = statusFilter === "announced" ? "all" : "announced";
-      await btn.update({ components: buildGenreRows(selected, isAdult, statusFilter) });
+      const next: StatusFilter = statusFilter === "announced" ? "all" : "announced";
+      await btn.update({ components: buildGenreRows(selected, isAdult, next) });
+      statusFilter = next;
       return;
     }
 
@@ -417,26 +430,43 @@ export async function execute(interaction: ChatInputCommandInteraction) {
         });
         return;
       }
-      isAdult = !isAdult;
-      await btn.update({ components: buildGenreRows(selected, isAdult, statusFilter) });
+      const next = !isAdult;
+      await btn.update({ components: buildGenreRows(selected, next, statusFilter) });
+      isAdult = next;
       return;
     }
 
     // ── Limpar ────────────────────────────────────────────────────────────────
     if (btn.customId === ID_CLEAR) {
+      // Constrói o estado novo sem tocar no estado atual ainda
+      const clearedSelected = new Set<string>();
+      await btn.update({
+        content: "📡 **Notícias de Animes**\nSelecione os gêneros e o tipo de filtro (opcional) e clique em **Buscar**:",
+        embeds: [],
+        components: buildGenreRows(clearedSelected, false, "all"),
+      });
+      // Discord confirmou — aplica estado
       selected.clear();
       isAdult = false;
       statusFilter = "all";
-      await btn.update({
-        content: "📡 **Notícias de Animes**\nSelecione os gêneros e o tipo de filtro (opcional) e clique em **Buscar**:",
-        components: buildGenreRows(selected, isAdult, statusFilter),
-      });
+      phase = "picking";
       return;
     }
 
     // ── Buscar ────────────────────────────────────────────────────────────────
     if (btn.customId === ID_SEARCH) {
-      await btn.deferUpdate();
+      // deferUpdate deve ser a PRIMEIRA chamada ao Discord para garantir
+      // que estamos dentro dos 3s. Se falhar (10062), descarta silenciosamente.
+      try {
+        await btn.deferUpdate();
+      } catch (err) {
+        if (isUnknownInteraction(err)) {
+          console.warn("[noticias] Buscar: interação expirou antes do deferUpdate (10062)");
+          return;
+        }
+        throw err;
+      }
+
       await interaction.editReply({ content: "⏳ Buscando notícias...", components: [] });
 
       try {
@@ -451,8 +481,9 @@ export async function execute(interaction: ChatInputCommandInteraction) {
           return;
         }
 
-        phase = "results";
+        // Aplica estado SÓ após resposta bem-sucedida
         page = 1;
+        phase = "results";
         await interaction.editReply({
           content: "",
           embeds: [buildEmbed(media, selected, isAdult, page, statusFilter)],
@@ -460,12 +491,8 @@ export async function execute(interaction: ChatInputCommandInteraction) {
         });
       } catch (err) {
         console.error("[noticias] Erro ao buscar:", err);
-        const isAuthErr = err instanceof AniListAuthError;
-        const errMsg = isAuthErr
-          ? "🔞 O filtro **+18** requer um token AniList válido no servidor. Peça ao administrador para renovar o `ANILIST_TOKEN`."
-          : "❌ Erro ao buscar. Tente novamente!";
         await interaction.editReply({
-          content: `${errMsg}\n\n📡 **Notícias de Animes**\nSelecione os gêneros e o tipo de filtro (opcional) e clique em **Buscar**:`,
+          content: "❌ Erro ao buscar. Tente novamente!\n\n📡 **Notícias de Animes**\nSelecione os gêneros e o tipo de filtro (opcional) e clique em **Buscar**:",
           embeds: [],
           components: buildGenreRows(selected, isAdult, statusFilter),
         });
@@ -475,45 +502,59 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 
     // ── Voltar para seleção de gêneros ────────────────────────────────────────
     if (btn.customId === "nt_back") {
-      phase = "picking";
-      page = 1;
       await btn.update({
         content: "📡 **Notícias de Animes**\nSelecione os gêneros e o tipo de filtro (opcional) e clique em **Buscar**:",
         embeds: [],
         components: buildGenreRows(selected, isAdult, statusFilter),
       });
+      // Aplica estado SÓ após Discord confirmar
+      phase = "picking";
+      page = 1;
       return;
     }
 
     // ── Paginação ─────────────────────────────────────────────────────────────
     if (phase === "results" && (btn.customId === "nt_prev" || btn.customId === "nt_next")) {
       const prevPage = page;
-      if (btn.customId === "nt_prev") page = Math.max(1, page - 1);
-      else page++;
+      const nextPage = btn.customId === "nt_prev" ? Math.max(1, page - 1) : page + 1;
 
-      await btn.deferUpdate();
       try {
-        const media = await fetchAnime(selected, isAdult, page, statusFilter);
+        await btn.deferUpdate();
+      } catch (err) {
+        if (isUnknownInteraction(err)) {
+          console.warn("[noticias] Paginação: interação expirou (10062)");
+          return;
+        }
+        throw err;
+      }
+
+      try {
+        const media = await fetchAnime(selected, isAdult, nextPage, statusFilter);
         if (!media.length) {
-          page = prevPage;
           await btn.followUp({ content: "❌ Sem mais resultados nessa página.", ephemeral: true });
           return;
         }
+        page = nextPage;
         await interaction.editReply({
           embeds: [buildEmbed(media, selected, isAdult, page, statusFilter)],
           components: [buildNavRow(page)],
         });
       } catch {
         page = prevPage;
-        await btn.followUp({ content: "❌ Erro ao paginar. Tente novamente.", ephemeral: true });
+        await btn.followUp({ content: "❌ Erro ao paginar. Tente novamente.", ephemeral: true }).catch(() => null);
       }
       return;
     }
 
     // ── Toggle de gênero ──────────────────────────────────────────────────────
-    if (phase === "picking") {
+    if (phase === "picking" && btn.customId.startsWith("nt_genre_")) {
       const genreValue = btn.customId.replace("nt_genre_", "");
+
       if (selected.has(genreValue)) {
+        // Remove: clona o Set sem o valor, envia, depois aplica
+        const next = new Set(selected);
+        next.delete(genreValue);
+        await btn.update({ components: buildGenreRows(next, isAdult, statusFilter) });
         selected.delete(genreValue);
       } else {
         if (selected.size >= 5) {
@@ -523,12 +564,25 @@ export async function execute(interaction: ChatInputCommandInteraction) {
           });
           return;
         }
+        // Adiciona: clona o Set com o valor, envia, depois aplica
+        const next = new Set(selected);
+        next.add(genreValue);
+        await btn.update({ components: buildGenreRows(next, isAdult, statusFilter) });
         selected.add(genreValue);
       }
-      await btn.update({ components: buildGenreRows(selected, isAdult, statusFilter) });
+      return;
+    }
+
+    // Interação desconhecida ou fase errada — acusa ao Discord mas não trava
+    if (!btn.replied && !btn.deferred) {
+      await btn.deferUpdate().catch(() => null);
     }
 
     } catch (err) {
+      if (isUnknownInteraction(err)) {
+        console.warn("[noticias] Interação expirou (10062) — ignorado");
+        return;
+      }
       console.error("[noticias] Erro inesperado no handler:", err);
       try {
         if (!btn.replied && !btn.deferred) {
