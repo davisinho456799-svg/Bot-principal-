@@ -59,59 +59,37 @@ const GENRES: GenreOption[] = [
   { label: "Harém",         value: "Harem",         emoji: "💌",  kind: "tag"   },
 ];
 
-const ID_ADULT  = "nt_adult18";
-const ID_CLEAR  = "nt_clear";
-const ID_SEARCH = "nt_search";
+const ID_ADULT     = "nt_adult18";
+const ID_CLEAR     = "nt_clear";
+const ID_SEARCH    = "nt_search";
+const ID_RELEASING = "nt_status_releasing";
+const ID_ANNOUNCED = "nt_status_announced";
 
-// Busca animes que estão lançando ou prestes a lançar, filtrados por gênero
-const UPCOMING_GENRE_QUERY = `
-query UpcomingByGenre($genres: [String], $tags: [String], $page: Int, $isAdult: Boolean) {
+// Query unificada — genres, tags e status são opcionais (null = sem filtro)
+const UPCOMING_QUERY = `
+query Upcoming(
+  $genres: [String]
+  $tags: [String]
+  $status: [MediaStatus]
+  $page: Int
+  $isAdult: Boolean
+) {
   Page(page: $page, perPage: 8) {
     media(
       type: ANIME
       genre_in: $genres
       tag_in: $tags
-      status_in: [NOT_YET_RELEASED, RELEASING]
+      status_in: $status
       sort: POPULARITY_DESC
       isAdult: $isAdult
     ) {
       id
-      title { romaji english native }
+      title { romaji english }
       episodes
-      status
       season
       seasonYear
       startDate { year month day }
       nextAiringEpisode { airingAt episode }
-      coverImage { color }
-      genres
-      averageScore
-      siteUrl
-      externalLinks { url site type }
-    }
-  }
-}
-`;
-
-// Sem filtro de gênero — mostra os mais populares em lançamento
-const UPCOMING_ALL_QUERY = `
-query UpcomingAll($page: Int, $isAdult: Boolean) {
-  Page(page: $page, perPage: 8) {
-    media(
-      type: ANIME
-      status_in: [NOT_YET_RELEASED, RELEASING]
-      sort: POPULARITY_DESC
-      isAdult: $isAdult
-    ) {
-      id
-      title { romaji english native }
-      episodes
-      status
-      season
-      seasonYear
-      startDate { year month day }
-      nextAiringEpisode { airingAt episode }
-      coverImage { color }
       genres
       averageScore
       siteUrl
@@ -126,18 +104,30 @@ interface AiringEp { airingAt: number; episode: number; }
 
 interface AnimeMedia {
   id: number;
-  title: { romaji: string; english: string | null; native: string | null };
+  title: { romaji: string; english: string | null };
   episodes: number | null;
-  status: string | null;
   season: string | null;
   seasonYear: number | null;
   startDate: { year: number | null; month: number | null; day: number | null };
   nextAiringEpisode: AiringEp | null;
-  coverImage: { color: string | null };
   genres: string[];
   averageScore: number | null;
   siteUrl: string;
   externalLinks: ExternalLink[] | null;
+}
+
+type StatusFilter = "all" | "releasing" | "announced";
+
+function statusValues(filter: StatusFilter): string[] {
+  if (filter === "releasing") return ["RELEASING"];
+  if (filter === "announced") return ["NOT_YET_RELEASED"];
+  return ["RELEASING", "NOT_YET_RELEASED"];
+}
+
+function statusLabel(filter: StatusFilter): string {
+  if (filter === "releasing") return "Lançando";
+  if (filter === "announced") return "Anunciados / Em breve";
+  return "Lançando / Em breve";
 }
 
 function seasonLabel(season: string | null, year: number | null): string {
@@ -182,7 +172,12 @@ function buildNewsLinks(title: string, isAdult: boolean): string {
     .join(" • ");
 }
 
-async function fetchAnime(selected: Set<string>, isAdult: boolean, page: number): Promise<AnimeMedia[]> {
+async function fetchAnime(
+  selected: Set<string>,
+  isAdult: boolean,
+  page: number,
+  statusFilter: StatusFilter,
+): Promise<AnimeMedia[]> {
   const genreValues = [...selected].filter(
     (v) => GENRES.find((g) => g.value === v)?.kind === "genre"
   );
@@ -190,17 +185,15 @@ async function fetchAnime(selected: Set<string>, isAdult: boolean, page: number)
     (v) => GENRES.find((g) => g.value === v)?.kind === "tag"
   );
 
-  const hasFilters = genreValues.length > 0 || tagValues.length > 0;
-  let body: Record<string, unknown>;
+  const variables: Record<string, unknown> = {
+    page,
+    isAdult,
+    status: statusValues(statusFilter),
+  };
+  if (genreValues.length > 0) variables["genres"] = genreValues;
+  if (tagValues.length > 0) variables["tags"] = tagValues;
 
-  if (hasFilters) {
-    const variables: Record<string, unknown> = { page, isAdult };
-    if (genreValues.length > 0) variables["genres"] = genreValues;
-    if (tagValues.length > 0) variables["tags"] = tagValues;
-    body = { query: UPCOMING_GENRE_QUERY, variables };
-  } else {
-    body = { query: UPCOMING_ALL_QUERY, variables: { page, isAdult } };
-  }
+  const body = { query: UPCOMING_QUERY, variables };
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -226,7 +219,7 @@ async function fetchAnime(selected: Set<string>, isAdult: boolean, page: number)
   return json.data?.Page?.media ?? [];
 }
 
-function buildEmbed(media: AnimeMedia[], selected: Set<string>, isAdult: boolean, page: number): EmbedBuilder {
+function buildEmbed(media: AnimeMedia[], selected: Set<string>, isAdult: boolean, page: number, statusFilter: StatusFilter): EmbedBuilder {
   const genreLabels =
     [...selected]
       .map((v) => {
@@ -271,10 +264,10 @@ function buildEmbed(media: AnimeMedia[], selected: Set<string>, isAdult: boolean
     .setDescription(header + (body || "Nenhum resultado."))
 
     .setColor(isAdult ? 0xff4444 : 0x3498db)
-    .setFooter({ text: `Fonte: AniList • Página ${page} • Status: Lançando / Em breve` });
+    .setFooter({ text: `Fonte: AniList • Página ${page} • Status: ${statusLabel(statusFilter)}` });
 }
 
-function buildGenreRows(selected: Set<string>, isAdult: boolean): ActionRowBuilder<ButtonBuilder>[] {
+function buildGenreRows(selected: Set<string>, isAdult: boolean, statusFilter: StatusFilter): ActionRowBuilder<ButtonBuilder>[] {
   const rows: ActionRowBuilder<ButtonBuilder>[] = [];
 
   // Linhas de gêneros (5 por linha)
@@ -294,10 +287,19 @@ function buildGenreRows(selected: Set<string>, isAdult: boolean): ActionRowBuild
     );
   }
 
-  // Última linha: apenas controles (+18, Limpar, Buscar)
-  // O loop acima já cobre todos os 20 gêneros (índices 0-19)
+  // Última linha: status + controles (5 botões = limite máximo por linha)
   rows.push(
     new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(ID_RELEASING)
+        .setLabel("Lançando")
+        .setEmoji("📺")
+        .setStyle(statusFilter === "releasing" ? ButtonStyle.Primary : ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId(ID_ANNOUNCED)
+        .setLabel("Anúncios")
+        .setEmoji("📢")
+        .setStyle(statusFilter === "announced" ? ButtonStyle.Primary : ButtonStyle.Secondary),
       new ButtonBuilder()
         .setCustomId(ID_ADULT)
         .setLabel("+18")
@@ -351,11 +353,12 @@ export async function execute(interaction: ChatInputCommandInteraction) {
   let isAdult = false;
   let page = 1;
   let phase: "picking" | "results" = "picking";
+  let statusFilter: StatusFilter = "all";
 
   // Fase 1: seleção de gêneros
   await interaction.reply({
-    content: "📡 **Notícias de Animes**\nSelecione os gêneros para filtrar (opcional) e clique em **Buscar**:",
-    components: buildGenreRows(selected, isAdult),
+    content: "📡 **Notícias de Animes**\nSelecione os gêneros e o tipo de filtro (opcional) e clique em **Buscar**:",
+    components: buildGenreRows(selected, isAdult, statusFilter),
   });
 
   if (!interaction.channel) {
@@ -367,13 +370,28 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     componentType: ComponentType.Button,
     filter: (i) =>
       (i.customId.startsWith("nt_genre_") ||
-        [ID_ADULT, ID_CLEAR, ID_SEARCH, "nt_prev", "nt_next", "nt_back"].includes(i.customId)) &&
+        [ID_ADULT, ID_CLEAR, ID_SEARCH, ID_RELEASING, ID_ANNOUNCED,
+          "nt_prev", "nt_next", "nt_back"].includes(i.customId)) &&
       i.user.id === interaction.user.id,
     time: 180_000,
   });
 
   collector.on("collect", async (btn: ButtonInteraction) => {
     try {
+
+    // ── Lançando ──────────────────────────────────────────────────────────────
+    if (btn.customId === ID_RELEASING) {
+      statusFilter = statusFilter === "releasing" ? "all" : "releasing";
+      await btn.update({ components: buildGenreRows(selected, isAdult, statusFilter) });
+      return;
+    }
+
+    // ── Anúncios ──────────────────────────────────────────────────────────────
+    if (btn.customId === ID_ANNOUNCED) {
+      statusFilter = statusFilter === "announced" ? "all" : "announced";
+      await btn.update({ components: buildGenreRows(selected, isAdult, statusFilter) });
+      return;
+    }
 
     // ── +18 ──────────────────────────────────────────────────────────────────
     if (btn.customId === ID_ADULT) {
@@ -385,7 +403,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
         return;
       }
       isAdult = !isAdult;
-      await btn.update({ components: buildGenreRows(selected, isAdult) });
+      await btn.update({ components: buildGenreRows(selected, isAdult, statusFilter) });
       return;
     }
 
@@ -393,9 +411,10 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     if (btn.customId === ID_CLEAR) {
       selected.clear();
       isAdult = false;
+      statusFilter = "all";
       await btn.update({
-        content: "📡 **Notícias de Animes**\nSelecione os gêneros para filtrar (opcional) e clique em **Buscar**:",
-        components: buildGenreRows(selected, isAdult),
+        content: "📡 **Notícias de Animes**\nSelecione os gêneros e o tipo de filtro (opcional) e clique em **Buscar**:",
+        components: buildGenreRows(selected, isAdult, statusFilter),
       });
       return;
     }
@@ -406,14 +425,13 @@ export async function execute(interaction: ChatInputCommandInteraction) {
       await interaction.editReply({ content: "⏳ Buscando notícias...", components: [] });
 
       try {
-        const media = await fetchAnime(selected, isAdult, 1);
+        const media = await fetchAnime(selected, isAdult, 1, statusFilter);
 
         if (!media.length) {
-          // Volta para seleção de gêneros em vez de deixar o usuário preso
           await interaction.editReply({
-            content: "❌ Nenhum anime encontrado para esses gêneros. Tente outros!\n\n📡 **Notícias de Animes**\nSelecione os gêneros para filtrar (opcional) e clique em **Buscar**:",
+            content: "❌ Nenhum anime encontrado para esses filtros. Tente outros!\n\n📡 **Notícias de Animes**\nSelecione os gêneros e o tipo de filtro (opcional) e clique em **Buscar**:",
             embeds: [],
-            components: buildGenreRows(selected, isAdult),
+            components: buildGenreRows(selected, isAdult, statusFilter),
           });
           return;
         }
@@ -422,16 +440,15 @@ export async function execute(interaction: ChatInputCommandInteraction) {
         page = 1;
         await interaction.editReply({
           content: "",
-          embeds: [buildEmbed(media, selected, isAdult, page)],
+          embeds: [buildEmbed(media, selected, isAdult, page, statusFilter)],
           components: [buildNavRow(page)],
         });
       } catch (err) {
         console.error("[noticias] Erro ao buscar:", err);
-        // Volta para seleção em vez de deixar sem botões
         await interaction.editReply({
-          content: "❌ Erro ao buscar. Tente novamente!\n\n📡 **Notícias de Animes**\nSelecione os gêneros para filtrar (opcional) e clique em **Buscar**:",
+          content: "❌ Erro ao buscar. Tente novamente!\n\n📡 **Notícias de Animes**\nSelecione os gêneros e o tipo de filtro (opcional) e clique em **Buscar**:",
           embeds: [],
-          components: buildGenreRows(selected, isAdult),
+          components: buildGenreRows(selected, isAdult, statusFilter),
         });
       }
       return;
@@ -442,9 +459,9 @@ export async function execute(interaction: ChatInputCommandInteraction) {
       phase = "picking";
       page = 1;
       await btn.update({
-        content: "📡 **Notícias de Animes**\nSelecione os gêneros para filtrar (opcional) e clique em **Buscar**:",
+        content: "📡 **Notícias de Animes**\nSelecione os gêneros e o tipo de filtro (opcional) e clique em **Buscar**:",
         embeds: [],
-        components: buildGenreRows(selected, isAdult),
+        components: buildGenreRows(selected, isAdult, statusFilter),
       });
       return;
     }
@@ -457,18 +474,18 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 
       await btn.deferUpdate();
       try {
-        const media = await fetchAnime(selected, isAdult, page);
+        const media = await fetchAnime(selected, isAdult, page, statusFilter);
         if (!media.length) {
-          page = prevPage; // restaura estado se não houver resultados
+          page = prevPage;
           await btn.followUp({ content: "❌ Sem mais resultados nessa página.", ephemeral: true });
           return;
         }
         await interaction.editReply({
-          embeds: [buildEmbed(media, selected, isAdult, page)],
+          embeds: [buildEmbed(media, selected, isAdult, page, statusFilter)],
           components: [buildNavRow(page)],
         });
       } catch {
-        page = prevPage; // restaura estado em caso de erro
+        page = prevPage;
         await btn.followUp({ content: "❌ Erro ao paginar. Tente novamente.", ephemeral: true });
       }
       return;
@@ -489,12 +506,11 @@ export async function execute(interaction: ChatInputCommandInteraction) {
         }
         selected.add(genreValue);
       }
-      await btn.update({ components: buildGenreRows(selected, isAdult) });
+      await btn.update({ components: buildGenreRows(selected, isAdult, statusFilter) });
     }
 
     } catch (err) {
       console.error("[noticias] Erro inesperado no handler:", err);
-      // Tenta responder ao usuário se ainda não foi respondido
       try {
         if (!btn.replied && !btn.deferred) {
           await btn.reply({ content: "❌ Ocorreu um erro inesperado. Tente novamente.", ephemeral: true });
