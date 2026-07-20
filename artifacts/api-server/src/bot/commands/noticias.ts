@@ -12,11 +12,20 @@ import {
 
 const ANILIST_API = "https://graphql.anilist.co";
 
-// Sites de notícias de anime
-const NEWS_SITES = [
-  { name: "ANN", url: "https://www.animenewsnetwork.com/search?q=" },
-  { name: "Crunchyroll", url: "https://www.crunchyroll.com/search?q=" },
-  { name: "MAL", url: "https://myanimelist.net/search/all?q=" },
+// Sites de notícias/banco de dados de anime
+interface NewsSite { name: string; url: string; adultOnly?: boolean; }
+
+const NEWS_SITES: NewsSite[] = [
+  { name: "ANN",          url: "https://www.animenewsnetwork.com/search?q=" },
+  { name: "MAL",          url: "https://myanimelist.net/search/all?q=" },
+  { name: "AniList",      url: "https://anilist.co/search/anime?search=" },
+  { name: "AniDB",        url: "https://anidb.net/search/?q=" },
+  { name: "LiveChart",    url: "https://www.livechart.me/search?q=" },
+  { name: "Anime-Planet", url: "https://www.anime-planet.com/anime/all?name=" },
+  { name: "Kitsu",        url: "https://kitsu.app/anime?text=" },
+  { name: "Crunchyroll",  url: "https://www.crunchyroll.com/search?q=" },
+  // Apenas em modo +18
+  { name: "FANZA",        url: "https://www.dmm.co.jp/search/=/searchstr=", adultOnly: true },
 ];
 
 interface GenreOption {
@@ -165,9 +174,12 @@ function getStreamingLinks(links: ExternalLink[] | null | undefined): string {
   return sites.map((l) => `[${l.site}](${l.url})`).join(" • ");
 }
 
-function buildNewsLinks(title: string): string {
+function buildNewsLinks(title: string, isAdult: boolean): string {
   const q = encodeURIComponent(title);
-  return NEWS_SITES.map((s) => `[${s.name}](${s.url}${q})`).join(" • ");
+  return NEWS_SITES
+    .filter((s) => !s.adultOnly || isAdult)
+    .map((s) => `[${s.name}](${s.url}${q})`)
+    .join(" • ");
 }
 
 async function fetchAnime(selected: Set<string>, isAdult: boolean, page: number): Promise<AnimeMedia[]> {
@@ -231,7 +243,7 @@ function buildEmbed(media: AnimeMedia[], selected: Set<string>, isAdult: boolean
     const season = seasonLabel(m.season, m.seasonYear);
     const genres = m.genres.slice(0, 3).join(", ") || "—";
     const streaming = getStreamingLinks(m.externalLinks);
-    const newsLinks = buildNewsLinks(title);
+    const newsLinks = buildNewsLinks(title, isAdult);
 
     let line = `**${i + 1}.** [${title}](${m.siteUrl}) — 📅 ${date} | ${eps}`;
     if (score) line += ` | ${score}`;
