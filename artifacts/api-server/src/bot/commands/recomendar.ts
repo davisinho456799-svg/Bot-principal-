@@ -42,9 +42,9 @@ const GENRES: GenreOption[] = [
   { label: "Gore",         value: "Gore",          emoji: "🩸",  kind: "tag"   },
   { label: "Reencarnação", value: "Reincarnation", emoji: "⏰",  kind: "tag"   },
   { label: "Game",         value: "Video Games",   emoji: "🎮",  kind: "tag"   },
-  { label: "Zumbi",        value: "Zombies",       emoji: "🧟",  kind: "tag"   },
+  { label: "Zumbi",        value: "Zombie",        emoji: "🧟",  kind: "tag"   },
   { label: "Survival",     value: "Survival",      emoji: "🗡️",  kind: "tag"   },
-  { label: "Escola",       value: "School Life",   emoji: "🏫",  kind: "tag"   },
+  { label: "Escola",       value: "School",        emoji: "🏫",  kind: "tag"   },
 ];
 
 const ID_ADULT  = "rec_adult18";
@@ -286,7 +286,17 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     time: 120_000,
   });
 
+  function isUnknownInteraction(err: unknown): boolean {
+    return (
+      typeof err === "object" &&
+      err !== null &&
+      "code" in err &&
+      (err as { code: unknown }).code === 10062
+    );
+  }
+
   collector?.on("collect", async (btn: ButtonInteraction) => {
+    try {
 
     // ── +18 ──────────────────────────────────────────────────────────────────
     if (btn.customId === ID_ADULT) {
@@ -297,30 +307,38 @@ export async function execute(interaction: ChatInputCommandInteraction) {
         });
         return;
       }
-      isAdult = !isAdult;
-      await btn.update({ components: buildRows(selected, isAdult) });
+      const next = !isAdult;
+      await btn.update({ components: buildRows(selected, next) });
+      isAdult = next;
       return;
     }
 
     // ── Limpar ────────────────────────────────────────────────────────────────
     if (btn.customId === ID_CLEAR) {
-      selected.clear();
-      isAdult = false;
+      const empty = new Set<string>();
       await btn.update({
         content: "🎭 **Selecione os gêneros** clicando nos botões abaixo e depois clique em **Buscar**:",
-        components: buildRows(selected, isAdult),
+        components: buildRows(empty, false),
       });
+      selected.clear();
+      isAdult = false;
       return;
     }
 
     // ── Buscar ────────────────────────────────────────────────────────────────
     if (btn.customId === ID_SEARCH) {
-      collector.stop("searched");
-      await btn.deferUpdate();
-      await interaction.editReply({
-        content: "⏳ Buscando recomendações...",
-        components: [],
-      });
+      try {
+        await btn.deferUpdate();
+      } catch (err) {
+        if (isUnknownInteraction(err)) {
+          console.warn("[recomendar] Buscar: interação expirou (10062)");
+          return;
+        }
+        throw err;
+      }
+
+      collector?.stop("searched");
+      await interaction.editReply({ content: "⏳ Buscando recomendações...", components: [] });
 
       try {
         const results = await fetchRecommendations(selected, isAdult);
@@ -344,21 +362,47 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     }
 
     // ── Toggle de gênero ──────────────────────────────────────────────────────
-    const genreValue = btn.customId.replace("rec_genre_", "");
-    if (selected.has(genreValue)) {
-      selected.delete(genreValue);
-    } else {
-      if (selected.size >= 5) {
-        await btn.reply({
-          content: "⚠️ Você pode selecionar no máximo **5 gêneros** por vez.",
-          ephemeral: true,
-        });
-        return;
+    if (btn.customId.startsWith("rec_genre_")) {
+      const genreValue = btn.customId.replace("rec_genre_", "");
+
+      if (selected.has(genreValue)) {
+        const next = new Set(selected);
+        next.delete(genreValue);
+        await btn.update({ components: buildRows(next, isAdult) });
+        selected.delete(genreValue);
+      } else {
+        if (selected.size >= 5) {
+          await btn.reply({
+            content: "⚠️ Você pode selecionar no máximo **5 gêneros** por vez.",
+            ephemeral: true,
+          });
+          return;
+        }
+        const next = new Set(selected);
+        next.add(genreValue);
+        await btn.update({ components: buildRows(next, isAdult) });
+        selected.add(genreValue);
       }
-      selected.add(genreValue);
+      return;
     }
 
-    await btn.update({ components: buildRows(selected, isAdult) });
+    // Fallback — acusa ao Discord para não expirar silenciosamente
+    if (!btn.replied && !btn.deferred) {
+      await btn.deferUpdate().catch(() => null);
+    }
+
+    } catch (err) {
+      if (isUnknownInteraction(err)) {
+        console.warn("[recomendar] Interação expirou (10062) — ignorado");
+        return;
+      }
+      console.error("[recomendar] Erro inesperado no handler:", err);
+      try {
+        if (!btn.replied && !btn.deferred) {
+          await btn.reply({ content: "❌ Ocorreu um erro inesperado. Tente novamente.", ephemeral: true });
+        }
+      } catch { /* silencia dupla resposta */ }
+    }
   });
 
   collector?.on("end", async (_collected, reason) => {

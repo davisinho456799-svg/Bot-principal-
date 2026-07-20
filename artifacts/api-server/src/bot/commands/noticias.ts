@@ -54,9 +54,9 @@ const GENRES: GenreOption[] = [
   // Tags
   { label: "Super Poder",   value: "Super Power",   emoji: "🦸",  kind: "tag"   },
   { label: "Reencarnação",  value: "Reincarnation", emoji: "⏰",  kind: "tag"   },
-  { label: "Escola",        value: "School Life",   emoji: "🏫",  kind: "tag"   },
+  { label: "Escola",        value: "School",        emoji: "🏫",  kind: "tag"   },
   { label: "Survival",      value: "Survival",      emoji: "🗡️",  kind: "tag"   },
-  { label: "Harém",         value: "Harem",         emoji: "💌",  kind: "tag"   },
+  { label: "Harém",         value: "Male Harem",    emoji: "💌",  kind: "tag"   },
 ];
 
 const ID_ADULT     = "nt_adult18";
