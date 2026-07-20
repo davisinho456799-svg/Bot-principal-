@@ -1,6 +1,7 @@
 import app from "./app";
 import { logger } from "./lib/logger";
 import { startBot } from "./bot/index";
+import { pool } from "@workspace/db";
 
 const rawPort = process.env["PORT"];
 
@@ -16,6 +17,26 @@ if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
+// Garante que tabelas criadas recentemente existam no banco de produção
+async function runMigrations() {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS usage_logs (
+        id        SERIAL PRIMARY KEY,
+        discord_user_id   TEXT NOT NULL,
+        discord_username  TEXT NOT NULL,
+        guild_id          TEXT,
+        command           TEXT NOT NULL,
+        query             TEXT,
+        created_at        TIMESTAMP NOT NULL DEFAULT NOW()
+      )
+    `);
+    logger.info("Migrations OK");
+  } catch (err) {
+    logger.warn({ err }, "Falha na migration de startup (não fatal)");
+  }
+}
+
 app.listen(port, (err) => {
   if (err) {
     logger.error({ err }, "Error listening on port");
@@ -26,8 +47,10 @@ app.listen(port, (err) => {
   startKeepAlive(port);
 });
 
-startBot().catch((err) => {
-  logger.error({ err }, "Falha ao iniciar o bot do Discord");
+runMigrations().then(() => {
+  startBot().catch((err) => {
+    logger.error({ err }, "Falha ao iniciar o bot do Discord");
+  });
 });
 
 function startKeepAlive(serverPort: number) {

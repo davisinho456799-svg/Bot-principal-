@@ -172,12 +172,21 @@ function buildNewsLinks(title: string, isAdult: boolean): string {
     .join(" • ");
 }
 
+class AniListAuthError extends Error {
+  constructor(msg: string) { super(msg); this.name = "AniListAuthError"; }
+}
+
 async function fetchAnime(
   selected: Set<string>,
   isAdult: boolean,
   page: number,
   statusFilter: StatusFilter,
 ): Promise<AnimeMedia[]> {
+  // Conteúdo adulto exige token válido
+  if (isAdult && !process.env.ANILIST_TOKEN) {
+    throw new AniListAuthError("ANILIST_TOKEN não configurado no servidor.");
+  }
+
   const genreValues = [...selected].filter(
     (v) => GENRES.find((g) => g.value === v)?.kind === "genre"
   );
@@ -210,12 +219,31 @@ async function fetchAnime(
     signal: AbortSignal.timeout(10000),
   });
 
-  if (!res.ok) throw new Error(`AniList HTTP ${res.status}`);
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    console.error(`[noticias] AniList HTTP ${res.status}:`, text.slice(0, 300));
+    throw new Error(`AniList HTTP ${res.status}`);
+  }
+
   const json = (await res.json()) as {
     data?: { Page?: { media?: AnimeMedia[] } };
-    errors?: { message: string }[];
+    errors?: { message: string; status?: number }[];
   };
-  if (json.errors?.length) throw new Error(json.errors[0].message);
+
+  if (json.errors?.length) {
+    const err = json.errors[0];
+    console.error("[noticias] AniList GraphQL error:", JSON.stringify(err));
+    // 401 / Unauthorized / Forbidden → problema de autenticação
+    if (
+      err.status === 401 ||
+      err.status === 403 ||
+      /unauthorized|forbidden|not.*allow|adult/i.test(err.message)
+    ) {
+      throw new AniListAuthError(err.message);
+    }
+    throw new Error(err.message);
+  }
+
   return json.data?.Page?.media ?? [];
 }
 
@@ -445,8 +473,12 @@ export async function execute(interaction: ChatInputCommandInteraction) {
         });
       } catch (err) {
         console.error("[noticias] Erro ao buscar:", err);
+        const isAuthErr = err instanceof AniListAuthError;
+        const errMsg = isAuthErr
+          ? "🔞 O filtro **+18** requer um token AniList válido no servidor. Peça ao administrador para renovar o `ANILIST_TOKEN`."
+          : "❌ Erro ao buscar. Tente novamente!";
         await interaction.editReply({
-          content: "❌ Erro ao buscar. Tente novamente!\n\n📡 **Notícias de Animes**\nSelecione os gêneros e o tipo de filtro (opcional) e clique em **Buscar**:",
+          content: `${errMsg}\n\n📡 **Notícias de Animes**\nSelecione os gêneros e o tipo de filtro (opcional) e clique em **Buscar**:`,
           embeds: [],
           components: buildGenreRows(selected, isAdult, statusFilter),
         });
