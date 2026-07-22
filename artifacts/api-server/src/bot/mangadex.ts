@@ -201,6 +201,67 @@ export async function hasPtBrChapters(mangadexId: string): Promise<boolean> {
   }
 }
 
+/**
+ * Busca mangás japoneses (originalLanguage = ja) no MangaDex.
+ * Diferente de searchMangaDex que foca em manhwa coreano (ko).
+ */
+export async function searchMangaDexJp(
+  search: string,
+  limit = 8,
+  includedTagId?: string
+): Promise<MangaDexResult[]> {
+  const params = new URLSearchParams({
+    title: search,
+    limit: String(limit),
+    "originalLanguage[]": "ja",
+    "includes[]": "cover_art",
+    "order[relevance]": "desc",
+  });
+  if (includedTagId) {
+    params.append("includedTags[]", includedTagId);
+  }
+
+  try {
+    const res = await fetch(`${MANGADEX_API}/manga?${params.toString()}`, {
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) return [];
+    const json = (await res.json()) as { data: MangaDexManga[]; result: string };
+    if (json.result !== "ok" || !json.data?.length) return [];
+
+    return json.data.map((manga): MangaDexResult => {
+      const attr = manga.attributes;
+      const mainTitle =
+        pickTitle(attr.title, ["en", "ja-ro", "ja"]) ?? "Sem título";
+      const nativeTitle = attr.title["ja"] ?? null;
+      const romajiTitle = attr.title["ja-ro"] ?? null;
+      const synonyms = extractSynonyms(attr.altTitles, mainTitle);
+      const descEn = attr.description["en"] ?? attr.description["pt-br"] ?? null;
+      const chapters = attr.lastChapter ? parseInt(attr.lastChapter, 10) || null : null;
+
+      return {
+        source: "mangadex",
+        id: manga.id,
+        mainTitle,
+        nativeTitle,
+        romajiTitle,
+        synonyms,
+        description: descEn,
+        coverUrl: buildCoverUrl(manga),
+        score: null,
+        genres: extractGenres(attr.tags),
+        chapters: isNaN(chapters as number) ? null : chapters,
+        status: mapStatus(attr.status),
+        siteUrl: `https://mangadex.org/title/${manga.id}`,
+        year: attr.year,
+      };
+    });
+  } catch {
+    return [];
+  }
+}
+
 export async function findMangaDexIdByTitle(title: string): Promise<string | null> {
   try {
     const params = new URLSearchParams({

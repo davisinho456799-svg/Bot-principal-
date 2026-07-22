@@ -17,6 +17,10 @@ import { data as buscarData } from "./commands/buscar.js";
 import { data as animeData } from "./commands/anime.js";
 import { data as vnData } from "./commands/vn.js";
 import { data as noticiasData } from "./commands/noticias.js";
+import { data as identificarData } from "./commands/identificar.js";
+import { data as temasData } from "./commands/temas.js";
+import { data as filmeData } from "./commands/filme.js";
+import { data as mangaData } from "./commands/manga.js";
 import { logger } from "../lib/logger.js";
 
 export async function deployCommands(clientId: string, token: string) {
@@ -39,6 +43,10 @@ export async function deployCommands(clientId: string, token: string) {
     animeData.toJSON(),
     vnData.toJSON(),
     noticiasData.toJSON(),
+    identificarData.toJSON(),
+    temasData.toJSON(),
+    filmeData.toJSON(),
+    mangaData.toJSON(),
   ];
   const rest = new REST().setToken(token);
 
