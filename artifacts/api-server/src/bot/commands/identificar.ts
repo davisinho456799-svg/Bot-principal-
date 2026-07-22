@@ -8,7 +8,7 @@ import {
   SlashCommandBuilder,
   EmbedBuilder,
 } from "discord.js";
-import { searchByImageUrl, formatTimestamp } from "../tracemoe.js";
+import { searchByImageUrl, searchByImageUpload, formatTimestamp } from "../tracemoe.js";
 
 export const data = new SlashCommandBuilder()
   .setName("identificar")
@@ -41,10 +41,8 @@ export async function execute(
     return;
   }
 
-  const imageUrl = attachment?.url ?? urlOption!;
-
   // Valida URL mínima
-  if (!imageUrl.startsWith("http")) {
+  if (urlOption && !urlOption.startsWith("http")) {
     await interaction.reply({
       content: "❌ URL inválida. Use `http://` ou `https://`.",
       ephemeral: true,
@@ -55,7 +53,11 @@ export async function execute(
   await interaction.deferReply();
 
   try {
-    const results = await searchByImageUrl(imageUrl);
+    // Anexos: upload multipart direto (mais confiável que URL do Discord)
+    // URL externa: passa a URL diretamente
+    const results = attachment
+      ? await searchByImageUpload(attachment.url)
+      : await searchByImageUrl(urlOption!);
 
     if (!results.length) {
       await interaction.editReply(
@@ -109,7 +111,6 @@ export async function execute(
       });
     }
 
-    // Outros resultados possíveis
     if (results.length > 1) {
       const others = results
         .slice(1)
@@ -125,7 +126,6 @@ export async function execute(
       });
     }
 
-    // Adiciona link para o clipe do Trace.moe
     embed.addFields({
       name: "🎬 Cena identificada",
       value: `[Ver clipe no Trace.moe](${top.videoUrl})`,

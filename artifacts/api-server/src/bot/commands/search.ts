@@ -205,6 +205,21 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     }
   } else {
     const query = titulo!;
+
+    // ✅ Se o valor vier do autocomplete no formato "source:id", vai direto ao resultado
+    if (/^(anilist|comick|mangadex|mangaupdates|jikan):[^\s|]+$/.test(query)) {
+      try {
+        const direct = await getUnifiedById(query);
+        if (direct) {
+          const embed = await buildEmbed(direct);
+          await interaction.editReply({ content: null, embeds: [embed] });
+          return;
+        }
+      } catch {
+        // falhou — cai no searchAllSources abaixo
+      }
+    }
+
     try {
       results = await searchAllSources(query);
     } catch {

@@ -42,7 +42,8 @@ export async function respondAutocomplete(
           m.title.english ?? m.title.romaji ?? m.title.native ?? "";
         if (title && !seen.has(title.toLowerCase())) {
           seen.add(title.toLowerCase());
-          suggestions.push({ name: title.slice(0, 100), value: title.slice(0, 100) });
+          // ✅ value usa anilist:ID para ir direto ao resultado
+          suggestions.push({ name: title.slice(0, 100), value: `anilist:${m.id}` });
         }
       }
     }
@@ -51,7 +52,8 @@ export async function respondAutocomplete(
       for (const m of comickRaw.value) {
         if (m.title && !seen.has(m.title.toLowerCase())) {
           seen.add(m.title.toLowerCase());
-          suggestions.push({ name: m.title.slice(0, 100), value: m.title.slice(0, 100) });
+          // ✅ value usa comick:slug para ir direto ao resultado
+          suggestions.push({ name: m.title.slice(0, 100), value: `comick:${m.slug}` });
         }
       }
     }

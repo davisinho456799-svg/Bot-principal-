@@ -66,6 +66,28 @@ function parseAnilist(raw: TraceMoeAnimeInfo | number): {
   };
 }
 
+function mapResults(rawResults: TraceMoeRawResult[]): TraceMoeResult[] {
+  return rawResults
+    .filter((r) => r.similarity >= 0.80) // era 0.85 — threshold reduzido para pegar mais resultados válidos
+    .slice(0, 3)
+    .map((r): TraceMoeResult => {
+      const anime = parseAnilist(r.anilist);
+      return {
+        anilistId: anime.id,
+        title: anime.title,
+        titleNative: anime.titleNative,
+        filename: r.filename,
+        episode: r.episode != null ? String(r.episode) : null,
+        from: r.from,
+        to: r.to,
+        similarity: r.similarity,
+        videoUrl: r.video,
+        imageUrl: r.image,
+        isAdult: anime.isAdult,
+      };
+    });
+}
+
 /**
  * Busca por URL de imagem pública.
  */
@@ -86,26 +108,40 @@ export async function searchByImageUrl(
     error?: string;
   };
   if (json.error) throw new Error(json.error);
+  return mapResults(json.result);
+}
 
-  return json.result
-    .filter((r) => r.similarity >= 0.85)
-    .slice(0, 3)
-    .map((r): TraceMoeResult => {
-      const anime = parseAnilist(r.anilist);
-      return {
-        anilistId: anime.id,
-        title: anime.title,
-        titleNative: anime.titleNative,
-        filename: r.filename,
-        episode: r.episode != null ? String(r.episode) : null,
-        from: r.from,
-        to: r.to,
-        similarity: r.similarity,
-        videoUrl: r.video,
-        imageUrl: r.image,
-        isAdult: anime.isAdult,
-      };
-    });
+/**
+ * Upload direto do arquivo via multipart/form-data.
+ * Mais confiável que URL para anexos do Discord (evita problemas de CDN).
+ */
+export async function searchByImageUpload(
+  imageUrl: string
+): Promise<TraceMoeResult[]> {
+  // Baixa a imagem primeiro
+  const imgRes = await fetch(imageUrl, { signal: AbortSignal.timeout(15000) });
+  if (!imgRes.ok) throw new Error(`Erro ao baixar imagem: ${imgRes.status}`);
+
+  const blob = await imgRes.blob();
+  const form = new FormData();
+  form.append("image", blob, "image.jpg");
+
+  const res = await fetch(`${TRACEMOE_API}/search?anilistInfo=1`, {
+    method: "POST",
+    body: form,
+    signal: AbortSignal.timeout(25000),
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Trace.moe error ${res.status}: ${text}`);
+  }
+  const json = (await res.json()) as {
+    result: TraceMoeRawResult[];
+    error?: string;
+  };
+  if (json.error) throw new Error(json.error);
+  return mapResults(json.result);
 }
 
 export { formatTimestamp };
