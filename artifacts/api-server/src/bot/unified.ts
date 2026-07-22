@@ -10,6 +10,7 @@ import {
 } from "./anilist.js";
 import {
   searchMangaDex,
+  searchMangaDexAny,
   getMangaDexById,
   hasPtBrChapters,
   findMangaDexIdByTitle,
@@ -554,17 +555,19 @@ async function runSearchKorean(query: string): Promise<UnifiedResult[]> {
  * e títulos de outros países que são estilo manhwa.
  */
 async function runSearchAny(query: string): Promise<UnifiedResult[]> {
-  const [anilistRaw, comickRaw, muRaw, jikanRaw] = await Promise.allSettled([
+  const [anilistRaw, comickRaw, muRaw, jikanRaw, mangadexRaw] = await Promise.allSettled([
     searchManhwaAny(query),
     searchComickAny(query),
-    searchMangaUpdates(query), // sem type filter — pega Manga/Manhwa/Manhua
-    searchJikanAny(query),     // sem type filter
+    searchMangaUpdates(query),  // sem type filter — pega Manga/Manhwa/Manhua
+    searchJikanAny(query),      // sem type filter
+    searchMangaDexAny(query),   // MangaDex sem filtro de idioma — amplia cobertura
   ]);
   return dedupeRaw([
     ...(anilistRaw.status === "fulfilled" ? anilistRaw.value.map(anilistToUnified) : []),
     ...(comickRaw.status === "fulfilled" ? comickRaw.value.map(comickToUnified) : []),
     ...(muRaw.status === "fulfilled" ? muRaw.value.map(mangaupdatesToUnified) : []),
     ...(jikanRaw.status === "fulfilled" ? jikanRaw.value.map(jikanToUnified) : []),
+    ...(mangadexRaw.status === "fulfilled" ? mangadexRaw.value.map(mangadexToUnified) : []),
   ]);
 }
 
