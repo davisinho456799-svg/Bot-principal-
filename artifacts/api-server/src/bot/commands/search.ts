@@ -209,7 +209,12 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     // ✅ Se o valor vier do autocomplete no formato "source:id", vai direto ao resultado
     if (/^(anilist|comick|mangadex|mangaupdates|jikan):[^\s|]+$/.test(query)) {
       try {
-        const direct = await getUnifiedById(query);
+        const [source, ...idParts] = query.split(":");
+        const id = idParts.join(":");
+        const direct = await getUnifiedById(
+          source as "anilist" | "mangadex" | "comick" | "mangaupdates" | "jikan",
+          id
+        );
         if (direct) {
           const embed = await buildEmbed(direct);
           await interaction.editReply({ content: null, embeds: [embed] });
