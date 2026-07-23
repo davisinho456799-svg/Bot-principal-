@@ -1,5 +1,6 @@
 import {
   ChatInputCommandInteraction,
+  AutocompleteInteraction,
   SlashCommandBuilder,
   EmbedBuilder,
   ActionRowBuilder,
@@ -9,7 +10,8 @@ import {
 } from "discord.js";
 import { db, favoritosTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
-import { searchAllSources } from "../unified.js";
+import { searchAllSources, getUnifiedById } from "../unified.js";
+import { respondAutocomplete } from "../autocomplete.js";
 import { buildScanLinksExternal } from "./search.js";
 
 export const data = new SlashCommandBuilder()
@@ -20,7 +22,7 @@ export const data = new SlashCommandBuilder()
       .setName("adicionar")
       .setDescription("Adiciona um manhwa aos seus favoritos")
       .addStringOption((opt) =>
-        opt.setName("titulo").setDescription("Nome do manhwa").setRequired(true)
+        opt.setName("titulo").setDescription("Nome do manhwa").setRequired(true).setAutocomplete(true)
       )
   )
   .addSubcommand((sub) =>
@@ -34,6 +36,11 @@ export const data = new SlashCommandBuilder()
         opt.setName("titulo").setDescription("Nome ou parte do título do manhwa").setRequired(true)
       )
   );
+
+export async function autocomplete(interaction: AutocompleteInteraction): Promise<void> {
+  const focused = interaction.options.getFocused();
+  await respondAutocomplete(interaction, focused);
+}
 
 export async function execute(interaction: ChatInputCommandInteraction) {
   const sub = interaction.options.getSubcommand();
@@ -84,6 +91,44 @@ async function handleAdicionar(interaction: ChatInputCommandInteraction) {
   const titulo = interaction.options.getString("titulo", true);
   await interaction.deferReply({ ephemeral: true });
 
+  const userId = interaction.user.id;
+
+  // ✅ Se veio do autocomplete no formato "source:id", vai direto ao resultado
+  if (/^(anilist|comick|mangadex|mangaupdates|jikan):[^\s]+$/.test(titulo)) {
+    try {
+      const [source, ...idParts] = titulo.split(":");
+      const id = idParts.join(":");
+      const direct = await getUnifiedById(
+        source as "anilist" | "mangadex" | "comick" | "mangaupdates" | "jikan",
+        id
+      );
+      if (direct) {
+        const existing = await db
+          .select({ manhwaId: favoritosTable.manhwaId })
+          .from(favoritosTable)
+          .where(and(eq(favoritosTable.discordUserId, userId), eq(favoritosTable.manhwaId, direct.id)));
+        if (existing.length) {
+          await interaction.editReply(`⚠️ **${direct.mainTitle}** já está nos seus favoritos!`);
+          return;
+        }
+        await db.insert(favoritosTable).values({
+          discordUserId: userId,
+          manhwaId: direct.id,
+          source: direct.source,
+          title: direct.mainTitle,
+          coverUrl: direct.coverUrl,
+          siteUrl: direct.siteUrl,
+          genres: direct.genres.join(","),
+          score: direct.score ? (direct.score / 10).toFixed(1) : null,
+        });
+        await interaction.editReply(`✅ **${direct.mainTitle}** adicionado aos seus favoritos!`);
+        return;
+      }
+    } catch {
+      // Se falhar, cai na busca normal abaixo
+    }
+  }
+
   let results;
   try {
     results = await searchAllSources(titulo);
@@ -97,7 +142,6 @@ async function handleAdicionar(interaction: ChatInputCommandInteraction) {
     return;
   }
 
-  const userId = interaction.user.id;
   const existingIds = new Set(
     (await db.select({ manhwaId: favoritosTable.manhwaId })
       .from(favoritosTable)
