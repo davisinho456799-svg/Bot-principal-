@@ -4,12 +4,14 @@
  * Pipeline:
  *   1. Trace.moe   — screenshot de anime com timestamp (confiança ≥ 90%)
  *   2. SauceNAO    — identificação genérica de origem de imagem
- *   3. OCR + APIs  — extrai texto e pesquisa em AniList, MAL, Kitsu, AniDB, TMDB
+ *   3. IQDB        — reverse image search (Danbooru, Gelbooru, Zerochan…) + Danbooru API
+ *   4. OCR + APIs  — extrai texto e pesquisa em AniList, MAL, Kitsu, AniDB, TMDB
  *   Fallback final: retorna melhor resultado do Trace.moe mesmo com baixa confiança
  */
 
 import { searchByImageUpload, searchByImageUrl, formatTimestamp } from "./tracemoe.js";
 import { searchByUploadSauceNAO, searchByUrlSauceNAO } from "./saucenao.js";
+import { searchByUploadIQDB, searchByUrlIQDB } from "./iqdb.js";
 import { extractTextFromUpload, extractTextFromUrl } from "./ocr.js";
 import { searchAnime, cleanDescription, translateToPtBr } from "./anilist.js";
 import { searchJikanAnimeAny } from "./jikan.js";
@@ -29,7 +31,7 @@ const cache = new Map<string, { result: IdentificationResult | null; expires: nu
 
 // ─── Tipos públicos ───────────────────────────────────────────────────────────
 
-export type IdentificationMethod = "tracemoe" | "saucenao" | "ocr";
+export type IdentificationMethod = "tracemoe" | "saucenao" | "iqdb" | "ocr";
 
 export interface IdentificationResult {
   method: IdentificationMethod;
@@ -246,7 +248,95 @@ async function trySauceNAO(
   }
 }
 
-// ─── Etapa 3: OCR + multi-API ─────────────────────────────────────────────────
+// ─── Etapa 3: IQDB ───────────────────────────────────────────────────────────
+
+async function tryIQDB(
+  imageUrl: string,
+  isAttachment: boolean
+): Promise<IdentificationResult | null> {
+  try {
+    const results = isAttachment
+      ? await searchByUploadIQDB(imageUrl)
+      : await searchByUrlIQDB(imageUrl);
+
+    if (!results.length) return null;
+    const top = results[0]!;
+    if (top.similarity < CONFIDENCE_THRESHOLD) return null;
+    if (!top.suggestedTitle) return null; // sem copyright identificado
+
+    // Usa o título sugerido para buscar detalhes no AniList
+    let anilistDetail: IdentificationResult | null = null;
+    try {
+      const animeList = await searchAnime(top.suggestedTitle);
+      if (animeList.length) {
+        const best = animeList[0]!;
+        const rawDesc = cleanDescription(best.description ?? null);
+        const synopsis = rawDesc
+          ? await translateToPtBr(rawDesc).catch(() => null)
+          : null;
+
+        const links: Array<{ label: string; url: string }> = [
+          { label: "AniList", url: best.siteUrl },
+          { label: top.sourceName, url: top.sourceUrl },
+        ];
+        const malLink = best.externalLinks?.find((l) => l.site === "MyAnimeList");
+        if (malLink) links.push({ label: "MyAnimeList", url: malLink.url });
+
+        anilistDetail = {
+          method: "iqdb",
+          confidence: top.similarity,
+          isHighConfidence: true,
+          title: best.title.english ?? best.title.romaji ?? best.title.native ?? top.suggestedTitle,
+          titleNative: best.title.native ?? null,
+          titleRomaji: best.title.romaji ?? null,
+          synopsis,
+          mediaType: best.type ?? null,
+          episode: null,
+          timestampFrom: null,
+          timestampTo: null,
+          previewImageUrl: top.thumbnail,
+          previewVideoUrl: null,
+          anilistId: best.id,
+          malId: null,
+          anidbId: null,
+          links: dedupLinks(links),
+          isAdult: top.isAdult,
+          ocrText: null,
+        };
+      }
+    } catch {
+      // AniList falhou — retorna resultado básico do IQDB
+    }
+
+    // Se AniList não retornou nada, retorna resultado básico
+    return anilistDetail ?? {
+      method: "iqdb",
+      confidence: top.similarity,
+      isHighConfidence: true,
+      title: top.suggestedTitle,
+      titleNative: null,
+      titleRomaji: null,
+      synopsis: null,
+      mediaType: null,
+      episode: null,
+      timestampFrom: null,
+      timestampTo: null,
+      previewImageUrl: top.thumbnail,
+      previewVideoUrl: null,
+      anilistId: null,
+      malId: null,
+      anidbId: null,
+      links: [{ label: top.sourceName, url: top.sourceUrl }],
+      isAdult: top.isAdult,
+      ocrText: null,
+    };
+  } catch (err) {
+    console.error("[Engine] IQDB falhou:", err);
+    return null;
+  }
+}
+
+// ─── Etapa 4: OCR + multi-API ─────────────────────────────────────────────────
 
 interface OCRCandidate {
   score: number;
@@ -491,10 +581,11 @@ export async function identifyImage(
     return traceResult;
   }
 
-  // Salva fallback de baixa confiança enquanto continua
-  const [traceLow, sauceResult, ocrResult] = await Promise.all([
+  // Etapas 2–4 + fallback em paralelo
+  const [traceLow, sauceResult, iqdbResult, ocrResult] = await Promise.all([
     tryTraceMoeLowConfidence(imageUrl, isAttachment),
     trySauceNAO(imageUrl, isAttachment),
+    tryIQDB(imageUrl, isAttachment),
     tryOCRSearch(imageUrl, isAttachment),
   ]);
 
@@ -506,7 +597,13 @@ export async function identifyImage(
     return sauceResult;
   }
 
-  // 3. OCR + APIs
+  // 3. IQDB (alta confiança)
+  if (iqdbResult) {
+    cache.set(cacheKey, { result: iqdbResult, expires: Date.now() + CACHE_TTL });
+    return iqdbResult;
+  }
+
+  // 4. OCR + APIs
   if (ocrResult) {
     cache.set(cacheKey, { result: ocrResult, expires: Date.now() + CACHE_TTL });
     return ocrResult;

@@ -37,12 +37,14 @@ export const data = new SlashCommandBuilder()
 const METHOD_LABELS: Record<string, string> = {
   tracemoe: "✅ Encontrado pelo Trace.moe",
   saucenao: "✅ Encontrado pelo SauceNAO",
+  iqdb:     "✅ Encontrado pelo IQDB",
   ocr:      "✅ Encontrado via OCR + pesquisa nas APIs",
 };
 
 const METHOD_ICONS: Record<string, string> = {
   tracemoe: "🎬",
   saucenao: "🔍",
+  iqdb:     "🖼️",
   ocr:      "📝",
 };
 
