@@ -42,6 +42,7 @@ import {
 } from "./anidb.js";
 import { searchVNDB, getVNDBById, type VNDBResult } from "./vndb.js";
 import { searchErogamescape, getErogamescapeDetail, type ErogamescapeResult } from "./erogamescape.js";
+import { searchAniSearch, getAniSearchById, type AniSearchResult } from "./anisearch.js";
 import {
   searchAnimeByConceptsPtBr,
   scoreAnimeCandidate,
@@ -57,7 +58,7 @@ import { searchCache, titleAliases } from "@workspace/db";
 import { eq, or, sql } from "drizzle-orm";
 
 export interface UnifiedResult {
-  source: "anilist" | "anilist-anime" | "mangadex" | "comick" | "mangaupdates" | "jikan" | "kitsu" | "anidb" | "vndb" | "erogamescape";
+  source: "anilist" | "anilist-anime" | "mangadex" | "comick" | "mangaupdates" | "jikan" | "kitsu" | "anidb" | "vndb" | "erogamescape" | "anisearch";
   id: string;
   mainTitle: string;
   nativeTitle: string | null;
@@ -353,6 +354,30 @@ export function vndbToUnified(m: VNDBResult): UnifiedResult {
     year: m.year,
     ptBrUrl: null,
     mediaType: undefined,
+  };
+}
+
+export function anisearchToUnified(m: AniSearchResult): UnifiedResult {
+  return {
+    source: "anisearch",
+    id: m.id,
+    mainTitle: m.mainTitle,
+    nativeTitle: m.nativeTitle ?? null,
+    romajiTitle: null,
+    synonyms: [],
+    description: m.description ?? null,
+    coverUrl: m.coverUrl ?? null,
+    accentColor: 0x1a73e8,           // azul AniSearch
+    score: m.score != null ? Math.round(m.score * 10) : null, // converte 8.5 → 85
+    genres: m.genres,
+    chapters: null,
+    status: null,
+    siteUrl: m.siteUrl,
+    year: m.year,
+    ptBrUrl: null,
+    mediaType: "anime",
+    episodes: m.episodes ?? null,
+    animeType: m.type ?? null,
   };
 }
 
@@ -814,10 +839,12 @@ export async function searchByDescriptionSemantic(
  * Busca um anime em todas as fontes gratuitas em paralelo e desduplicação.
  */
 export async function searchAllAnimeSources(query: string): Promise<UnifiedResult[]> {
-  const [anilistRes, jikanRes, kitsuRes] = await Promise.allSettled([
+  // Busca principal em paralelo: AniList + Jikan + Kitsu + AniSearch
+  const [anilistRes, jikanRes, kitsuRes, anisearchRes] = await Promise.allSettled([
     searchAnime(query),
     searchJikanAnimeAny(query),
     searchKitsu(query),
+    searchAniSearch(query),
   ]);
 
   const raw: UnifiedResult[] = [];
@@ -836,6 +863,13 @@ export async function searchAllAnimeSources(query: string): Promise<UnifiedResul
     for (const r of kitsuRes.value) {
       if (!raw.some((x) => titleOverlap(x.mainTitle, r.mainTitle))) {
         raw.push(kitsuToUnified(r));
+      }
+    }
+  }
+  if (anisearchRes.status === "fulfilled") {
+    for (const r of anisearchRes.value) {
+      if (!raw.some((x) => titleOverlap(x.mainTitle, r.mainTitle))) {
+        raw.push(anisearchToUnified(r));
       }
     }
   }
@@ -872,7 +906,10 @@ export async function searchAllAnimeSources(query: string): Promise<UnifiedResul
 
   // Sort: AniList primeiro (mais completo), depois por score
   return raw.sort((a, b) => {
-    const srcOrder: Record<string, number> = { "anilist-anime": 0, jikan: 1, kitsu: 2, anidb: 3, vndb: 4, erogamescape: 5 };
+    const srcOrder: Record<string, number> = {
+      "anilist-anime": 0, jikan: 1, kitsu: 2, anisearch: 3,
+      anidb: 4, vndb: 5, erogamescape: 6,
+    };
     const so = (srcOrder[a.source] ?? 9) - (srcOrder[b.source] ?? 9);
     if (so !== 0) return so;
     return (b.score ?? 0) - (a.score ?? 0);
@@ -956,7 +993,7 @@ export async function searchAnimeByDescriptionEnhanced(
  * Busca detalhes de um anime pelo ID de uma fonte específica.
  */
 export async function getUnifiedAnimeById(
-  source: "anilist-anime" | "jikan" | "kitsu" | "anidb" | "vndb" | "erogamescape",
+  source: "anilist-anime" | "jikan" | "kitsu" | "anidb" | "vndb" | "erogamescape" | "anisearch",
   id: string
 ): Promise<UnifiedResult | null> {
   if (source === "anilist-anime") {
@@ -980,6 +1017,9 @@ export async function getUnifiedAnimeById(
   } else if (source === "erogamescape") {
     const m = await getErogamescapeDetail(id);
     return m ? erogamescapeToUnified(m) : null;
+  } else if (source === "anisearch") {
+    const m = await getAniSearchById(id);
+    return m ? anisearchToUnified(m) : null;
   }
   return null;
 }
