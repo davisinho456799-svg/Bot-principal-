@@ -14,6 +14,7 @@ import {
   ComponentType,
 } from "discord.js";
 import { searchVNDB, getVNDBById, type VNDBResult } from "../vndb.js";
+import { searchErogamescape, getErogamescapeDetail, type ErogamescapeResult } from "../erogamescape.js";
 import { translateToPtBr } from "../anilist.js";
 
 export const data = new SlashCommandBuilder()
@@ -29,7 +30,8 @@ export const data = new SlashCommandBuilder()
 
 // ─── Autocomplete ─────────────────────────────────────────────────────────────
 
-const autocompleteCache = new Map<string, { results: string[]; ts: number }>();
+interface AutocompleteOption { name: string; value: string }
+const autocompleteCache = new Map<string, { results: AutocompleteOption[]; ts: number }>();
 const CACHE_TTL = 30_000;
 
 export async function autocomplete(interaction: AutocompleteInteraction): Promise<void> {
@@ -41,15 +43,41 @@ export async function autocomplete(interaction: AutocompleteInteraction): Promis
 
   const cached = autocompleteCache.get(focused);
   if (cached && Date.now() - cached.ts < CACHE_TTL) {
-    await interaction.respond(cached.results.map((t) => ({ name: t.slice(0, 100), value: t.slice(0, 100) })));
+    await interaction.respond(cached.results);
     return;
   }
 
   try {
-    const results = await searchVNDB(focused);
-    const titles = results.map((r) => r.mainTitle);
-    autocompleteCache.set(focused, { results: titles, ts: Date.now() });
-    await interaction.respond(titles.slice(0, 25).map((t) => ({ name: t.slice(0, 100), value: t.slice(0, 100) })));
+    const [vndbRes, erogeRes] = await Promise.allSettled([
+      searchVNDB(focused),
+      searchErogamescape(focused),
+    ]);
+
+    const seen = new Set<string>();
+    const options: AutocompleteOption[] = [];
+
+    // VNDB: value = "vndb:<vnId>"
+    if (vndbRes.status === "fulfilled") {
+      for (const r of vndbRes.value) {
+        if (!seen.has(r.mainTitle.toLowerCase())) {
+          seen.add(r.mainTitle.toLowerCase());
+          options.push({ name: r.mainTitle.slice(0, 100), value: `vndb:${r.vnId}` });
+        }
+      }
+    }
+    // Erogamescape: value = "eroge:<gameId>"
+    if (erogeRes.status === "fulfilled") {
+      for (const r of erogeRes.value) {
+        if (!seen.has(r.mainTitle.toLowerCase())) {
+          seen.add(r.mainTitle.toLowerCase());
+          options.push({ name: `[Eroge] ${r.mainTitle}`.slice(0, 100), value: `eroge:${r.gameId}` });
+        }
+      }
+    }
+
+    const top = options.slice(0, 25);
+    autocompleteCache.set(focused, { results: top, ts: Date.now() });
+    await interaction.respond(top);
   } catch {
     await interaction.respond([]);
   }
@@ -88,7 +116,37 @@ function scoreStars(score: number | null): string {
   return `⭐ ${s.toFixed(1)}/10 (${score}%)`;
 }
 
-// ─── Embed ────────────────────────────────────────────────────────────────────
+// ─── Embeds ───────────────────────────────────────────────────────────────────
+
+function buildErogamescapeEmbed(r: ErogamescapeResult): EmbedBuilder {
+  const embed = new EmbedBuilder()
+    .setTitle(r.mainTitle)
+    .setURL(r.siteUrl)
+    .setColor(0xc0392b);
+
+  if (r.score != null) {
+    const label = r.votecount
+      ? `${r.score}/100 (${r.votecount.toLocaleString("pt-BR")} votos)`
+      : `${r.score}/100`;
+    embed.addFields({ name: "⭐ Avaliação (mediana)", value: label, inline: true });
+  }
+  if (r.developer) embed.addFields({ name: "🏢 Desenvolvedora", value: r.developer, inline: true });
+  if (r.releaseDate) embed.addFields({ name: "📅 Lançamento", value: r.releaseDate, inline: true });
+  if (r.tags.length) embed.addFields({ name: "🏷️ Tags", value: r.tags.join(" • "), inline: false });
+  if (r.coverUrl) embed.setThumbnail(r.coverUrl);
+
+  const encoded = encodeURIComponent(r.mainTitle);
+  const links = [
+    `[Erogamescape](${r.siteUrl})`,
+    `[VNDB](https://vndb.org/v?q=${encoded})`,
+    `[Steam](https://store.steampowered.com/search/?term=${encoded})`,
+    `[DLsite](https://www.dlsite.com/maniax/fsr/=/language/jp/keyword_creater_text/${encoded})`,
+  ].join(" • ");
+  embed.addFields({ name: "🕹️ Onde encontrar", value: links, inline: false });
+  embed.setFooter({ text: "🔴 Erogamescape" });
+
+  return embed;
+}
 
 async function buildVNEmbed(r: VNDBResult): Promise<EmbedBuilder> {
   const rawDesc = r.description ?? "";
@@ -161,55 +219,100 @@ async function buildVNEmbed(r: VNDBResult): Promise<EmbedBuilder> {
 
 // ─── Execute ──────────────────────────────────────────────────────────────────
 
+const AUTOCOMPLETE_RE = /^(vndb|eroge):(.+)$/;
+
 export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
   const titulo = interaction.options.getString("titulo", true);
 
   await interaction.deferReply();
 
-  let results: VNDBResult[];
-  try {
-    results = await searchVNDB(titulo);
-  } catch {
-    await interaction.editReply("❌ Erro ao consultar o VNDB. Tente novamente.");
+  // Seleção direta do autocomplete → busca por ID
+  const match = AUTOCOMPLETE_RE.exec(titulo);
+  if (match) {
+    const [, src, id] = match;
+    try {
+      if (src === "vndb") {
+        const vn = await getVNDBById(id!);
+        if (!vn) {
+          await interaction.editReply("❌ VN não encontrada. Tente digitar o título manualmente.");
+          return;
+        }
+        await interaction.editReply({ embeds: [await buildVNEmbed(vn)] });
+      } else {
+        const game = await getErogamescapeDetail(id!);
+        if (!game) {
+          await interaction.editReply("❌ Jogo não encontrado. Tente digitar o título manualmente.");
+          return;
+        }
+        await interaction.editReply({ embeds: [buildErogamescapeEmbed(game)] });
+      }
+    } catch {
+      await interaction.editReply("❌ Erro ao buscar detalhes. Tente novamente.");
+    }
     return;
   }
 
-  if (!results.length) {
+  // Busca textual em ambas as fontes em paralelo
+  const [vndbRes, erogeRes] = await Promise.allSettled([
+    searchVNDB(titulo),
+    searchErogamescape(titulo),
+  ]);
+
+  const vndbResults = vndbRes.status === "fulfilled" ? vndbRes.value : [];
+  const erogeResults = erogeRes.status === "fulfilled" ? erogeRes.value : [];
+  const total = vndbResults.length + erogeResults.length;
+
+  if (total === 0) {
     await interaction.editReply(
       `❌ Nenhuma visual novel encontrada para **${titulo}**.\nTente usar parte do título ou o título em japonês/inglês.`
     );
     return;
   }
 
-  if (results.length === 1) {
-    const embed = await buildVNEmbed(results[0]);
-    await interaction.editReply({ content: null, embeds: [embed] });
+  // Resultado único → mostra direto
+  if (total === 1) {
+    if (vndbResults.length === 1) {
+      await interaction.editReply({ embeds: [await buildVNEmbed(vndbResults[0]!)] });
+    } else {
+      await interaction.editReply({ embeds: [buildErogamescapeEmbed(erogeResults[0]!)] });
+    }
     return;
   }
 
-  const options = results.slice(0, 8).map((r) => ({
-    label: r.mainTitle.slice(0, 100),
-    description: [
-      `🔵 VNDB`,
-      r.length ?? null,
-      r.developers[0] ?? null,
-      r.year ? String(r.year) : null,
-    ]
-      .filter(Boolean)
-      .join(" • ")
-      .slice(0, 100),
-    value: r.vnId,
-  }));
+  // Select menu combinado (VNDB + Erogamescape)
+  const options: { label: string; description: string; value: string }[] = [];
+
+  for (const r of vndbResults.slice(0, 5)) {
+    options.push({
+      label: r.mainTitle.slice(0, 100),
+      description: ["🔵 VNDB", r.length ?? null, r.developers[0] ?? null, r.year ? String(r.year) : null]
+        .filter(Boolean).join(" • ").slice(0, 100),
+      value: `vndb:${r.vnId}`,
+    });
+  }
+  for (const r of erogeResults.slice(0, 5)) {
+    options.push({
+      label: r.mainTitle.slice(0, 100),
+      description: ["🔴 Erogamescape", r.developer ?? null, r.year ? String(r.year) : null]
+        .filter(Boolean).join(" • ").slice(0, 100),
+      value: `eroge:${r.gameId}`,
+    });
+  }
 
   const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
     new StringSelectMenuBuilder()
       .setCustomId("vn_select")
       .setPlaceholder("Selecione a visual novel correta")
-      .addOptions(options)
+      .addOptions(options.slice(0, 25))
   );
 
+  const sources = [
+    vndbResults.length ? "🔵 VNDB" : null,
+    erogeResults.length ? "🔴 Erogamescape" : null,
+  ].filter(Boolean).join(" + ");
+
   await interaction.editReply({
-    content: `🔍 Encontrei **${results.length}** resultados no VNDB. Selecione:`,
+    content: `🔍 Encontrei **${total}** resultados em ${sources}. Selecione:`,
     components: [row],
   });
 
@@ -223,14 +326,26 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
   collector?.on("collect", async (selectInteraction: StringSelectMenuInteraction) => {
     await selectInteraction.deferUpdate();
     try {
-      const vnId = selectInteraction.values[0]!;
-      const vn = await getVNDBById(vnId);
-      if (!vn) {
-        await interaction.editReply({ content: "❌ Não foi possível carregar os detalhes. Tente outro resultado.", components: [] });
-        return;
+      const rawValue = selectInteraction.values[0]!;
+      const colonIdx = rawValue.indexOf(":");
+      const src = rawValue.slice(0, colonIdx);
+      const id = rawValue.slice(colonIdx + 1);
+
+      if (src === "vndb") {
+        const vn = await getVNDBById(id);
+        if (!vn) {
+          await interaction.editReply({ content: "❌ Não foi possível carregar os detalhes.", components: [] });
+          return;
+        }
+        await interaction.editReply({ content: null, embeds: [await buildVNEmbed(vn)], components: [] });
+      } else {
+        const game = await getErogamescapeDetail(id);
+        if (!game) {
+          await interaction.editReply({ content: "❌ Não foi possível carregar os detalhes.", components: [] });
+          return;
+        }
+        await interaction.editReply({ content: null, embeds: [buildErogamescapeEmbed(game)], components: [] });
       }
-      const embed = await buildVNEmbed(vn);
-      await interaction.editReply({ content: null, embeds: [embed], components: [] });
     } catch {
       await interaction.editReply({ content: "❌ Erro inesperado. Tente novamente.", components: [] });
     }

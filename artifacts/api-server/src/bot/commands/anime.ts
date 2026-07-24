@@ -23,6 +23,8 @@ import {
 } from "../unified.js";
 import { cleanDescription, translateToPtBr, statusLabel, searchAnime } from "../anilist.js";
 import { searchKitsu } from "../kitsu.js";
+import { searchVNDB, getVNDBById } from "../vndb.js";
+import { searchErogamescape, getErogamescapeDetail } from "../erogamescape.js";
 
 export const data = new SlashCommandBuilder()
   .setName("anime")
@@ -61,9 +63,11 @@ export async function autocomplete(interaction: AutocompleteInteraction): Promis
   }
 
   try {
-    const [anilistResults, kitsuResults] = await Promise.allSettled([
+    const [anilistResults, kitsuResults, vndbResults, erogeResults] = await Promise.allSettled([
       searchAnime(focused),
       searchKitsu(focused),
+      searchVNDB(focused),
+      searchErogamescape(focused),
     ]);
 
     const seen = new Set<string>();
@@ -88,6 +92,24 @@ export async function autocomplete(interaction: AutocompleteInteraction): Promis
         }
       }
     }
+    // VNDB: value = "vndb:<vnId>"
+    if (vndbResults.status === "fulfilled") {
+      for (const r of vndbResults.value) {
+        if (!seen.has(r.mainTitle.toLowerCase())) {
+          seen.add(r.mainTitle.toLowerCase());
+          options.push({ name: `[VN] ${r.mainTitle}`.slice(0, 100), value: `vndb:${r.vnId}` });
+        }
+      }
+    }
+    // Erogamescape: value = "erogamescape:<gameId>"
+    if (erogeResults.status === "fulfilled") {
+      for (const r of erogeResults.value) {
+        if (!seen.has(r.mainTitle.toLowerCase())) {
+          seen.add(r.mainTitle.toLowerCase());
+          options.push({ name: `[Eroge] ${r.mainTitle}`.slice(0, 100), value: `erogamescape:${r.gameId}` });
+        }
+      }
+    }
 
     const top = options.slice(0, 25);
     autocompleteCache.set(focused, { results: top, ts: Date.now() });
@@ -104,6 +126,8 @@ const SOURCE_LABELS: Record<string, string> = {
   jikan: "MyAnimeList",
   kitsu: "Kitsu",
   anidb: "AniDB",
+  vndb: "VNDB",
+  erogamescape: "Erogamescape",
 };
 
 const SOURCE_ICONS: Record<string, string> = {
@@ -111,6 +135,8 @@ const SOURCE_ICONS: Record<string, string> = {
   jikan: "🔴",
   kitsu: "🔵",
   anidb: "🟤",
+  vndb: "🔵",
+  erogamescape: "🔴",
 };
 
 // ─── Links de streaming PT-BR (fallback) ─────────────────────────────────────
@@ -240,12 +266,12 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
   let isDescSearch = false;
 
   // Detecta se o título veio do autocomplete (formato "source:id")
-  const AUTOCOMPLETE_RE = /^(anilist-anime|jikan|kitsu|anidb):(.+)$/;
+  const AUTOCOMPLETE_RE = /^(anilist-anime|jikan|kitsu|anidb|vndb|erogamescape):(.+)$/;
   const autocompleteMatch = titulo ? AUTOCOMPLETE_RE.exec(titulo) : null;
 
   if (autocompleteMatch) {
     // Seleção direta do autocomplete → busca por ID, sem pesquisa textual
-    const source = autocompleteMatch[1] as "anilist-anime" | "jikan" | "kitsu" | "anidb";
+    const source = autocompleteMatch[1] as "anilist-anime" | "jikan" | "kitsu" | "anidb" | "vndb" | "erogamescape";
     const id = autocompleteMatch[2]!;
     try {
       const anime = await getUnifiedAnimeById(source, id);
@@ -327,6 +353,8 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     sourceSet.has("anilist-anime") ? "🟣 AniList" : null,
     sourceSet.has("jikan") ? "🔴 MAL" : null,
     sourceSet.has("kitsu") ? "🔵 Kitsu" : null,
+    sourceSet.has("vndb") ? "🔵 VNDB" : null,
+    sourceSet.has("erogamescape") ? "🔴 Erogamescape" : null,
   ].filter(Boolean).join(" + ");
 
   const headerText = isDescSearch
@@ -352,7 +380,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
       const decodedScore = scoreStr ? parseInt(scoreStr, 10) : undefined;
 
       const anime = await getUnifiedAnimeById(
-        source as "anilist-anime" | "jikan" | "kitsu" | "anidb",
+        source as "anilist-anime" | "jikan" | "kitsu" | "anidb" | "vndb" | "erogamescape",
         id
       );
       if (!anime) {

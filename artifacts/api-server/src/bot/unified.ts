@@ -41,6 +41,7 @@ import {
   type AniDBAnimeDetail,
 } from "./anidb.js";
 import { searchVNDB, getVNDBById, type VNDBResult } from "./vndb.js";
+import { searchErogamescape, getErogamescapeDetail, type ErogamescapeResult } from "./erogamescape.js";
 import {
   searchAnimeByConceptsPtBr,
   scoreAnimeCandidate,
@@ -56,7 +57,7 @@ import { searchCache, titleAliases } from "@workspace/db";
 import { eq, or, sql } from "drizzle-orm";
 
 export interface UnifiedResult {
-  source: "anilist" | "anilist-anime" | "mangadex" | "comick" | "mangaupdates" | "jikan" | "kitsu" | "anidb" | "vndb";
+  source: "anilist" | "anilist-anime" | "mangadex" | "comick" | "mangaupdates" | "jikan" | "kitsu" | "anidb" | "vndb" | "erogamescape";
   id: string;
   mainTitle: string;
   nativeTitle: string | null;
@@ -346,6 +347,28 @@ export function vndbToUnified(m: VNDBResult): UnifiedResult {
     accentColor: 0x337ab7,
     score: m.score,
     genres: m.tags.slice(0, 6),
+    chapters: null,
+    status: null,
+    siteUrl: m.siteUrl,
+    year: m.year,
+    ptBrUrl: null,
+    mediaType: undefined,
+  };
+}
+
+export function erogamescapeToUnified(m: ErogamescapeResult): UnifiedResult {
+  return {
+    source: "erogamescape",
+    id: m.gameId,
+    mainTitle: m.mainTitle,
+    nativeTitle: m.altTitle ?? null,
+    romajiTitle: null,
+    synonyms: [],
+    description: null,
+    coverUrl: m.coverUrl,
+    accentColor: 0xc0392b,
+    score: m.score,
+    genres: m.tags,
     chapters: null,
     status: null,
     siteUrl: m.siteUrl,
@@ -827,9 +850,29 @@ export async function searchAllAnimeSources(query: string): Promise<UnifiedResul
     }
   }
 
+  // VNDB e Erogamescape — fontes suplementares para adaptações de VN
+  const [vndbRes, erogeRes] = await Promise.allSettled([
+    searchVNDB(query),
+    searchErogamescape(query),
+  ]);
+  if (vndbRes.status === "fulfilled") {
+    for (const r of vndbRes.value) {
+      if (!raw.some((x) => titleOverlap(x.mainTitle, r.mainTitle))) {
+        raw.push(vndbToUnified(r));
+      }
+    }
+  }
+  if (erogeRes.status === "fulfilled") {
+    for (const r of erogeRes.value) {
+      if (!raw.some((x) => titleOverlap(x.mainTitle, r.mainTitle))) {
+        raw.push(erogamescapeToUnified(r));
+      }
+    }
+  }
+
   // Sort: AniList primeiro (mais completo), depois por score
   return raw.sort((a, b) => {
-    const srcOrder: Record<string, number> = { "anilist-anime": 0, jikan: 1, kitsu: 2, anidb: 3 };
+    const srcOrder: Record<string, number> = { "anilist-anime": 0, jikan: 1, kitsu: 2, anidb: 3, vndb: 4, erogamescape: 5 };
     const so = (srcOrder[a.source] ?? 9) - (srcOrder[b.source] ?? 9);
     if (so !== 0) return so;
     return (b.score ?? 0) - (a.score ?? 0);
@@ -913,7 +956,7 @@ export async function searchAnimeByDescriptionEnhanced(
  * Busca detalhes de um anime pelo ID de uma fonte específica.
  */
 export async function getUnifiedAnimeById(
-  source: "anilist-anime" | "jikan" | "kitsu" | "anidb",
+  source: "anilist-anime" | "jikan" | "kitsu" | "anidb" | "vndb" | "erogamescape",
   id: string
 ): Promise<UnifiedResult | null> {
   if (source === "anilist-anime") {
@@ -928,10 +971,15 @@ export async function getUnifiedAnimeById(
   } else if (source === "anidb") {
     const detail = await getAniDBById(parseInt(id, 10));
     if (detail) return anidbDetailToUnified(detail);
-    // Sem credenciais: retorna resultado básico buscando no dump
     const entries = await searchAniDB(`aid:${id}`).catch((): AniDBEntry[] => []);
     const entry = entries.find((e) => e.aid === parseInt(id, 10));
     return entry ? anidbEntryToUnified(entry) : null;
+  } else if (source === "vndb") {
+    const m = await getVNDBById(id);
+    return m ? vndbToUnified(m) : null;
+  } else if (source === "erogamescape") {
+    const m = await getErogamescapeDetail(id);
+    return m ? erogamescapeToUnified(m) : null;
   }
   return null;
 }
@@ -939,9 +987,10 @@ export async function getUnifiedAnimeById(
 // ─── VN search ────────────────────────────────────────────────────────────────
 
 export type { VNDBResult };
+export type { ErogamescapeResult };
 
 /**
- * Busca visual novels no VNDB.
+ * Busca visual novels em todas as fontes (VNDB + Erogamescape).
  */
 export async function searchAllVNSources(query: string): Promise<VNDBResult[]> {
   return searchVNDB(query).catch(() => []);
