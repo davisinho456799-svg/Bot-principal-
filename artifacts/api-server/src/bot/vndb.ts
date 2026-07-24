@@ -209,6 +209,55 @@ export async function getVNDBById(id: string): Promise<VNDBResult | null> {
   }
 }
 
+// ─── Adult calendar ───────────────────────────────────────────────────────────
+
+interface VNDBRawWithImage extends VNDBRaw {
+  image: VNDBImage | null;
+}
+
+/**
+ * Busca VNs com conteúdo adulto lançadas no período recente (passado e futuro).
+ * Filtra por image.sexual >= 1 (sugestivo ou explícito) para garantir que só
+ * apareçam títulos com conteúdo adulto.
+ */
+export async function fetchVNDBAdultCalendar(monthsBack = 2, monthsAhead = 1): Promise<VNDBResult[]> {
+  await throttle();
+
+  const now = new Date();
+  const from = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - monthsBack, 1));
+  const to   = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + monthsAhead + 1, 0));
+
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const fromStr = `${from.getUTCFullYear()}-${pad(from.getUTCMonth() + 1)}-01`;
+  const toStr   = `${to.getUTCFullYear()}-${pad(to.getUTCMonth() + 1)}-${pad(to.getUTCDate())}`;
+
+  const body = {
+    filters: ["and", ["released", ">=", fromStr], ["released", "<=", toStr]],
+    fields: FIELDS,
+    sort: "rating",
+    reverse: true,
+    results: 25,
+  };
+
+  try {
+    const res = await fetch(`${BASE}/vn`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) return [];
+
+    const json = (await res.json()) as { results: VNDBRawWithImage[]; more: boolean };
+    return (json.results ?? [])
+      .filter((raw) => raw.image != null && raw.image.sexual >= 1)
+      .map(toVNDBResult)
+      .slice(0, 10);
+  } catch {
+    return [];
+  }
+}
+
 /**
  * Busca VNs por tags específicas.
  */

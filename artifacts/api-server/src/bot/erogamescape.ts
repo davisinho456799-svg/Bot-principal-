@@ -57,6 +57,90 @@ function stripHtml(html: string): string {
     .trim();
 }
 
+// ─── Calendar (recent releases) ──────────────────────────────────────────────
+
+/**
+ * Busca eroge lançados no mês/ano indicado (ou mês atual).
+ * Tenta a URL de listagem mensal do Erogamescape; se falhar, usa a busca geral
+ * filtrada por ano.
+ */
+export async function fetchErogamescapeCalendar(
+  year?: number,
+  month?: number,
+): Promise<ErogamescapeResult[]> {
+  const now = new Date();
+  const y = year ?? now.getFullYear();
+  const m = month ?? now.getMonth() + 1;
+
+  // Tentativa 1 — página de lançamentos por mês
+  const monthUrls = [
+    `${BASE}/game_list.php?year=${y}&month=${m}&median=0&average=0`,
+    `${BASE}/search_soft.php?year=${y}&month=${m}`,
+    `${BASE}/new_soft.php?year=${y}&month=${m}`,
+  ];
+
+  for (const url of monthUrls) {
+    try {
+      const html = await fetchHtml(url);
+      const results = extractGameLinksFromHtml(html);
+      if (results.length > 0) {
+        return await enrichTop(results);
+      }
+    } catch {
+      // tenta próxima URL
+    }
+  }
+
+  // Tentativa 2 — busca pelo ano como texto (ampla, mas melhor que nada)
+  try {
+    const url = `${BASE}/game_search.php?word=${y}&median=0&average=0`;
+    const html = await fetchHtml(url);
+    const results = extractGameLinksFromHtml(html);
+    if (results.length > 0) {
+      return await enrichTop(results);
+    }
+  } catch { /* silencioso */ }
+
+  return [];
+}
+
+function extractGameLinksFromHtml(html: string): ErogamescapeResult[] {
+  const results: ErogamescapeResult[] = [];
+  const seen = new Set<string>();
+  const linkRe = /href="game\.php\?game=(\d+)"[^>]*>([^<]+)<\/a>/g;
+  let m: RegExpExecArray | null;
+  while ((m = linkRe.exec(html)) !== null && results.length < 15) {
+    const [, gameId, rawTitle] = m;
+    if (!gameId || !rawTitle || seen.has(gameId)) continue;
+    seen.add(gameId);
+    const title = stripHtml(rawTitle).trim();
+    if (!title || title.length < 2) continue;
+    results.push({
+      gameId,
+      mainTitle: title,
+      altTitle: null,
+      developer: null,
+      releaseDate: null,
+      year: null,
+      score: null,
+      votecount: null,
+      coverUrl: null,
+      tags: [],
+      siteUrl: `${BASE}/game.php?game=${gameId}`,
+    });
+  }
+  return results;
+}
+
+async function enrichTop(results: ErogamescapeResult[]): Promise<ErogamescapeResult[]> {
+  const top = results.slice(0, 5);
+  const details = await Promise.allSettled(top.map((r) => getErogamescapeDetail(r.gameId)));
+  details.forEach((d, i) => {
+    if (d.status === "fulfilled" && d.value) results[i] = d.value;
+  });
+  return results.slice(0, 10);
+}
+
 // ─── Search ───────────────────────────────────────────────────────────────────
 
 export async function searchErogamescape(query: string): Promise<ErogamescapeResult[]> {
