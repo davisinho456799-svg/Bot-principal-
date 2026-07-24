@@ -21,6 +21,9 @@ import { data as identificarData } from "./commands/identificar.js";
 import { data as temasData } from "./commands/temas.js";
 import { data as filmeData } from "./commands/filme.js";
 import { data as mangaData } from "./commands/manga.js";
+import { data as calendarioData } from "./commands/calendario.js";
+import { data as temporadaData } from "./commands/temporada.js";
+import { data as statusData } from "./commands/status.js";
 import { logger } from "../lib/logger.js";
 
 export async function deployCommands(clientId: string, token: string) {
@@ -47,6 +50,9 @@ export async function deployCommands(clientId: string, token: string) {
     temasData.toJSON(),
     filmeData.toJSON(),
     mangaData.toJSON(),
+    calendarioData.toJSON(),
+    temporadaData.toJSON(),
+    statusData.toJSON(),
   ];
   const rest = new REST().setToken(token);
 

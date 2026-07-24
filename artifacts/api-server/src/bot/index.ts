@@ -30,6 +30,9 @@ import * as identificarCommand from "./commands/identificar.js";
 import * as temasCommand from "./commands/temas.js";
 import * as filmeCommand from "./commands/filme.js";
 import * as mangaCommand from "./commands/manga.js";
+import * as calendarioCommand from "./commands/calendario.js";
+import * as temporadaCommand from "./commands/temporada.js";
+import * as statusCommand from "./commands/status.js";
 import { startNotificacaoService } from "./notificacao-service.js";
 import { logUsage } from "./usage-logger.js";
 
@@ -63,6 +66,9 @@ const commands = new Map<string, Command>([
   [temasCommand.data.name, temasCommand],
   [filmeCommand.data.name, filmeCommand],
   [mangaCommand.data.name, mangaCommand],
+  [calendarioCommand.data.name, calendarioCommand],
+  [temporadaCommand.data.name, temporadaCommand],
+  [statusCommand.data.name, statusCommand],
 ]);
 
 export async function startBot() {
