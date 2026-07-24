@@ -31,6 +31,7 @@ import * as temasCommand from "./commands/temas.js";
 import * as filmeCommand from "./commands/filme.js";
 import * as mangaCommand from "./commands/manga.js";
 import * as calendarioCommand from "./commands/calendario.js";
+import * as calendario18Command from "./commands/calendario18.js";
 import * as temporadaCommand from "./commands/temporada.js";
 import * as statusCommand from "./commands/status.js";
 import { startNotificacaoService } from "./notificacao-service.js";
@@ -67,6 +68,7 @@ const commands = new Map<string, Command>([
   [filmeCommand.data.name, filmeCommand],
   [mangaCommand.data.name, mangaCommand],
   [calendarioCommand.data.name, calendarioCommand],
+  [calendario18Command.data.name, calendario18Command],
   [temporadaCommand.data.name, temporadaCommand],
   [statusCommand.data.name, statusCommand],
 ]);

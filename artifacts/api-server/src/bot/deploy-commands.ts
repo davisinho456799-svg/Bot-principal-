@@ -22,6 +22,7 @@ import { data as temasData } from "./commands/temas.js";
 import { data as filmeData } from "./commands/filme.js";
 import { data as mangaData } from "./commands/manga.js";
 import { data as calendarioData } from "./commands/calendario.js";
+import { data as calendario18Data } from "./commands/calendario18.js";
 import { data as temporadaData } from "./commands/temporada.js";
 import { data as statusData } from "./commands/status.js";
 import { logger } from "../lib/logger.js";
@@ -51,6 +52,7 @@ export async function deployCommands(clientId: string, token: string) {
     filmeData.toJSON(),
     mangaData.toJSON(),
     calendarioData.toJSON(),
+    calendario18Data.toJSON(),
     temporadaData.toJSON(),
     statusData.toJSON(),
   ];
