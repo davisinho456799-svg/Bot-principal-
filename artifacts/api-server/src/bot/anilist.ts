@@ -28,7 +28,7 @@ export interface ManhwaResult {
 const SEARCH_QUERY = `
 query SearchManhwa($search: String!, $page: Int) {
   Page(page: $page, perPage: 10) {
-    media(search: $search, type: MANGA, countryOfOrigin: KR, sort: SEARCH_MATCH) {
+    media(search: $search, type: MANGA, countryOfOrigin: KR, isAdult: false, sort: SEARCH_MATCH) {
       id
       title { romaji english native }
       synonyms
@@ -48,7 +48,7 @@ query SearchManhwa($search: String!, $page: Int) {
 const SEARCH_QUERY_ANY = `
 query SearchManga($search: String!, $page: Int) {
   Page(page: $page, perPage: 8) {
-    media(search: $search, type: MANGA, sort: SEARCH_MATCH) {
+    media(search: $search, type: MANGA, isAdult: false, sort: SEARCH_MATCH) {
       id
       title { romaji english native }
       synonyms
@@ -86,7 +86,7 @@ query GetManhwa($id: Int!) {
 const SEARCH_BY_GENRE_TAG_QUERY = `
 query SearchByFilters($genres: [String], $tags: [String], $page: Int) {
   Page(page: $page, perPage: 15) {
-    media(type: MANGA, countryOfOrigin: KR, genre_in: $genres, tag_in: $tags, sort: POPULARITY_DESC) {
+    media(type: MANGA, countryOfOrigin: KR, isAdult: false, genre_in: $genres, tag_in: $tags, sort: POPULARITY_DESC) {
       id
       title { romaji english native }
       synonyms
@@ -106,7 +106,7 @@ query SearchByFilters($genres: [String], $tags: [String], $page: Int) {
 const SEARCH_BY_KEYWORD_ANY_QUERY = `
 query SearchKeywordAny($search: String!, $page: Int) {
   Page(page: $page, perPage: 10) {
-    media(search: $search, type: MANGA, sort: SEARCH_MATCH) {
+    media(search: $search, type: MANGA, isAdult: false, sort: SEARCH_MATCH) {
       id
       title { romaji english native }
       synonyms

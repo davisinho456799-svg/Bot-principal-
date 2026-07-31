@@ -66,7 +66,7 @@ export async function respondAutocomplete(
       withTimeout(searchManhwa(query),       TIMEOUT_MS),
       withTimeout(searchComick(query),        TIMEOUT_MS),
       withTimeout(searchMangaDex(query),      TIMEOUT_MS),
-      withTimeout(searchMangaUpdates(query),  TIMEOUT_MS),
+      withTimeout(searchMangaUpdates(query, "Manhwa"),  TIMEOUT_MS),
       withTimeout(searchJikan(query),         TIMEOUT_MS),
     ]);
 

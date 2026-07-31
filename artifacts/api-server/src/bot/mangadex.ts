@@ -141,7 +141,9 @@ export async function searchMangaDex(search: string): Promise<MangaDexResult[]> 
     "originalLanguage[]": "ko",
     "includes[]": "cover_art",
     "order[relevance]": "desc",
+    "contentRating[]": "safe",
   });
+  params.append("contentRating[]", "suggestive");
 
   const res = await fetch(`${MANGADEX_API}/manga?${params.toString()}`, {
     headers: { Accept: "application/json" },
@@ -218,7 +220,9 @@ export async function searchMangaDexAny(
     limit: String(limit),
     "includes[]": "cover_art",
     "order[relevance]": "desc",
+    "contentRating[]": "safe",
   });
+  params.append("contentRating[]", "suggestive");
 
   try {
     const res = await fetch(`${MANGADEX_API}/manga?${params.toString()}`, {
@@ -271,7 +275,9 @@ export async function searchMangaDexJp(
     "originalLanguage[]": "ja",
     "includes[]": "cover_art",
     "order[relevance]": "desc",
+    "contentRating[]": "safe",
   });
+  params.append("contentRating[]", "suggestive");
   if (includedTagId) {
     params.append("includedTags[]", includedTagId);
   }
