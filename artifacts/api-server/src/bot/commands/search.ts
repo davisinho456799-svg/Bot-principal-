@@ -91,9 +91,8 @@ export function buildScanLinksExternal(title: string): string {
 }
 
 async function buildEmbed(r: UnifiedResult, compatibilityScore?: number): Promise<EmbedBuilder> {
-  const score = r.score ? `⭐ ${(r.score / 10).toFixed(1)}/10` : "⭐ N/A";
-  const chapters = r.chapters ? `📖 ${r.chapters} capítulos` : "📖 Desconhecido";
-  const status = `📌 ${statusLabel(r.status)}`;
+  const score = r.score ? `${(r.score / 10).toFixed(1)}/10` : "N/A";
+  const chapters = r.chapters ? `${r.chapters} capítulos` : "Desconhecido";
   const genres = r.genres.length ? r.genres.slice(0, 6).join(" • ") : "Sem gêneros";
   const altTitles = buildAltTitles(r);
   const sourceLabel = SOURCE_LABELS[r.source] ?? r.source;
@@ -110,12 +109,17 @@ async function buildEmbed(r: UnifiedResult, compatibilityScore?: number): Promis
     .setTitle(r.mainTitle.slice(0, 256))
     .setURL(r.siteUrl || null)
     .setDescription((synopsis || "Sem sinopse disponível.").slice(0, 4096))
-    .setColor(safeColor)
-    .addFields(
-      { name: "Avaliação", value: score, inline: true },
-      { name: "Capítulos", value: chapters, inline: true },
-      { name: "Status", value: status, inline: true },
-    );
+    .setColor(safeColor);
+
+  // Foto sempre no topo (thumbnail aparece ao lado do título no Discord)
+  if (r.coverUrl) embed.setThumbnail(r.coverUrl);
+
+  // Ordem: Rate → Capítulo → Status
+  embed.addFields(
+    { name: "⭐ Avaliação", value: score, inline: true },
+    { name: "📖 Capítulos", value: chapters, inline: true },
+    { name: "📌 Status", value: statusLabel(r.status), inline: true },
+  );
 
   if (compatibilityScore != null) {
     const bar = compatibilityScore >= 70 ? "🟢" : compatibilityScore >= 40 ? "🟡" : "🟠";
@@ -126,11 +130,12 @@ async function buildEmbed(r: UnifiedResult, compatibilityScore?: number): Promis
     });
   }
 
-  embed.addFields({ name: "Gêneros", value: genres, inline: false });
+  // Gêneros
+  embed.addFields({ name: "🏷️ Gêneros", value: genres, inline: false });
 
-  if (r.coverUrl) embed.setThumbnail(r.coverUrl);
-  if (altTitles) embed.addFields({ name: "Títulos alternativos", value: altTitles, inline: false });
-  if (r.year) embed.addFields({ name: "Ano de início", value: String(r.year), inline: true });
+  // Títulos alternativos
+  if (altTitles) embed.addFields({ name: "🔤 Títulos alternativos", value: altTitles, inline: false });
+  if (r.year) embed.addFields({ name: "📅 Ano de início", value: String(r.year), inline: true });
 
   if (r.ptBrUrl) {
     embed.addFields({

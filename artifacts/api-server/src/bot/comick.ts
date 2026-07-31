@@ -97,10 +97,29 @@ export async function getComickBySlug(slug: string): Promise<ComickResult | null
       signal: AbortSignal.timeout(8000),
     });
     if (!res.ok) return null;
-    const json = (await res.json()) as { comic?: ComickResult } | ComickResult;
-    // API pode retornar { comic: {...} } ou o objeto diretamente
+    const json = (await res.json()) as {
+      comic?: ComickResult;
+      genres?: ComickGenre[];
+      md_covers?: ComickCover[];
+    } | ComickResult;
+
+    // API retorna { comic: {...}, genres: [...], md_covers: [...] } no endpoint de detalhes
     const comic = (json as { comic?: ComickResult }).comic ?? (json as ComickResult);
     if (!comic?.hid) return null;
+
+    // genres e md_covers ficam na raiz da resposta de detalhes, não dentro de comic
+    const topGenres = (json as { genres?: ComickGenre[] }).genres;
+    const topCovers = (json as { md_covers?: ComickCover[] }).md_covers;
+
+    if (topGenres && topGenres.length > 0) {
+      comic.genres = topGenres;
+    }
+    if (topCovers && topCovers.length > 0) {
+      comic.md_covers = topCovers;
+    }
+    // Garante que genres nunca seja undefined
+    if (!comic.genres) comic.genres = [];
+
     return comic;
   } catch {
     return null;
