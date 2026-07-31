@@ -1,0 +1,416 @@
+import {
+  ChatInputCommandInteraction,
+  SlashCommandBuilder,
+  EmbedBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  ButtonInteraction,
+  ComponentType,
+  TextChannel,
+} from "discord.js";
+import { translateToPtBr, statusLabel } from "../anilist.js";
+import { buildScanLinksExternal } from "./search.js";
+
+const ANILIST_API = "https://graphql.anilist.co";
+
+// "genre" = campo genre_in da AniList | "tag" = campo tag_in da AniList
+interface GenreOption {
+  label: string;
+  value: string;
+  emoji: string;
+  kind: "genre" | "tag";
+}
+
+const GENRES: GenreOption[] = [
+  { label: "Ação",         value: "Action",        emoji: "⚔️",  kind: "genre" },
+  { label: "Aventura",     value: "Adventure",     emoji: "🗺️",  kind: "genre" },
+  { label: "Comédia",      value: "Comedy",        emoji: "😂",  kind: "genre" },
+  { label: "Drama",        value: "Drama",         emoji: "😢",  kind: "genre" },
+  { label: "Fantasia",     value: "Fantasy",       emoji: "🧙",  kind: "genre" },
+  { label: "Horror",       value: "Horror",        emoji: "😱",  kind: "genre" },
+  { label: "Mistério",     value: "Mystery",       emoji: "🔍",  kind: "genre" },
+  { label: "Psicológico",  value: "Psychological", emoji: "🧠",  kind: "genre" },
+  { label: "Romance",      value: "Romance",       emoji: "💕",  kind: "genre" },
+  { label: "Sci-Fi",       value: "Sci-Fi",        emoji: "🚀",  kind: "genre" },
+  { label: "Slice of Life",value: "Slice of Life", emoji: "☕",  kind: "genre" },
+  { label: "Mecha",        value: "Mecha",         emoji: "🤖",  kind: "genre" },
+  { label: "Mahou Shoujo", value: "Mahou Shoujo",  emoji: "🌟",  kind: "genre" },
+  { label: "Ecchi",        value: "Ecchi",         emoji: "💋",  kind: "genre" },
+  // Tags (tag_in)
+  { label: "Super Poder",  value: "Super Power",   emoji: "🦸",  kind: "tag"   },
+  { label: "Gore",         value: "Gore",          emoji: "🩸",  kind: "tag"   },
+  { label: "Reencarnação", value: "Reincarnation", emoji: "⏰",  kind: "tag"   },
+  { label: "Game",         value: "Video Games",   emoji: "🎮",  kind: "tag"   },
+  { label: "Zumbi",        value: "Zombie",        emoji: "🧟",  kind: "tag"   },
+  { label: "Survival",     value: "Survival",      emoji: "🗡️",  kind: "tag"   },
+  { label: "Escola",       value: "School",        emoji: "🏫",  kind: "tag"   },
+];
+
+const ID_ADULT  = "rec_adult18";
+const ID_CLEAR  = "rec_clear";
+const ID_SEARCH = "rec_search";
+
+const RECOMMEND_QUERY = `
+query RecommendManhwa($genres: [String], $tags: [String], $page: Int) {
+  Page(page: $page, perPage: 6) {
+    media(
+      type: MANGA
+      countryOfOrigin: KR
+      genre_in: $genres
+      tag_in: $tags
+      sort: SCORE_DESC
+      averageScore_greater: 70
+    ) {
+      id
+      title { romaji english native }
+      description(asHtml: false)
+      coverImage { large color }
+      averageScore
+      genres
+      chapters
+      status
+      siteUrl
+    }
+  }
+}
+`;
+
+const RECOMMEND_ADULT_QUERY = `
+query RecommendAdult($genres: [String], $tags: [String], $page: Int) {
+  Page(page: $page, perPage: 6) {
+    media(
+      type: MANGA
+      genre_in: $genres
+      tag_in: $tags
+      sort: SCORE_DESC
+      averageScore_greater: 60
+    ) {
+      id
+      title { romaji english native }
+      description(asHtml: false)
+      coverImage { large color }
+      averageScore
+      genres
+      chapters
+      status
+      siteUrl
+    }
+  }
+}
+`;
+
+interface AniListMedia {
+  id: number;
+  title: { romaji: string; english: string | null; native: string | null };
+  description: string | null;
+  coverImage: { large: string; color: string | null };
+  averageScore: number | null;
+  genres: string[];
+  chapters: number | null;
+  status: string | null;
+  siteUrl: string;
+}
+
+function cleanDesc(raw: string | null): string {
+  if (!raw) return "";
+  return raw
+    .replace(/<br\s*\/?>/gi, " ")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#039;/g, "'")
+    .trim();
+}
+
+async function fetchRecommendations(
+  selected: Set<string>,
+  isAdult: boolean
+): Promise<AniListMedia[]> {
+  // Separar gêneros de tags
+  const genreValues = [...selected].filter(
+    (v) => GENRES.find((g) => g.value === v)?.kind === "genre"
+  );
+  const tagValues = [...selected].filter(
+    (v) => GENRES.find((g) => g.value === v)?.kind === "tag"
+  );
+
+  let genres: string[] | null = genreValues.length > 0 ? genreValues : null;
+  let tags: string[] | null = tagValues.length > 0 ? tagValues : null;
+  let query: string;
+
+  if (isAdult) {
+    // Força Ecchi no genre para trazer conteúdo maduro
+    const adultGenres = new Set(genreValues);
+    adultGenres.add("Ecchi");
+    genres = [...adultGenres];
+    query = RECOMMEND_ADULT_QUERY;
+  } else {
+    query = RECOMMEND_QUERY;
+  }
+
+  const res = await fetch(ANILIST_API, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({
+      query,
+      variables: { genres, tags, page: 1 },
+    }),
+    signal: AbortSignal.timeout(10000),
+  });
+
+  if (!res.ok) throw new Error(`AniList HTTP ${res.status}`);
+
+  const json = (await res.json()) as {
+    data: { Page: { media: AniListMedia[] } };
+    errors?: { message: string }[];
+  };
+
+  if (json.errors?.length) throw new Error(json.errors[0].message);
+  return json.data.Page.media ?? [];
+}
+
+async function buildEmbed(
+  results: AniListMedia[],
+  selected: Set<string>,
+  isAdult: boolean
+): Promise<EmbedBuilder> {
+  const genreLabels =
+    [...selected]
+      .map((v) => {
+        const g = GENRES.find((x) => x.value === v);
+        return g ? `${g.emoji} ${g.label}` : v;
+      })
+      .join(", ") || "Todos os gêneros";
+
+  const lines = await Promise.all(
+    results.map(async (m) => {
+      const title = m.title.english ?? m.title.romaji ?? "Sem título";
+      const score = m.averageScore ? `⭐ ${(m.averageScore / 10).toFixed(1)}` : "⭐ N/A";
+      const chapters = m.chapters ? `📖 ${m.chapters} caps` : "";
+      const status = statusLabel(m.status);
+      const rawDesc = cleanDesc(m.description);
+      const desc = rawDesc
+        ? await translateToPtBr(rawDesc.slice(0, 200)).catch(() => rawDesc.slice(0, 120))
+        : "Sem sinopse.";
+      const shortDesc = desc.slice(0, 120) + (desc.length > 120 ? "..." : "");
+      const scanLinks = buildScanLinksExternal(title);
+      return `**[${title}](${m.siteUrl})** — ${score}${chapters ? ` | ${chapters}` : ""} | ${status}\n> ${shortDesc}\n> 🔎 ${scanLinks}`;
+    })
+  );
+
+  return new EmbedBuilder()
+    .setTitle(isAdult ? "🔞 Recomendações +18 de Manhwa" : "📚 Recomendações de Manhwa")
+    .setDescription(`**Gêneros:** ${genreLabels}\n\n${lines.join("\n\n")}`.slice(0, 4000))
+    .setColor(isAdult ? 0xff4444 : 0x7b68ee)
+    .setFooter({ text: "Fonte: AniList • Sinopses traduzidas automaticamente" });
+}
+
+function buildRows(
+  selected: Set<string>,
+  isAdult: boolean
+): ActionRowBuilder<ButtonBuilder>[] {
+  const rows: ActionRowBuilder<ButtonBuilder>[] = [];
+
+  for (let i = 0; i < 20; i += 5) {
+    rows.push(
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        GENRES.slice(i, i + 5).map((g) =>
+          new ButtonBuilder()
+            .setCustomId(`rec_genre_${g.value}`)
+            .setLabel(g.label)
+            .setEmoji(g.emoji)
+            .setStyle(selected.has(g.value) ? ButtonStyle.Primary : ButtonStyle.Secondary)
+        )
+      )
+    );
+  }
+
+  const last = GENRES[20];
+  rows.push(
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`rec_genre_${last.value}`)
+        .setLabel(last.label)
+        .setEmoji(last.emoji)
+        .setStyle(selected.has(last.value) ? ButtonStyle.Primary : ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId(ID_ADULT)
+        .setLabel("+18")
+        .setEmoji("🔞")
+        .setStyle(isAdult ? ButtonStyle.Danger : ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId(ID_CLEAR)
+        .setLabel("Limpar")
+        .setEmoji("🧹")
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId(ID_SEARCH)
+        .setLabel("Buscar")
+        .setEmoji("🔍")
+        .setStyle(ButtonStyle.Success)
+    )
+  );
+
+  return rows;
+}
+
+function isNsfwChannel(btn: ButtonInteraction): boolean {
+  const ch = btn.channel;
+  return !!(ch && "nsfw" in ch && (ch as TextChannel).nsfw);
+}
+
+export const data = new SlashCommandBuilder()
+  .setName("recomendar")
+  .setDescription("Recomenda manhwas por gênero — clique nos gêneros e depois em Buscar");
+
+export async function execute(interaction: ChatInputCommandInteraction) {
+  const selected = new Set<string>();
+  let isAdult = false;
+
+  await interaction.reply({
+    content: "🎭 **Selecione os gêneros** clicando nos botões abaixo e depois clique em **Buscar**:",
+    components: buildRows(selected, isAdult),
+  });
+
+  const collector = interaction.channel?.createMessageComponentCollector({
+    componentType: ComponentType.Button,
+    filter: (i) =>
+      (i.customId.startsWith("rec_genre_") ||
+        i.customId === ID_ADULT ||
+        i.customId === ID_CLEAR ||
+        i.customId === ID_SEARCH) &&
+      i.user.id === interaction.user.id,
+    time: 120_000,
+  });
+
+  function isUnknownInteraction(err: unknown): boolean {
+    return (
+      typeof err === "object" &&
+      err !== null &&
+      "code" in err &&
+      (err as { code: unknown }).code === 10062
+    );
+  }
+
+  collector?.on("collect", async (btn: ButtonInteraction) => {
+    try {
+
+    // ── +18 ──────────────────────────────────────────────────────────────────
+    if (btn.customId === ID_ADULT) {
+      if (!isNsfwChannel(btn)) {
+        await btn.reply({
+          content: "🔞 O filtro **+18** só pode ser ativado em canais marcados como **NSFW**.",
+          ephemeral: true,
+        });
+        return;
+      }
+      const next = !isAdult;
+      await btn.update({ components: buildRows(selected, next) });
+      isAdult = next;
+      return;
+    }
+
+    // ── Limpar ────────────────────────────────────────────────────────────────
+    if (btn.customId === ID_CLEAR) {
+      const empty = new Set<string>();
+      await btn.update({
+        content: "🎭 **Selecione os gêneros** clicando nos botões abaixo e depois clique em **Buscar**:",
+        components: buildRows(empty, false),
+      });
+      selected.clear();
+      isAdult = false;
+      return;
+    }
+
+    // ── Buscar ────────────────────────────────────────────────────────────────
+    if (btn.customId === ID_SEARCH) {
+      try {
+        await btn.deferUpdate();
+      } catch (err) {
+        if (isUnknownInteraction(err)) {
+          console.warn("[recomendar] Buscar: interação expirou (10062)");
+          return;
+        }
+        throw err;
+      }
+
+      collector?.stop("searched");
+      await interaction.editReply({ content: "⏳ Buscando recomendações...", components: [] });
+
+      try {
+        const results = await fetchRecommendations(selected, isAdult);
+
+        if (!results.length) {
+          await interaction.editReply({
+            content: "❌ Nenhum manhwa encontrado para essa combinação. Tente outros gêneros!",
+          });
+          return;
+        }
+
+        const embed = await buildEmbed(results, selected, isAdult);
+        await interaction.editReply({ content: "", embeds: [embed] });
+      } catch (err) {
+        console.error("[recomendar] Erro ao buscar:", err);
+        await interaction.editReply({
+          content: "❌ Erro ao buscar recomendações. Tente novamente.",
+        });
+      }
+      return;
+    }
+
+    // ── Toggle de gênero ──────────────────────────────────────────────────────
+    if (btn.customId.startsWith("rec_genre_")) {
+      const genreValue = btn.customId.replace("rec_genre_", "");
+
+      if (selected.has(genreValue)) {
+        const next = new Set(selected);
+        next.delete(genreValue);
+        await btn.update({ components: buildRows(next, isAdult) });
+        selected.delete(genreValue);
+      } else {
+        if (selected.size >= 5) {
+          await btn.reply({
+            content: "⚠️ Você pode selecionar no máximo **5 gêneros** por vez.",
+            ephemeral: true,
+          });
+          return;
+        }
+        const next = new Set(selected);
+        next.add(genreValue);
+        await btn.update({ components: buildRows(next, isAdult) });
+        selected.add(genreValue);
+      }
+      return;
+    }
+
+    // Fallback — acusa ao Discord para não expirar silenciosamente
+    if (!btn.replied && !btn.deferred) {
+      await btn.deferUpdate().catch(() => null);
+    }
+
+    } catch (err) {
+      if (isUnknownInteraction(err)) {
+        console.warn("[recomendar] Interação expirou (10062) — ignorado");
+        return;
+      }
+      console.error("[recomendar] Erro inesperado no handler:", err);
+      try {
+        if (!btn.replied && !btn.deferred) {
+          await btn.reply({ content: "❌ Ocorreu um erro inesperado. Tente novamente.", ephemeral: true });
+        }
+      } catch { /* silencia dupla resposta */ }
+    }
+  });
+
+  collector?.on("end", async (_collected, reason) => {
+    if (reason === "time") {
+      await interaction.editReply({
+        content: "⏱️ Tempo esgotado. Use `/recomendar` novamente.",
+        components: [],
+      });
+    }
+  });
+}
