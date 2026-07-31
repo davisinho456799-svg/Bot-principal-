@@ -8,6 +8,8 @@ interface MUGenre {
   genre: string;
 }
 
+// Estrutura real retornada pela API do MangaUpdates
+// O campo de nota é `bayesian_rating` (float, escala 0-10), não `rating.rating`
 interface MUSeriesResult {
   series_id: number;
   title: string;
@@ -16,8 +18,12 @@ interface MUSeriesResult {
   image: MUImage | null;
   type: string | null;
   year: string | null;
-  rating: { rating: number | null } | null;
+  // Endpoint de detalhe usa bayesian_rating (número direto)
+  bayesian_rating: number | null;
+  // Endpoint de busca pode retornar rating aninhado — suportamos os dois
+  rating?: { rating: number | null } | null;
   genres: MUGenre[];
+  // status pode estar ausente no endpoint de detalhe
   status: string | null;
 }
 
@@ -41,6 +47,29 @@ function muStatusToAnilist(status: string | null): string | null {
   if (s.includes("hiatus")) return "HIATUS";
   if (s.includes("cancel")) return "CANCELLED";
   return null;
+}
+
+/** Extrai a nota numérica da resposta, suportando bayesian_rating e rating.rating */
+function extractScore(r: MUSeriesResult): number | null {
+  const raw = r.bayesian_rating ?? r.rating?.rating ?? null;
+  if (!raw) return null;
+  // bayesian_rating está em escala 0-10; converte para 0-100 (padrão interno)
+  return Math.round(raw * 10);
+}
+
+/** Remove tags HTML e normaliza espaços em descrições do MangaUpdates */
+function cleanMUDescription(desc: string | null): string | null {
+  if (!desc) return null;
+  return desc
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#039;/g, "'")
+    .replace(/\r\n/g, "\n")
+    .trim() || null;
 }
 
 export interface MangaUpdatesResult {
@@ -69,9 +98,9 @@ export async function getMangaUpdatesById(id: string): Promise<MangaUpdatesResul
       id: String(r.series_id),
       title: r.title,
       url: r.url,
-      description: r.description ?? null,
+      description: cleanMUDescription(r.description),
       coverUrl: r.image?.url?.original ?? null,
-      score: r.rating?.rating ? Math.round(r.rating.rating * 10) : null,
+      score: extractScore(r),
       genres: (r.genres ?? []).map((g) => g.genre),
       status: muStatusToAnilist(r.status),
       year: r.year ? parseInt(r.year, 10) : null,
@@ -103,9 +132,9 @@ export async function searchMangaUpdates(
     id: String(r.series_id),
     title: r.title,
     url: r.url,
-    description: r.description ?? null,
+    description: cleanMUDescription(r.description),
     coverUrl: r.image?.url?.original ?? null,
-    score: r.rating?.rating ? Math.round(r.rating.rating * 10) : null,
+    score: extractScore(r),
     genres: (r.genres ?? []).map((g) => g.genre),
     status: muStatusToAnilist(r.status),
     year: r.year ? parseInt(r.year, 10) : null,
