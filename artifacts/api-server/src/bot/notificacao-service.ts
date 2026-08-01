@@ -197,17 +197,17 @@ async function fetchChapters(manhwaId: string, source: string): Promise<FetchRes
 
   if (source === 'mangaupdates') {
     try {
-      const res = await fetch(`https://api.mangaupdates.com/v1/series/${manhwaId}/releases?search=&search_type=series&page=1&perpage=1&asc=false`, {
-        headers: { Accept: 'application/json' },
+      // MangaUpdates no longer exposes this as JSON at /releases. The old
+      // endpoint now returns 405; the supported per-series feed is RSS/XML.
+      const res = await fetch(`https://api.mangaupdates.com/v1/series/${manhwaId}/rss`, {
+        headers: { Accept: 'application/rss+xml, application/xml, text/xml' },
         signal: AbortSignal.timeout(8000),
       });
       if (!res.ok) return null;
-      const json = (await res.json()) as { results?: { record: { chapter?: string | null } }[] };
-      const chap = json.results?.[0]?.record?.chapter;
-      if (!chap) return null;
-      const num = parseFloat(chap.replace(/[^0-9.]/g, ''));
-      if (isNaN(num)) return null;
-      return { value: num, isProxy: false };
+      const xml = await res.text();
+      const chapter = parseMangaUpdatesRssChapter(xml);
+      if (chapter === null) return null;
+      return { value: chapter, isProxy: false };
     } catch {
       return null;
     }
@@ -260,6 +260,42 @@ async function fetchChapters(manhwaId: string, source: string): Promise<FetchRes
   }
 
   return null;
+}
+
+/**
+ * MangaUpdates' RSS titles use values such as "Title c.200", "c.4-10",
+ * and sometimes non-numeric labels like "c.Prologue". The feed is ordered
+ * newest-first, but we calculate the maximum so duplicate scanlation-group
+ * entries cannot make the tracked value move backwards.
+ */
+function parseMangaUpdatesRssChapter(xml: string): number | null {
+  const titles = [...xml.matchAll(/<title\b[^>]*>([\s\S]*?)<\/title>/gi)]
+    .map((match) => (match[1] ?? ""))
+    .map((title) =>
+      title
+        .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/gi, "$1")
+        .replace(/<[^>]+>/g, "")
+        .replace(/&amp;/gi, "&")
+        .replace(/&lt;/gi, "<")
+        .replace(/&gt;/gi, ">")
+        .replace(/&quot;/gi, '"')
+        .replace(/&#39;|&#039;/gi, "'")
+        .trim(),
+    );
+
+  const chapters: number[] = [];
+  for (const title of titles) {
+    const match = title.match(
+      /\b(?:chapter|ch|c)\.?\s*(\d+(?:\.\d+)?)(?:\s*[-–]\s*(\d+(?:\.\d+)?))?/i,
+    );
+    if (!match) continue;
+
+    const endChapter = match[2] ?? match[1];
+    const chapter = Number(endChapter);
+    if (Number.isFinite(chapter)) chapters.push(chapter);
+  }
+
+  return chapters.length > 0 ? Math.max(...chapters) : null;
 }
 
 async function getTrackedManhwas() {
