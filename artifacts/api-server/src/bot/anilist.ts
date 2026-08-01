@@ -1,5 +1,10 @@
 const ANILIST_API = "https://graphql.anilist.co";
 
+interface AniListRelationEdge {
+  relationType: string;
+  node: { title: { romaji: string | null; native: string | null } };
+}
+
 export interface ManhwaResult {
   id: number;
   title: {
@@ -23,23 +28,31 @@ export interface ManhwaResult {
     month: number | null;
     day: number | null;
   };
+  // Relações com outras obras — usadas para filtrar synonyms falsos
+  relations?: { edges: AniListRelationEdge[] };
 }
+
+// Fragmento reutilizado em todas as queries de manga — inclui relations para filtrar synonyms
+const MANGA_FIELDS = `
+  id
+  title { romaji english native }
+  synonyms
+  description(asHtml: false)
+  coverImage { large color }
+  averageScore
+  genres
+  chapters
+  status
+  siteUrl
+  startDate { year month day }
+  relations { edges { relationType node { title { romaji native } } } }
+`;
 
 const SEARCH_QUERY = `
 query SearchManhwa($search: String!, $page: Int) {
   Page(page: $page, perPage: 10) {
     media(search: $search, type: MANGA, countryOfOrigin: KR, isAdult: false, sort: SEARCH_MATCH) {
-      id
-      title { romaji english native }
-      synonyms
-      description(asHtml: false)
-      coverImage { large color }
-      averageScore
-      genres
-      chapters
-      status
-      siteUrl
-      startDate { year month day }
+      ${MANGA_FIELDS}
     }
   }
 }
@@ -49,17 +62,7 @@ const SEARCH_QUERY_ANY = `
 query SearchManga($search: String!, $page: Int) {
   Page(page: $page, perPage: 8) {
     media(search: $search, type: MANGA, isAdult: false, sort: SEARCH_MATCH) {
-      id
-      title { romaji english native }
-      synonyms
-      description(asHtml: false)
-      coverImage { large color }
-      averageScore
-      genres
-      chapters
-      status
-      siteUrl
-      startDate { year month day }
+      ${MANGA_FIELDS}
     }
   }
 }
@@ -68,17 +71,7 @@ query SearchManga($search: String!, $page: Int) {
 const ID_QUERY = `
 query GetManhwa($id: Int!) {
   Media(id: $id, type: MANGA) {
-    id
-    title { romaji english native }
-    synonyms
-    description(asHtml: false)
-    coverImage { large color }
-    averageScore
-    genres
-    chapters
-    status
-    siteUrl
-    startDate { year month day }
+    ${MANGA_FIELDS}
   }
 }
 `;
@@ -87,17 +80,7 @@ const SEARCH_BY_GENRE_TAG_QUERY = `
 query SearchByFilters($genres: [String], $tags: [String], $page: Int) {
   Page(page: $page, perPage: 15) {
     media(type: MANGA, countryOfOrigin: KR, isAdult: false, genre_in: $genres, tag_in: $tags, sort: POPULARITY_DESC) {
-      id
-      title { romaji english native }
-      synonyms
-      description(asHtml: false)
-      coverImage { large color }
-      averageScore
-      genres
-      chapters
-      status
-      siteUrl
-      startDate { year month day }
+      ${MANGA_FIELDS}
     }
   }
 }
@@ -107,17 +90,7 @@ const SEARCH_BY_KEYWORD_ANY_QUERY = `
 query SearchKeywordAny($search: String!, $page: Int) {
   Page(page: $page, perPage: 10) {
     media(search: $search, type: MANGA, isAdult: false, sort: SEARCH_MATCH) {
-      id
-      title { romaji english native }
-      synonyms
-      description(asHtml: false)
-      coverImage { large color }
-      averageScore
-      genres
-      chapters
-      status
-      siteUrl
-      startDate { year month day }
+      ${MANGA_FIELDS}
     }
   }
 }
@@ -135,12 +108,53 @@ async function anilistRequest<T>(query: string, variables: Record<string, unknow
   return json.data;
 }
 
+// ─── Filtros de qualidade de dados ───────────────────────────────────────────
+
+/**
+ * Detecta se uma descrição do AniList é na verdade um índice de capítulos/histórias
+ * em vez de uma sinopse real. Ocorre em antologias onde o AniList preenche o campo
+ * description com uma lista numerada das obras contidas.
+ * Exemplo: "1-2. Kokonoe Senpai!...; Comic ExE 50\n3. Little Bad Bunny..."
+ */
+function isChapterIndex(raw: string | null): boolean {
+  if (!raw) return false;
+  // Remove HTML e verifica se começa com padrão "1.", "1-", "1-2." etc.
+  const text = raw.replace(/<[^>]+>/g, "").trim();
+  return /^\d+[\-\.]/.test(text);
+}
+
+/**
+ * Filtra synonyms que são na verdade títulos de obras relacionadas (relationType OTHER).
+ * O AniList frequentemente coloca os títulos dos capítulos/histórias de antologias
+ * tanto em synonyms quanto em relations, tornando os "títulos alternativos" incorretos.
+ */
+function filterSynonyms(synonyms: string[], relations?: ManhwaResult["relations"]): string[] {
+  if (!synonyms.length || !relations?.edges?.length) return synonyms;
+  const relationTitles = new Set<string>();
+  for (const edge of relations.edges) {
+    const romaji = edge.node?.title?.romaji;
+    const native = edge.node?.title?.native;
+    if (romaji) relationTitles.add(romaji.toLowerCase().trim());
+    if (native) relationTitles.add(native.toLowerCase().trim());
+  }
+  return synonyms.filter((s) => !relationTitles.has(s.toLowerCase().trim()));
+}
+
+/** Aplica todos os filtros de qualidade em um resultado do AniList */
+function sanitizeManhwaResult(m: ManhwaResult): ManhwaResult {
+  return {
+    ...m,
+    synonyms: filterSynonyms(m.synonyms, m.relations),
+    description: isChapterIndex(m.description) ? null : m.description,
+  };
+}
+
 export async function searchManhwa(search: string): Promise<ManhwaResult[]> {
   const data = await anilistRequest<{ Page: { media: ManhwaResult[] } }>(SEARCH_QUERY, {
     search,
     page: 1,
   });
-  return data.Page.media ?? [];
+  return (data.Page.media ?? []).map(sanitizeManhwaResult);
 }
 
 export async function searchManhwaAny(search: string): Promise<ManhwaResult[]> {
@@ -149,7 +163,7 @@ export async function searchManhwaAny(search: string): Promise<ManhwaResult[]> {
       search,
       page: 1,
     });
-    return data.Page.media ?? [];
+    return (data.Page.media ?? []).map(sanitizeManhwaResult);
   } catch {
     return [];
   }
@@ -158,7 +172,7 @@ export async function searchManhwaAny(search: string): Promise<ManhwaResult[]> {
 export async function getManhwaById(id: number): Promise<ManhwaResult | null> {
   try {
     const data = await anilistRequest<{ Media: ManhwaResult }>(ID_QUERY, { id });
-    return data.Media ?? null;
+    return data.Media ? sanitizeManhwaResult(data.Media) : null;
   } catch {
     return null;
   }
@@ -183,7 +197,7 @@ export async function searchManhwaByFilters(
       SEARCH_BY_GENRE_TAG_QUERY,
       variables
     );
-    return data.Page.media ?? [];
+    return (data.Page.media ?? []).map(sanitizeManhwaResult);
   } catch {
     return [];
   }
@@ -199,7 +213,7 @@ export async function searchManhwaKeywordAny(search: string): Promise<ManhwaResu
       SEARCH_BY_KEYWORD_ANY_QUERY,
       { search, page: 1 }
     );
-    return data.Page.media ?? [];
+    return (data.Page.media ?? []).map(sanitizeManhwaResult);
   } catch {
     return [];
   }
