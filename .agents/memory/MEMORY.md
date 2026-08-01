@@ -1,0 +1,1 @@
+- [MangaUpdates releases](mangaupdates-api.md) — per-series releases use the RSS/XML route; the legacy JSON releases route returns 405.
