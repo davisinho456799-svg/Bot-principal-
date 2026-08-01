@@ -85,7 +85,10 @@ const commands = new Map<string, Command>([
 ]);
 
 export async function startBot() {
-  const token = process.env["DISCORD_BOT_TOKEN"] ?? process.env["Discord_key"];
+  const token =
+    process.env["DISCORD_BOT_TOKEN"] ??
+    process.env["Discord_bot_key"] ??
+    process.env["Discord_key"];
   if (!token) {
     logger.error("Token do Discord não configurado. Bot não iniciado.");
     return;
