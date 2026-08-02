@@ -12,7 +12,7 @@ async function startApplication() {
   } catch (err) {
     logger.error(
       { err },
-      "Não foi possível conectar ao PostgreSQL. Configure DATABASE_URL no Render.",
+      "Não foi possível conectar ao PostgreSQL. Configure NEON_DATABASE_URL no Render.",
     );
     process.exitCode = 1;
     return;
