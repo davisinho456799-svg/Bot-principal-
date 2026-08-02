@@ -1,1 +1,2 @@
 - [MangaUpdates releases](mangaupdates-api.md) — per-series releases use the RSS/XML route; the legacy JSON releases route returns 405.
+- [Discord Render worker](render-discord-worker.md) — Discord workers need DATABASE_URL and must not require PORT; use a long-running worker service.
