@@ -458,30 +458,44 @@ export async function execute(interaction: ChatInputCommandInteraction) {
       time: 15 * 60 * 1000,
     });
 
+    let isUpdating = false;
+
     collector.on("collect", async (btn) => {
+      if (isUpdating) {
+        await btn.reply({
+          content: "⏳ Aguarde a atualização do calendário terminar.",
+          ephemeral: true,
+        }).catch(() => {});
+        return;
+      }
+
+      const id = btn.customId;
+      let nextTab = currentTab;
+      let nextPage = pages[currentTab];
+
+      if (id === "cal18_prev") {
+        nextPage = Math.max(0, nextPage - 1);
+      } else if (id === "cal18_next") {
+        const maxPage = Math.ceil(tabData[currentTab].length / PAGE_SIZE) - 1;
+        nextPage = Math.min(maxPage, nextPage + 1);
+      } else if (id.startsWith("cal18_") && !["cal18_prev", "cal18_next", "cal18_page_indicator"].includes(id)) {
+        nextTab = id.replace("cal18_", "") as Tab;
+        nextPage = nextTab === currentTab ? pages[currentTab] : 0;
+      } else {
+        return; // indicador de página — sem ação
+      }
+
+      isUpdating = true;
       try {
-        const id = btn.customId;
-
-        if (id === "cal18_prev") {
-          pages[currentTab] = Math.max(0, pages[currentTab] - 1);
-        } else if (id === "cal18_next") {
-          const maxPage = Math.ceil(tabData[currentTab].length / PAGE_SIZE) - 1;
-          pages[currentTab] = Math.min(maxPage, pages[currentTab] + 1);
-        } else if (id.startsWith("cal18_") && !["cal18_prev", "cal18_next", "cal18_page_indicator"].includes(id)) {
-          const next = id.replace("cal18_", "") as Tab;
-          if (next !== currentTab) {
-            currentTab = next;
-            pages[currentTab] = 0; // reset ao trocar de aba
-          }
-        } else {
-          return; // indicador de página — sem ação
-        }
-
         // Atualiza e confirma o clique em uma única resposta ao Discord.
         await btn.update({
-          embeds: [buildEmbed(currentTab, pages[currentTab])],
-          components: buildComponents(currentTab, pages[currentTab]),
+          embeds: [buildEmbed(nextTab, nextPage)],
+          components: buildComponents(nextTab, nextPage),
         });
+
+        // Só salva o novo estado depois que o Discord confirmou a atualização.
+        currentTab = nextTab;
+        pages[nextTab] = nextPage;
       } catch (err) {
         logger.error({ err, customId: btn.customId }, "Erro ao processar botão do calendario18");
         if (!btn.replied && !btn.deferred) {
@@ -490,6 +504,8 @@ export async function execute(interaction: ChatInputCommandInteraction) {
             ephemeral: true,
           }).catch(() => {});
         }
+      } finally {
+        isUpdating = false;
       }
     });
 
