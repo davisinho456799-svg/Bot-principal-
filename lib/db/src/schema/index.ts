@@ -45,14 +45,14 @@ export type NotificacaoCanal = typeof notificacaoCanaisTable.$inferSelect;
 
 export const capitulosRastreados = pgTable("capitulos_rastreados", {
   id: serial("id").primaryKey(),
-  manhwaId: text("manhwa_id").notNull().unique(),
+  manhwaId: text("manhwa_id").notNull(),
   source: text("source").notNull(),
   title: text("title").notNull(),
   coverUrl: text("cover_url"),
   siteUrl: text("site_url").notNull(),
   lastChapters: real("last_chapters"),
   lastChecked: timestamp("last_checked").notNull().defaultNow(),
-});
+}, (t) => [unique("capitulos_rastreados_manhwa_id_key").on(t.manhwaId)]);
 
 export type CapituloRastreado = typeof capitulosRastreados.$inferSelect;
 
@@ -178,7 +178,13 @@ export const assinaturasTable = pgTable(
     adult: boolean("adult").notNull().default(false),
     addedAt: timestamp("added_at").notNull().defaultNow(),
   },
-  (t) => [unique().on(t.discordUserId, t.manhwaId, t.guildId)]
+  (t) => [
+    unique("assinaturas_discord_user_id_manhwa_id_guild_id_key").on(
+      t.discordUserId,
+      t.manhwaId,
+      t.guildId,
+    ),
+  ]
 );
 
 export type Assinatura = typeof assinaturasTable.$inferSelect;
