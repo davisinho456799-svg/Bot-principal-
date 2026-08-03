@@ -56,6 +56,23 @@ export const capitulosRastreados = pgTable("capitulos_rastreados", {
 
 export type CapituloRastreado = typeof capitulosRastreados.$inferSelect;
 
+// ─── Tabela: mal_historico_alteracoes ─────────────────────────────────────────
+// Histórico limitado das alterações observadas na API do MyAnimeList/Jikan.
+
+export const malHistoricoAlteracoesTable = pgTable("mal_historico_alteracoes", {
+  id: serial("id").primaryKey(),
+  malId: text("mal_id").notNull(),
+  title: text("title").notNull(),
+  synopsis: text("synopsis"),
+  score: real("score"),
+  status: text("status"),
+  chapters: real("chapters"),
+  changedFields: json("changed_fields").$type<string[]>().notNull().default([]),
+  observedAt: timestamp("observed_at").notNull().defaultNow(),
+});
+
+export type MalHistoricoAlteracao = typeof malHistoricoAlteracoesTable.$inferSelect;
+
 // ─── Tabela: lista_leitura ────────────────────────────────────────────────────
 
 export const listaLeituraTable = pgTable("lista_leitura", {

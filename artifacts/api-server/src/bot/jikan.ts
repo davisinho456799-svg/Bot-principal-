@@ -35,6 +35,7 @@ interface JikanManga {
   url: string;
   published: { prop: { from: { year: number | null } } };
   chapters: number | null;
+  synopsis: string | null;
 }
 
 interface JikanSearchResponse {
@@ -56,6 +57,9 @@ export interface JikanResult {
   year: number | null;
   chapters: number | null;
   type: string | null;
+  synopsis: string | null;
+  /** Status original retornado pelo MAL, antes da normalização interna. */
+  rawStatus: string | null;
 }
 
 function mapJikanStatus(status: string | null): string | null {
@@ -118,6 +122,8 @@ function toJikanResult(manga: JikanManga): JikanResult {
     year: manga.published?.prop?.from?.year ?? null,
     chapters: manga.chapters ?? null,
     type: manga.type ?? null,
+    synopsis: manga.synopsis ?? null,
+    rawStatus: manga.status ?? null,
   };
 }
 

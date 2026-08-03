@@ -1,9 +1,17 @@
 import { type Client, EmbedBuilder, TextChannel } from "discord.js";
-import { db, notificacaoCanaisTable, capitulosRastreados, favoritosTable, assinaturasTable } from "@workspace/db";
-import { eq, sql, and } from "drizzle-orm";
+import {
+  db,
+  notificacaoCanaisTable,
+  capitulosRastreados,
+  favoritosTable,
+  assinaturasTable,
+  malHistoricoAlteracoesTable,
+} from "@workspace/db";
+import { eq, sql, and, desc, inArray } from "drizzle-orm";
 import { logger } from "../lib/logger.js";
 import { getErogamescapeLastUpdated } from "./erogamescape.js";
 import { buildScanLinksExternal } from "./commands/search.js";
+import { getJikanMangaById } from "./jikan.js";
 
 const ANILIST_API = "https://graphql.anilist.co";
 const CHECK_INTERVAL_MS = 2 * 60 * 60 * 1000; // 2 horas
@@ -78,6 +86,88 @@ interface FetchResult {
   value: number;
   /** true = valor é timestamp/proxy, não um número de capítulos real */
   isProxy: boolean;
+}
+
+interface MalSnapshot {
+  chapters: number | null;
+  synopsis: string | null;
+  score: number | null;
+  status: string | null;
+}
+
+// Mantém o snapshot inicial + até 10 registros posteriores de alteração.
+const MAL_HISTORY_LIMIT = 10;
+
+function normalizeSynopsis(value: string | null): string | null {
+  return value?.replace(/\s+/g, " ").trim() || null;
+}
+
+function sameNullableNumber(a: number | null, b: number | null): boolean {
+  return a === b || (a == null && b == null);
+}
+
+function sameNullableText(a: string | null, b: string | null): boolean {
+  return a === b;
+}
+
+async function recordMalSnapshot(malId: string, title: string, snapshot: MalSnapshot) {
+  const [previous] = await db
+    .select()
+    .from(malHistoricoAlteracoesTable)
+    .where(eq(malHistoricoAlteracoesTable.malId, malId))
+    .orderBy(desc(malHistoricoAlteracoesTable.observedAt), desc(malHistoricoAlteracoesTable.id))
+    .limit(1);
+
+  if (!previous) {
+    await db.insert(malHistoricoAlteracoesTable).values({
+      malId,
+      title,
+      synopsis: snapshot.synopsis,
+      score: snapshot.score,
+      status: snapshot.status,
+      chapters: snapshot.chapters,
+      changedFields: ["initial"],
+    });
+    return { previous: null, changedFields: [] as string[] };
+  }
+
+  const changedFields: string[] = [];
+  if (normalizeSynopsis(previous.synopsis) !== normalizeSynopsis(snapshot.synopsis)) changedFields.push("synopsis");
+  if (!sameNullableNumber(previous.score, snapshot.score)) changedFields.push("score");
+  if (!sameNullableText(previous.status, snapshot.status)) changedFields.push("status");
+  if (!sameNullableNumber(previous.chapters, snapshot.chapters)) changedFields.push("chapters");
+
+  if (!changedFields.length) return { previous, changedFields };
+
+  await db.insert(malHistoricoAlteracoesTable).values({
+    malId,
+    title,
+    synopsis: snapshot.synopsis,
+    score: snapshot.score,
+    status: snapshot.status,
+    chapters: snapshot.chapters,
+    changedFields,
+  });
+
+  const historyRows = await db
+    .select({
+      id: malHistoricoAlteracoesTable.id,
+      changedFields: malHistoricoAlteracoesTable.changedFields,
+    })
+    .from(malHistoricoAlteracoesTable)
+    .where(eq(malHistoricoAlteracoesTable.malId, malId))
+    .orderBy(desc(malHistoricoAlteracoesTable.observedAt), desc(malHistoricoAlteracoesTable.id));
+  const oldRows = historyRows
+    .filter((row) => !row.changedFields.includes("initial"))
+    .slice(MAL_HISTORY_LIMIT);
+
+  if (oldRows.length) {
+    await db.delete(malHistoricoAlteracoesTable).where(
+      inArray(malHistoricoAlteracoesTable.id, oldRows.map((row) => row.id)),
+    );
+  }
+
+  return { previous, changedFields };
 }
 
 async function fetchChapters(manhwaId: string, source: string): Promise<FetchResult | null> {
@@ -396,13 +486,103 @@ export async function runCheck(client: Client) {
   logger.info("Verificando atualizações de capítulos...");
 
   const canais = await db.select().from(notificacaoCanaisTable);
-  if (!canais.length) return;
-
   const manhwas = await getTrackedManhwas();
   if (!manhwas.length) return;
 
   for (const m of manhwas) {
     try {
+      if (m.source === "jikan") {
+        const mal = await getJikanMangaById(Number(m.manhwaId));
+        if (!mal) {
+          logger.debug({ title: m.title, manhwaId: m.manhwaId }, "MAL/Jikan retornou null — pulando título");
+          continue;
+        }
+
+        const snapshot: MalSnapshot = {
+          chapters: mal.chapters,
+          synopsis: mal.synopsis,
+          score: mal.score,
+          status: mal.rawStatus ?? mal.status,
+        };
+        const [tracked] = await db
+          .select({
+            id: capitulosRastreados.id,
+            lastChapters: capitulosRastreados.lastChapters,
+          })
+          .from(capitulosRastreados)
+          .where(eq(capitulosRastreados.manhwaId, m.manhwaId));
+        const { previous, changedFields } = await recordMalSnapshot(m.manhwaId, m.title, snapshot);
+
+        if (!tracked) {
+          await db.insert(capitulosRastreados).values({
+            manhwaId: m.manhwaId,
+            source: m.source,
+            title: m.title,
+            coverUrl: m.coverUrl,
+            siteUrl: m.siteUrl,
+            lastChapters: snapshot.chapters,
+          });
+        } else {
+          const update: {
+            lastChecked: ReturnType<typeof sql>;
+            lastChapters?: number;
+          } = { lastChecked: sql`now()` };
+          if (snapshot.chapters != null && Number.isFinite(snapshot.chapters)) {
+            update.lastChapters = snapshot.chapters;
+          }
+          await db
+            .update(capitulosRastreados)
+            .set(update)
+            .where(eq(capitulosRastreados.manhwaId, m.manhwaId));
+        }
+
+        // Após a implantação do histórico, use o rastreador existente como
+        // baseline até que a primeira linha histórica esteja disponível.
+        const previousChapters = previous?.chapters ?? tracked?.lastChapters ?? null;
+        const chapterIncreased =
+          previousChapters != null &&
+          snapshot.chapters != null &&
+          snapshot.chapters > previousChapters;
+
+        if (chapterIncreased && snapshot.chapters != null && previousChapters != null) {
+          logger.info(
+            { title: m.title, previousChapters, newChapters: snapshot.chapters, changedFields },
+            "Novo capítulo do MAL detectado",
+          );
+          for (const canal of canais) {
+            const subscribers = await db
+              .select({ discordUserId: assinaturasTable.discordUserId })
+              .from(assinaturasTable)
+              .where(
+                and(
+                  eq(assinaturasTable.manhwaId, m.manhwaId),
+                  eq(assinaturasTable.guildId, canal.guildId),
+                ),
+              );
+            const mentions = subscribers.map((s) => `<@${s.discordUserId}>`);
+            await sendNotification(
+              client,
+              canal.channelId,
+              m.title,
+              snapshot.chapters,
+              previousChapters,
+              m.siteUrl,
+              m.coverUrl ?? null,
+              mentions,
+              m.source,
+            );
+          }
+        } else if (changedFields.length) {
+          logger.info(
+            { title: m.title, changedFields },
+            "Alteração de metadados do MAL registrada sem notificação",
+          );
+        }
+
+        await new Promise((r) => setTimeout(r, 500));
+        continue;
+      }
+
       const fetched = await fetchChapters(m.manhwaId, m.source);
       if (fetched === null) {
         logger.debug({ title: m.title, source: m.source, manhwaId: m.manhwaId }, "API retornou null — pulando título");
