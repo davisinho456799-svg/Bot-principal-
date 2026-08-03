@@ -16,6 +16,7 @@ import {
 import { db, assinaturasTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { getUnifiedById } from "../unified.js";
+import { logger } from "../../lib/logger.js";
 
 const ANILIST_API = "https://graphql.anilist.co";
 const PAGE_SIZE   = 20;
@@ -387,28 +388,38 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     });
 
     collector.on("collect", async (btn) => {
-      await btn.deferUpdate();
-      const id = btn.customId;
+      try {
+        const id = btn.customId;
 
-      if (id === "cal_prev") {
-        pages[currentTab] = Math.max(0, pages[currentTab] - 1);
-      } else if (id === "cal_next") {
-        const maxPage = Math.ceil(data[currentTab].length / PAGE_SIZE) - 1;
-        pages[currentTab] = Math.min(maxPage, pages[currentTab] + 1);
-      } else if (id.startsWith("cal_") && !id.includes("_prev") && !id.includes("_next") && !id.includes("_page")) {
-        const next = id.replace("cal_", "") as Tab;
-        if (next !== currentTab) {
-          currentTab = next;
-          pages[currentTab] = 0; // reset ao trocar de aba
+        if (id === "cal_prev") {
+          pages[currentTab] = Math.max(0, pages[currentTab] - 1);
+        } else if (id === "cal_next") {
+          const maxPage = Math.ceil(data[currentTab].length / PAGE_SIZE) - 1;
+          pages[currentTab] = Math.min(maxPage, pages[currentTab] + 1);
+        } else if (id.startsWith("cal_") && !id.includes("_prev") && !id.includes("_next") && !id.includes("_page")) {
+          const next = id.replace("cal_", "") as Tab;
+          if (next !== currentTab) {
+            currentTab = next;
+            pages[currentTab] = 0; // reset ao trocar de aba
+          }
+        } else {
+          return; // indicador de página — sem ação
         }
-      } else {
-        return; // indicador de página — sem ação
-      }
 
-      await btn.editReply({
-        embeds: [buildEmbed(currentTab, pages[currentTab])],
-        components: buildComponents(currentTab, pages[currentTab]),
-      });
+        // Atualiza e confirma o clique em uma única resposta ao Discord.
+        await btn.update({
+          embeds: [buildEmbed(currentTab, pages[currentTab])],
+          components: buildComponents(currentTab, pages[currentTab]),
+        });
+      } catch (err) {
+        logger.error({ err, customId: btn.customId }, "Erro ao processar botão do calendario");
+        if (!btn.replied && !btn.deferred) {
+          await btn.reply({
+            content: "❌ Não foi possível trocar a página. Tente executar `/calendario` novamente.",
+            ephemeral: true,
+          }).catch(() => {});
+        }
+      }
     });
 
     collector.on("end", () => {
