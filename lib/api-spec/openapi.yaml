@@ -10,6 +10,8 @@ servers:
 tags:
   - name: health
     description: Health operations
+  - name: subscriptions
+    description: MAL subscription management
 paths:
   /healthz:
     get:
@@ -24,6 +26,117 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  /subscriptions:
+    get:
+      operationId: listSubscriptions
+      tags: [subscriptions]
+      summary: List all subscriptions
+      description: Returns all active MAL subscriptions, optionally filtered by guild
+      parameters:
+        - in: query
+          name: guild_id
+          schema:
+            type: string
+          description: Filter by Discord guild ID
+      responses:
+        "200":
+          description: List of subscriptions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Subscription"
+    post:
+      operationId: createSubscription
+      tags: [subscriptions]
+      summary: Subscribe to a MAL item
+      description: Subscribes a Discord user to receive notifications for a MAL manga/anime
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SubscriptionInput"
+      responses:
+        "201":
+          description: Subscription created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Subscription"
+        "400":
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Already subscribed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /subscriptions/{id}:
+    delete:
+      operationId: deleteSubscription
+      tags: [subscriptions]
+      summary: Remove a subscription
+      description: Removes a subscription by ID
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: number
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /subscriptions/{id}/check:
+    post:
+      operationId: checkSubscription
+      tags: [subscriptions]
+      summary: Check for updates on a subscription
+      description: >
+        Fetches the latest data from MAL for this subscription, stores a snapshot
+        (synopsis, score, status, chapters), and returns whether chapters changed.
+        Keeps only the 2 most recent snapshots — oldest is deleted automatically.
+        Only returns changed=true when the chapter count increases.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: number
+      responses:
+        "200":
+          description: Check result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CheckResult"
+        "404":
+          description: Subscription not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "502":
+          description: MAL API error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
 components:
   schemas:
     HealthStatus:
@@ -34,3 +147,113 @@ components:
       required:
         - status
 
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+
+    Subscription:
+      type: object
+      required:
+        - id
+        - discord_user_id
+        - discord_channel_id
+        - discord_guild_id
+        - mal_item_id
+        - mal_item_type
+        - item_name
+        - created_at
+      properties:
+        id:
+          type: number
+        discord_user_id:
+          type: string
+        discord_channel_id:
+          type: string
+        discord_guild_id:
+          type: string
+        mal_item_id:
+          type: number
+        mal_item_type:
+          type: string
+          enum: [manga, anime]
+        item_name:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    SubscriptionInput:
+      type: object
+      required:
+        - discord_user_id
+        - discord_channel_id
+        - discord_guild_id
+        - mal_item_id
+        - mal_item_type
+        - item_name
+      properties:
+        discord_user_id:
+          type: string
+        discord_channel_id:
+          type: string
+        discord_guild_id:
+          type: string
+        mal_item_id:
+          type: number
+        mal_item_type:
+          type: string
+          enum: [manga, anime]
+        item_name:
+          type: string
+
+    CheckResult:
+      type: object
+      required:
+        - changed
+        - subscription_id
+        - item_name
+        - mal_item_id
+        - mal_item_type
+        - current
+      properties:
+        changed:
+          type: boolean
+          description: True only when chapter/episode count increased
+        subscription_id:
+          type: number
+        item_name:
+          type: string
+        mal_item_id:
+          type: number
+        mal_item_type:
+          type: string
+        current:
+          $ref: "#/components/schemas/SnapshotData"
+        previous:
+          oneOf:
+            - $ref: "#/components/schemas/SnapshotData"
+            - type: "null"
+
+    SnapshotData:
+      type: object
+      required:
+        - synopsis
+        - score
+        - status
+        - chapters
+        - checked_at
+      properties:
+        synopsis:
+          type: ["string", "null"]
+        score:
+          type: ["number", "null"]
+        status:
+          type: ["string", "null"]
+        chapters:
+          type: ["number", "null"]
+        checked_at:
+          type: string
+          format: date-time
