@@ -12,6 +12,7 @@ import { logger } from "../lib/logger.js";
 import { getErogamescapeLastUpdated } from "./erogamescape.js";
 import { buildScanLinksExternal } from "./commands/search.js";
 import { getJikanMangaById } from "./jikan.js";
+import { recordBotError } from "./error-log.js";
 
 const ANILIST_API = "https://graphql.anilist.co";
 const CHECK_INTERVAL_MS = 2 * 60 * 60 * 1000; // 2 horas
@@ -517,6 +518,12 @@ async function sendNotification(
     await channel.send({ content, embeds: [embed] });
   } catch (err) {
     logger.error({ err, channelId }, "Erro ao enviar notificação");
+    void recordBotError({
+      source: "notification",
+      errorCode: "NOTIFICATION_SEND_FAILED",
+      error: err,
+      context: { channelId, title },
+    });
   }
 }
 
@@ -684,6 +691,16 @@ export async function runCheck(client: Client) {
       await new Promise((r) => setTimeout(r, 500));
     } catch (err) {
       logger.error({ err, manhwa: m.title }, "Erro ao verificar capítulos");
+      void recordBotError({
+        source: "notification",
+        errorCode: "TITLE_CHECK_FAILED",
+        error: err,
+        context: {
+          manhwaId: m.manhwaId,
+          title: m.title,
+          source: m.source,
+        },
+      });
     }
   }
 
@@ -696,6 +713,11 @@ export function startNotificacaoService(client: Client) {
       await runCheck(client);
     } catch (err) {
       logger.error({ err }, "Erro no serviço de notificações");
+      void recordBotError({
+        source: "notification",
+        errorCode: "NOTIFICATION_SERVICE_FAILED",
+        error: err,
+      });
     }
   };
 
