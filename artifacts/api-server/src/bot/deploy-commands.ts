@@ -24,6 +24,7 @@ import { data as calendarioData } from "./commands/calendario.js";
 import { data as calendario18Data } from "./commands/calendario18.js";
 import { data as temporadaData } from "./commands/temporada.js";
 import { data as statusData } from "./commands/status.js";
+import { data as verificarData } from "./commands/verificar.js";
 import { data as assinarData } from "./commands/assinar.js";
 import { data as assinar18Data } from "./commands/assinar18.js";
 import { data as adminData } from "./commands/admin.js";
@@ -56,6 +57,7 @@ export async function deployCommands(clientId: string, token: string) {
     calendario18Data.toJSON(),
     temporadaData.toJSON(),
     statusData.toJSON(),
+    verificarData.toJSON(),
     assinarData.toJSON(),
     assinar18Data.toJSON(),
     adminData.toJSON(),
