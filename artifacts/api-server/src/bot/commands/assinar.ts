@@ -16,6 +16,7 @@ import {
   respondAutocompleteEroge,
 } from "../autocomplete.js";
 import { logger } from "../../lib/logger.js";
+import { recordBotError } from "../error-log.js";
 
 export const data = new SlashCommandBuilder()
   .setName("assinar")
@@ -136,6 +137,15 @@ async function handleAdicionar(interaction: ChatInputCommandInteraction) {
         );
   } catch (err) {
     logger.error({ err, src, id }, "Erro ao buscar título externo em /assinar adicionar");
+    void recordBotError({
+      source: "command",
+      errorCode: "SUBSCRIPTION_EXTERNAL_LOOKUP_FAILED",
+      error: err,
+      discordGuildId: guildId,
+      discordUserId: userId,
+      command: "assinar adicionar",
+      context: { source: src },
+    });
     await interaction.editReply("❌ Erro ao consultar a fonte externa. Tente novamente em alguns instantes.");
     return;
   }
@@ -159,6 +169,14 @@ async function handleAdicionar(interaction: ChatInputCommandInteraction) {
       ));
   } catch (err) {
     logger.error({ err }, "Erro de DB ao verificar assinatura existente em /assinar adicionar");
+    void recordBotError({
+      source: "database",
+      errorCode: "SUBSCRIPTION_LOOKUP_FAILED",
+      error: err,
+      discordGuildId: guildId,
+      discordUserId: userId,
+      command: "assinar adicionar",
+    });
     await interaction.editReply("❌ Erro ao acessar o banco de dados. Tente novamente.");
     return;
   }
@@ -182,6 +200,14 @@ async function handleAdicionar(interaction: ChatInputCommandInteraction) {
     });
   } catch (err) {
     logger.error({ err }, "Erro de DB ao inserir assinatura em /assinar adicionar");
+    void recordBotError({
+      source: "database",
+      errorCode: "SUBSCRIPTION_INSERT_FAILED",
+      error: err,
+      discordGuildId: guildId,
+      discordUserId: userId,
+      command: "assinar adicionar",
+    });
     await interaction.editReply("❌ Erro ao salvar a assinatura. Tente novamente.");
     return;
   }
@@ -247,6 +273,14 @@ async function handleRemover(interaction: ChatInputCommandInteraction) {
       ));
   } catch (err) {
     logger.error({ err }, "Erro de DB em /assinar remover");
+    void recordBotError({
+      source: "database",
+      errorCode: "SUBSCRIPTION_LIST_FAILED",
+      error: err,
+      discordGuildId: guildId,
+      discordUserId: userId,
+      command: "assinar remover",
+    });
     await interaction.editReply("❌ Erro ao acessar o banco de dados. Tente novamente.");
     return;
   }
@@ -281,6 +315,14 @@ async function handleListar(interaction: ChatInputCommandInteraction) {
       .orderBy(assinaturasTable.addedAt);
   } catch (err) {
     logger.error({ err }, "Erro de DB em /assinar listar");
+    void recordBotError({
+      source: "database",
+      errorCode: "SUBSCRIPTION_LIST_FAILED",
+      error: err,
+      discordGuildId: interaction.guildId,
+      discordUserId: interaction.user.id,
+      command: "assinar listar",
+    });
     await interaction.editReply("❌ Erro ao acessar o banco de dados. Tente novamente.");
     return;
   }
