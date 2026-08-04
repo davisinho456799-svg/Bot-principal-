@@ -4,8 +4,14 @@ import {
   EmbedBuilder,
   TextChannel,
 } from "discord.js";
-import { db, notificacaoCanaisTable, adminUsersTable, usageLogsTable } from "@workspace/db";
-import { eq, desc, sql } from "drizzle-orm";
+import {
+  db,
+  notificacaoCanaisTable,
+  adminUsersTable,
+  usageLogsTable,
+  errorLogsTable,
+} from "@workspace/db";
+import { and, eq, desc, sql } from "drizzle-orm";
 import { requireAdmin } from "../admin-guard.js";
 import { runCheck } from "../notificacao-service.js";
 
@@ -20,6 +26,17 @@ export const data = new SlashCommandBuilder()
         opt
           .setName("usuario_id")
           .setDescription("Filtrar por ID do usuário Discord")
+          .setRequired(false)
+      )
+  )
+  .addSubcommand((sub) =>
+    sub
+      .setName("erros")
+      .setDescription("Ver erros recentes do bot e do serviço de notificações")
+      .addStringOption((opt) =>
+        opt
+          .setName("guild_id")
+          .setDescription("Filtrar pelo ID de um servidor Discord")
           .setRequired(false)
       )
   )
@@ -90,6 +107,9 @@ export async function execute(
     case "logs":
       await handleLogs(interaction);
       break;
+    case "erros":
+      await handleErros(interaction);
+      break;
     case "usuarios":
       await handleUsuarios(interaction);
       break;
@@ -151,6 +171,44 @@ async function handleLogs(interaction: ChatInputCommandInteraction) {
     .setTitle(`📋 Últimos ${rows.length} logs${userId ? ` (usuário ${userId})` : ""}`)
     .setDescription(lines.join("\n"))
     .setColor(0x5865f2);
+
+  await interaction.editReply({ embeds: [embed] });
+}
+
+async function handleErros(interaction: ChatInputCommandInteraction) {
+  const guildId = interaction.options.getString("guild_id");
+  const conditions = guildId
+    ? [eq(errorLogsTable.discordGuildId, guildId)]
+    : [];
+  const rows = await db
+    .select()
+    .from(errorLogsTable)
+    .where(conditions.length ? and(...conditions) : undefined)
+    .orderBy(desc(errorLogsTable.createdAt))
+    .limit(15);
+
+  if (rows.length === 0) {
+    await interaction.editReply("✅ Nenhum erro registrado no histórico.");
+    return;
+  }
+
+  const lines = rows.map((row) => {
+    const when = new Date(row.createdAt).toLocaleString("pt-BR", {
+      timeZone: "America/Sao_Paulo",
+    });
+    const command = row.command ? ` \`/${row.command}\`` : "";
+    const guild = row.discordGuildId ? ` • servidor \`${row.discordGuildId}\`` : "";
+    return (
+      `\`${when}\` **${row.errorCode}** — ${row.message.slice(0, 180)}` +
+      `\n↳ origem: \`${row.source}\`${command}${guild} • ID \`${row.id}\``
+    );
+  });
+
+  const embed = new EmbedBuilder()
+    .setTitle(`🧾 Histórico de erros — ${rows.length} registro(s)`)
+    .setDescription(lines.join("\n\n").slice(0, 4096))
+    .setColor(0xe74c3c)
+    .setFooter({ text: "Retenção automática: 30 dias • máximo de 500 por servidor" });
 
   await interaction.editReply({ embeds: [embed] });
 }

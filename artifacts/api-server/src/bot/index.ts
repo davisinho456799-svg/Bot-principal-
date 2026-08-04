@@ -44,6 +44,7 @@ import { getPendingAnime, deletePendingAnime } from "./anime-status-store.js";
 import { db, listaLeituraTable } from "@workspace/db";
 import { and, eq } from "drizzle-orm";
 import type { StatusLeitura } from "@workspace/db";
+import { recordBotError } from "./error-log.js";
 
 type Command = {
   data: { name: string };
@@ -107,6 +108,12 @@ export async function startBot() {
       await deployCommands(clientId, token);
     } catch (err) {
       logger.error({ err }, "Falha ao registrar comandos");
+      void recordBotError({
+        source: "discord_commands",
+        errorCode: "COMMAND_DEPLOY_FAILED",
+        error: err,
+        context: { clientId },
+      });
     }
 
     startNotificacaoService(readyClient);
@@ -143,6 +150,11 @@ export async function startBot() {
 
   client.on("error", (err) => {
     logger.error({ err }, "Erro no cliente do Discord");
+    void recordBotError({
+      source: "discord_client",
+      errorCode: "DISCORD_CLIENT_ERROR",
+      error: err,
+    });
   });
 
   client.on(Events.InteractionCreate, async (interaction) => {
@@ -246,6 +258,14 @@ export async function startBot() {
       await command.execute(interaction);
     } catch (err) {
       logger.error({ err, command: interaction.commandName }, "Erro ao executar comando");
+      void recordBotError({
+        source: "command",
+        errorCode: "COMMAND_EXECUTION_FAILED",
+        error: err,
+        discordGuildId: interaction.guildId,
+        discordUserId: interaction.user.id,
+        command: interaction.commandName,
+      });
       const msg = { content: "❌ Ocorreu um erro ao executar esse comando.", ephemeral: true };
       if (interaction.replied || interaction.deferred) {
         await interaction.followUp(msg);
