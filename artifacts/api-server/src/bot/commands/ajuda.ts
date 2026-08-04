@@ -90,6 +90,13 @@ export async function execute(interaction: ChatInputCommandInteraction) {
       value: "Estatísticas de leitura: títulos, favoritos, nota média, gêneros preferidos.",
       inline: false,
     },
+    {
+      name: "🔎 /verificar <título>",
+      value:
+        "Consulta agora a API de um título que você favoritou ou acompanha e compara com o último capítulo salvo. " +
+        "Não envia notificação nem altera o estado automático.",
+      inline: false,
+    },
   );
 
   // ── Anime ───────────────────────────────────────────────────────────────────

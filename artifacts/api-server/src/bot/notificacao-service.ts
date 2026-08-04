@@ -352,6 +352,44 @@ async function fetchChapters(manhwaId: string, source: string): Promise<FetchRes
   return null;
 }
 
+export interface TitleCheckResult {
+  currentChapters: number | null;
+  lastChapters: number | null;
+  isProxy: boolean;
+  hasNewChapters: boolean | null;
+  durationMs: number;
+}
+
+/**
+ * Consulta uma única fonte sem alterar a linha de base nem enviar notificações.
+ * Usado pelo comando /verificar para diagnóstico manual.
+ */
+export async function checkTrackedTitle(
+  manhwaId: string,
+  source: string,
+): Promise<TitleCheckResult> {
+  const startedAt = Date.now();
+  const [tracked] = await db
+    .select({ lastChapters: capitulosRastreados.lastChapters })
+    .from(capitulosRastreados)
+    .where(eq(capitulosRastreados.manhwaId, manhwaId));
+  const fetched = await fetchChapters(manhwaId, source);
+  const currentChapters = fetched?.value ?? null;
+  const isProxy = fetched?.isProxy ?? false;
+  const hasNewChapters =
+    currentChapters != null && !isProxy && tracked?.lastChapters != null
+      ? currentChapters > tracked.lastChapters
+      : null;
+
+  return {
+    currentChapters,
+    lastChapters: tracked?.lastChapters ?? null,
+    isProxy,
+    hasNewChapters,
+    durationMs: Date.now() - startedAt,
+  };
+}
+
 /**
  * MangaUpdates' RSS titles use values such as "Title c.200", "c.4-10",
  * and sometimes non-numeric labels like "c.Prologue". The feed is ordered

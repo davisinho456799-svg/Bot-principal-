@@ -35,6 +35,7 @@ import * as calendario18Command from "./commands/calendario18.js";
 import * as temporadaCommand from "./commands/temporada.js";
 import * as statusCommand from "./commands/status.js";
 import * as historicoCommand from "./commands/historico.js";
+import * as verificarCommand from "./commands/verificar.js";
 import * as assinarCommand from "./commands/assinar.js";
 import * as assinar18Command from "./commands/assinar18.js";
 import { startNotificacaoService } from "./notificacao-service.js";
@@ -80,6 +81,7 @@ const commands = new Map<string, Command>([
   [temporadaCommand.data.name, temporadaCommand],
   [statusCommand.data.name, statusCommand],
   [historicoCommand.data.name, historicoCommand],
+  [verificarCommand.data.name, verificarCommand],
   [assinarCommand.data.name, assinarCommand],
   [assinar18Command.data.name, assinar18Command],
 ]);
