@@ -31,6 +31,33 @@ function describeError(error: unknown): { message: string; stack: string | null 
   }
 }
 
+function redactSensitive(value: string): string {
+  return value
+    .replace(
+      /((?:token|secret|password|passwd|authorization|api[-_]?key|client[-_]?secret)\s*[:=]\s*)([^\s,;"']+)/gi,
+      "$1[REDACTED]",
+    )
+    .replace(/(Bearer\s+)[A-Za-z0-9._~+/=-]+/gi, "$1[REDACTED]")
+    .replace(
+      /([?&](?:token|secret|key|password|api_key|apikey)=)[^&\s]+/gi,
+      "$1[REDACTED]",
+    );
+}
+
+function redactContext(context: Record<string, unknown> | null): Record<string, unknown> {
+  if (!context) return {};
+
+  return Object.fromEntries(
+    Object.entries(context).map(([key, value]) => {
+      const sensitiveKey =
+        /token|secret|password|passwd|authorization|api[-_]?key|client[-_]?secret/i.test(key);
+      if (sensitiveKey) return [key, "[REDACTED]"];
+      if (typeof value === "string") return [key, redactSensitive(value).slice(0, 8000)];
+      return [key, value];
+    }),
+  );
+}
+
 /**
  * Persiste um erro no Neon sem deixar o registro de erro derrubar o bot.
  * A retenção é limitada para o histórico não crescer indefinidamente.
@@ -47,10 +74,10 @@ export async function recordBotError(input: BotErrorInput): Promise<number | nul
         command: input.command ?? null,
         source: input.source,
         errorCode: input.errorCode,
-        message: message.slice(0, 4000),
+        message: redactSensitive(message).slice(0, 4000),
         context: {
-          ...(input.context ?? {}),
-          stack: stack?.slice(0, 8000) ?? null,
+          ...redactContext(input.context ?? null),
+          stack: stack ? redactSensitive(stack).slice(0, 8000) : null,
         },
       })
       .returning({ id: errorLogsTable.id });
