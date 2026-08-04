@@ -105,3 +105,67 @@ export const CheckSubscriptionResponse = zod.object({
 })
 
 
+/**
+ * Returns recent errors, optionally filtered by Discord guild.
+ * @summary List bot errors
+ */
+export const listErrorLogsQueryLimitDefault = 25;
+export const listErrorLogsQueryLimitMax = 100;
+
+
+
+export const ListErrorLogsQueryParams = zod.object({
+  "guild_id": zod.coerce.string().optional(),
+  "limit": zod.coerce.number().min(1).max(listErrorLogsQueryLimitMax).default(listErrorLogsQueryLimitDefault)
+})
+
+export const ListErrorLogsResponseItem = zod.object({
+  "id": zod.number(),
+  "discord_guild_id": zod.string().nullish(),
+  "discord_user_id": zod.string().nullish(),
+  "command": zod.string().nullish(),
+  "route": zod.string().nullish(),
+  "error_code": zod.string(),
+  "message": zod.string(),
+  "http_status": zod.number().nullish(),
+  "context": zod.record(zod.string(), zod.unknown()).nullish(),
+  "created_at": zod.coerce.date()
+})
+export const ListErrorLogsResponse = zod.array(ListErrorLogsResponseItem)
+
+
+/**
+ * Stores an error reported by the Discord bot in Neon for later inspection.
+ * @summary Record a bot error
+ */
+export const createErrorLogBodyErrorCodeMax = 100;
+
+export const createErrorLogBodyMessageMax = 2000;
+
+
+
+export const CreateErrorLogBody = zod.object({
+  "discord_guild_id": zod.string().optional(),
+  "discord_user_id": zod.string().optional(),
+  "command": zod.string().optional(),
+  "route": zod.string().optional(),
+  "error_code": zod.string().min(1).max(createErrorLogBodyErrorCodeMax),
+  "message": zod.string().min(1).max(createErrorLogBodyMessageMax),
+  "http_status": zod.number().optional(),
+  "context": zod.record(zod.string(), zod.unknown()).optional()
+})
+
+export const CreateErrorLogResponse = zod.object({
+  "id": zod.number(),
+  "discord_guild_id": zod.string().nullish(),
+  "discord_user_id": zod.string().nullish(),
+  "command": zod.string().nullish(),
+  "route": zod.string().nullish(),
+  "error_code": zod.string(),
+  "message": zod.string(),
+  "http_status": zod.number().nullish(),
+  "context": zod.record(zod.string(), zod.unknown()).nullish(),
+  "created_at": zod.coerce.date()
+})
+
+

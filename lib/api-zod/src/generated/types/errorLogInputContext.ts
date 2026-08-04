@@ -6,7 +6,4 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export interface ErrorResponse {
-  error: string;
-  error_id?: number;
-}
+export type ErrorLogInputContext = { [key: string]: unknown };

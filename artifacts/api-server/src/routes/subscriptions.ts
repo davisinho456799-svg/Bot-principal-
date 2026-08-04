@@ -9,6 +9,7 @@ import {
   CheckSubscriptionParams,
 } from "@workspace/api-zod";
 import { fetchMalItem } from "../lib/mal";
+import { recordError } from "../lib/error-logging";
 
 const router: IRouter = Router();
 
@@ -110,7 +111,18 @@ router.delete("/subscriptions/:id", async (req, res): Promise<void> => {
     .returning();
 
   if (!deleted) {
-    res.status(404).json({ error: "Inscrição não encontrada." });
+    const errorLog = await recordError({
+      errorCode: "SUBSCRIPTION_NOT_FOUND",
+      message: "Inscrição não encontrada.",
+      httpStatus: 404,
+      route: req.path,
+      context: { subscriptionId: params.data.id },
+    });
+    res.locals.errorLogged = true;
+    res.status(404).json({
+      error: "Inscrição não encontrada.",
+      error_id: errorLog.id,
+    });
     return;
   }
 
@@ -132,7 +144,18 @@ router.post("/subscriptions/:id/check", async (req, res): Promise<void> => {
     .limit(1);
 
   if (!sub) {
-    res.status(404).json({ error: "Inscrição não encontrada." });
+    const errorLog = await recordError({
+      errorCode: "SUBSCRIPTION_NOT_FOUND",
+      message: "Inscrição não encontrada.",
+      httpStatus: 404,
+      route: req.path,
+      context: { subscriptionId: params.data.id },
+    });
+    res.locals.errorLogged = true;
+    res.status(404).json({
+      error: "Inscrição não encontrada.",
+      error_id: errorLog.id,
+    });
     return;
   }
 
@@ -142,11 +165,26 @@ router.post("/subscriptions/:id/check", async (req, res): Promise<void> => {
     malData = await fetchMalItem(sub.malItemId, sub.malItemType as "manga" | "anime");
   } catch (err) {
     req.log.error({ err, subscriptionId: sub.id }, "MAL API fetch failed");
+    const message =
+      err instanceof Error
+        ? err.message
+        : "Erro ao buscar dados no MyAnimeList.";
+    const errorLog = await recordError({
+      discordGuildId: sub.discordGuildId,
+      route: req.path,
+      errorCode: "MAL_API_ERROR",
+      message,
+      httpStatus: 502,
+      context: {
+        subscriptionId: sub.id,
+        malItemId: sub.malItemId,
+        malItemType: sub.malItemType,
+      },
+    });
+    res.locals.errorLogged = true;
     res.status(502).json({
-      error:
-        err instanceof Error
-          ? err.message
-          : "Erro ao buscar dados no MyAnimeList.",
+      error: message,
+      error_id: errorLog.id,
     });
     return;
   }

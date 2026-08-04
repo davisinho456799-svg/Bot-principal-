@@ -21,8 +21,11 @@ import type {
 
 import type {
   CheckResult,
+  ErrorLog,
+  ErrorLogInput,
   ErrorResponse,
   HealthStatus,
+  ListErrorLogsParams,
   ListSubscriptionsParams,
   Subscription,
   SubscriptionInput
@@ -432,5 +435,162 @@ export const useCheckSubscription = <TError = ErrorType<ErrorResponse>,
         TContext
       > => {
       return useMutation(getCheckSubscriptionMutationOptions(options));
+    }
+
+export const getListErrorLogsUrl = (params?: ListErrorLogsParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : String(value))
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/errors?${stringifiedParams}` : `/api/errors`
+}
+
+/**
+ * Returns recent errors, optionally filtered by Discord guild.
+ * @summary List bot errors
+ */
+export const listErrorLogs = async (params?: ListErrorLogsParams, options?: Parameters<typeof customFetch>[1]): Promise<ErrorLog[]> => {
+
+  return customFetch<ErrorLog[]>(getListErrorLogsUrl(params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getListErrorLogsQueryKey = (params?: ListErrorLogsParams,) => {
+    return [
+    `/api/errors`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getListErrorLogsQueryOptions = <TData = Awaited<ReturnType<typeof listErrorLogs>>, TError = ErrorType<unknown>>(params?: ListErrorLogsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listErrorLogs>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListErrorLogsQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listErrorLogs>>> = ({ signal }) => listErrorLogs(params, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listErrorLogs>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type ListErrorLogsQueryResult = NonNullable<Awaited<ReturnType<typeof listErrorLogs>>>
+export type ListErrorLogsQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary List bot errors
+ */
+
+export function useListErrorLogs<TData = Awaited<ReturnType<typeof listErrorLogs>>, TError = ErrorType<unknown>>(
+ params?: ListErrorLogsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listErrorLogs>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getListErrorLogsQueryOptions(params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getCreateErrorLogUrl = () => {
+
+
+
+
+  return `/api/errors`
+}
+
+/**
+ * Stores an error reported by the Discord bot in Neon for later inspection.
+ * @summary Record a bot error
+ */
+export const createErrorLog = async (errorLogInput: ErrorLogInput, options?: Parameters<typeof customFetch>[1]): Promise<ErrorLog> => {
+
+  return customFetch<ErrorLog>(getCreateErrorLogUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(errorLogInput)
+  }
+);}
+
+
+
+
+
+export const getCreateErrorLogMutationOptions = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createErrorLog>>, TError,{data: BodyType<ErrorLogInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof createErrorLog>>, TError,{data: BodyType<ErrorLogInput>}, TContext> => {
+
+const mutationKey = ['createErrorLog'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof createErrorLog>>, {data: BodyType<ErrorLogInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  createErrorLog(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CreateErrorLogMutationResult = NonNullable<Awaited<ReturnType<typeof createErrorLog>>>
+    export type CreateErrorLogMutationBody = BodyType<ErrorLogInput>
+    export type CreateErrorLogMutationError = ErrorType<ErrorResponse>
+
+    /**
+ * @summary Record a bot error
+ */
+export const useCreateErrorLog = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createErrorLog>>, TError,{data: BodyType<ErrorLogInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof createErrorLog>>,
+        TError,
+        {data: BodyType<ErrorLogInput>},
+        TContext
+      > => {
+      return useMutation(getCreateErrorLogMutationOptions(options));
     }
 

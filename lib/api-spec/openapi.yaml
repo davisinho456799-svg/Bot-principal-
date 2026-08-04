@@ -12,6 +12,8 @@ tags:
     description: Health operations
   - name: subscriptions
     description: MAL subscription management
+  - name: errors
+    description: Error history for the Discord bot
 paths:
   /healthz:
     get:
@@ -137,6 +139,58 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
+  /errors:
+    get:
+      operationId: listErrorLogs
+      tags: [errors]
+      summary: List bot errors
+      description: Returns recent errors, optionally filtered by Discord guild.
+      parameters:
+        - in: query
+          name: guild_id
+          schema:
+            type: string
+        - in: query
+          name: limit
+          schema:
+            type: number
+            minimum: 1
+            maximum: 100
+            default: 25
+      responses:
+        "200":
+          description: Recent error history
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ErrorLog"
+    post:
+      operationId: createErrorLog
+      tags: [errors]
+      summary: Record a bot error
+      description: Stores an error reported by the Discord bot in Neon for later inspection.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ErrorLogInput"
+      responses:
+        "201":
+          description: Error recorded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorLog"
+        "400":
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
 components:
   schemas:
     HealthStatus:
@@ -153,6 +207,67 @@ components:
       properties:
         error:
           type: string
+        error_id:
+          type: number
+
+    ErrorLog:
+      type: object
+      required:
+        - id
+        - error_code
+        - message
+        - created_at
+      properties:
+        id:
+          type: number
+        discord_guild_id:
+          type: ["string", "null"]
+        discord_user_id:
+          type: ["string", "null"]
+        command:
+          type: ["string", "null"]
+        route:
+          type: ["string", "null"]
+        error_code:
+          type: string
+        message:
+          type: string
+        http_status:
+          type: ["number", "null"]
+        context:
+          type: ["object", "null"]
+          additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+
+    ErrorLogInput:
+      type: object
+      required:
+        - error_code
+        - message
+      properties:
+        discord_guild_id:
+          type: string
+        discord_user_id:
+          type: string
+        command:
+          type: string
+        route:
+          type: string
+        error_code:
+          type: string
+          minLength: 1
+          maxLength: 100
+        message:
+          type: string
+          minLength: 1
+          maxLength: 2000
+        http_status:
+          type: number
+        context:
+          type: object
+          additionalProperties: true
 
     Subscription:
       type: object

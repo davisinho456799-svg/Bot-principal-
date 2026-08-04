@@ -11,6 +11,52 @@ export interface HealthStatus {
 
 export interface ErrorResponse {
   error: string;
+  error_id?: number;
+}
+
+/**
+ * @nullable
+ */
+export type ErrorLogContext = { [key: string]: unknown } | null;
+
+export interface ErrorLog {
+  id: number;
+  /** @nullable */
+  discord_guild_id?: string | null;
+  /** @nullable */
+  discord_user_id?: string | null;
+  /** @nullable */
+  command?: string | null;
+  /** @nullable */
+  route?: string | null;
+  error_code: string;
+  message: string;
+  /** @nullable */
+  http_status?: number | null;
+  /** @nullable */
+  context?: ErrorLogContext;
+  created_at: string;
+}
+
+export type ErrorLogInputContext = { [key: string]: unknown };
+
+export interface ErrorLogInput {
+  discord_guild_id?: string;
+  discord_user_id?: string;
+  command?: string;
+  route?: string;
+  /**
+     * @minLength 1
+     * @maxLength 100
+     */
+  error_code: string;
+  /**
+     * @minLength 1
+     * @maxLength 2000
+     */
+  message: string;
+  http_status?: number;
+  context?: ErrorLogInputContext;
 }
 
 export type SubscriptionMalItemType = typeof SubscriptionMalItemType[keyof typeof SubscriptionMalItemType];
@@ -77,5 +123,14 @@ export type ListSubscriptionsParams = {
  * Filter by Discord guild ID
  */
 guild_id?: string;
+};
+
+export type ListErrorLogsParams = {
+guild_id?: string;
+/**
+ * @minimum 1
+ * @maximum 100
+ */
+limit?: number;
 };
 

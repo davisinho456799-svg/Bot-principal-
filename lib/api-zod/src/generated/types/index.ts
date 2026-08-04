@@ -7,8 +7,13 @@
  */
 
 export * from './checkResult';
+export * from './errorLog';
+export * from './errorLogContext';
+export * from './errorLogInput';
+export * from './errorLogInputContext';
 export * from './errorResponse';
 export * from './healthStatus';
+export * from './listErrorLogsParams';
 export * from './listSubscriptionsParams';
 export * from './snapshotData';
 export * from './subscription';

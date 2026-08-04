@@ -6,7 +6,11 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export interface ErrorResponse {
-  error: string;
-  error_id?: number;
-}
+export type ListErrorLogsParams = {
+guild_id?: string;
+/**
+ * @minimum 1
+ * @maximum 100
+ */
+limit?: number;
+};
