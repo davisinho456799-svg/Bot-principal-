@@ -755,7 +755,6 @@ async function sendMetadataNotification(
   title: string,
   siteUrl: string,
   coverUrl: string | null,
-  mentions: string[],
   previous: {
     synopsis: string | null;
     score: number | null;
@@ -808,8 +807,7 @@ async function sendMetadataNotification(
       .setFooter({ text: "Alteração de página • MyAnimeList" });
 
     if (coverUrl) embed.setThumbnail(coverUrl);
-    const content = mentions.length > 0 ? mentions.join(" ").slice(0, 2000) : undefined;
-    await channel.send({ content, embeds: [embed] });
+    await channel.send({ embeds: [embed], allowedMentions: { parse: [] } });
     return true;
   } catch (err) {
     logger.error({ err, channelId }, "Erro ao enviar notificação de alteração");
@@ -959,23 +957,12 @@ export async function runCheck(
             );
             for (const canal of canais) {
               if (!canal.alterationChannelId) continue;
-              const subscribers = await db
-                .select({ discordUserId: assinaturasTable.discordUserId })
-                .from(assinaturasTable)
-                .where(
-                  and(
-                    eq(assinaturasTable.manhwaId, m.manhwaId),
-                    eq(assinaturasTable.guildId, canal.guildId),
-                  ),
-                );
-              const mentions = subscribers.map((s) => `<@${s.discordUserId}>`);
               const sent = await sendMetadataNotification(
                 client,
                 canal.alterationChannelId,
                 m.title,
                 m.siteUrl,
                 m.coverUrl ?? null,
-                mentions,
                 previous ?? {
                   synopsis: null,
                   score: null,
