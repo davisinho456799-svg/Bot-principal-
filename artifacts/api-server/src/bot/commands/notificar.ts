@@ -11,7 +11,7 @@ import { eq } from "drizzle-orm";
 
 export const data = new SlashCommandBuilder()
   .setName("notificar")
-  .setDescription("Configura notificações de novos capítulos dos seus favoritos")
+  .setDescription("Configura as notificações dos seus favoritos")
   .addSubcommand((sub) =>
     sub
       .setName("canal")
@@ -25,7 +25,19 @@ export const data = new SlashCommandBuilder()
       )
   )
   .addSubcommand((sub) =>
-    sub.setName("status").setDescription("Mostra o canal de notificações configurado")
+    sub
+      .setName("canal-alteracoes")
+      .setDescription("Define o canal para alterações na página do MAL")
+      .addChannelOption((opt) =>
+        opt
+          .setName("canal")
+          .setDescription("Canal de texto para alterações de sinopse, nota e status")
+          .addChannelTypes(ChannelType.GuildText)
+          .setRequired(true)
+      )
+  )
+  .addSubcommand((sub) =>
+    sub.setName("status").setDescription("Mostra os canais de notificações configurados")
   )
   .addSubcommand((sub) =>
     sub.setName("desativar").setDescription("Desativa as notificações de novos capítulos")
@@ -36,6 +48,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
   const sub = interaction.options.getSubcommand();
 
   if (sub === "canal") await handleCanal(interaction);
+  else if (sub === "canal-alteracoes") await handleCanalAlteracoes(interaction);
   else if (sub === "status") await handleStatus(interaction);
   else if (sub === "desativar") await handleDesativar(interaction);
 }
@@ -71,6 +84,46 @@ async function handleCanal(interaction: ChatInputCommandInteraction) {
   await interaction.editReply({ embeds: [embed] });
 }
 
+async function handleCanalAlteracoes(interaction: ChatInputCommandInteraction) {
+  if (!interaction.guildId) {
+    await interaction.reply({ content: "❌ Este comando só pode ser usado em servidores.", ephemeral: true });
+    return;
+  }
+
+  const canal = interaction.options.getChannel("canal", true) as TextChannel;
+  await interaction.deferReply({ ephemeral: true });
+
+  const [config] = await db
+    .select({ guildId: notificacaoCanaisTable.guildId })
+    .from(notificacaoCanaisTable)
+    .where(eq(notificacaoCanaisTable.guildId, interaction.guildId));
+
+  if (!config) {
+    await interaction.editReply(
+      "❌ Primeiro configure o canal de capítulos com `/notificar canal #canal`.\n" +
+      "Depois use `/notificar canal-alteracoes #canal`.",
+    );
+    return;
+  }
+
+  await db
+    .update(notificacaoCanaisTable)
+    .set({ alterationChannelId: canal.id })
+    .where(eq(notificacaoCanaisTable.guildId, interaction.guildId));
+
+  const embed = new EmbedBuilder()
+    .setTitle("📝 Canal de alterações configurado!")
+    .setColor(0x3498db)
+    .setDescription(
+      `O bot vai avisar em ${canal} quando houver alterações na página do MAL, como **sinopse, nota ou status**.\n\n` +
+      `> ✅ Novos capítulos continuam sendo enviados somente para o canal de capítulos.\n` +
+      `> ✅ O primeiro snapshot não gera uma notificação de alteração.`,
+    )
+    .setFooter({ text: "Use /notificar status para ver os dois canais" });
+
+  await interaction.editReply({ embeds: [embed] });
+}
+
 async function handleStatus(interaction: ChatInputCommandInteraction) {
   if (!interaction.guildId) {
     await interaction.reply({ content: "❌ Este comando só pode ser usado em servidores.", ephemeral: true });
@@ -95,11 +148,16 @@ async function handleStatus(interaction: ChatInputCommandInteraction) {
     .setTitle("🔔 Status das Notificações")
     .setColor(0x3498db)
     .addFields(
-      { name: "Canal configurado", value: `<#${config.channelId}>`, inline: true },
+      { name: "Canal de capítulos", value: `<#${config.channelId}>`, inline: true },
+      {
+        name: "Canal de alterações",
+        value: config.alterationChannelId ? `<#${config.alterationChannelId}>` : "Não configurado",
+        inline: true,
+      },
       { name: "Configurado em", value: config.configuredAt.toLocaleDateString("pt-BR"), inline: true },
       { name: "Frequência de verificação", value: "A cada 2 horas", inline: false },
     )
-    .setFooter({ text: "Use /notificar desativar para parar as notificações" });
+    .setFooter({ text: "Use /notificar canal-alteracoes para separar alterações de capítulos" });
 
   await interaction.editReply({ embeds: [embed] });
 }

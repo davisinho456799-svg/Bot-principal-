@@ -37,6 +37,7 @@ export type InsertFavorito = typeof favoritosTable.$inferInsert;
 export const notificacaoCanaisTable = pgTable("notificacao_canais", {
   guildId: text("guild_id").primaryKey(),
   channelId: text("channel_id").notNull(),
+  alterationChannelId: text("alteration_channel_id"),
   configuredAt: timestamp("configured_at").notNull().defaultNow(),
 });
 

@@ -3,3 +3,4 @@
 - [Discord Render worker](render-discord-worker.md) — Discord workers need DATABASE_URL and must not require PORT; use a long-running worker service.
 - [Discord component interactions](discord-component-interactions.md) — acknowledge button clicks atomically and log collector failures without exposing secrets.
 - [MAL history rollout](mal-history-rollout.md) — keep the initial snapshot plus 10 changes; apply Neon schema before activation and ask before commit/push.
+- [Notification channel schema](notification-channel-schema.md) — extend the legacy channel table additively; Drizzle push may require interactive conflict resolution.

@@ -749,6 +749,80 @@ async function sendNotification(
   }
 }
 
+async function sendMetadataNotification(
+  client: Client,
+  channelId: string,
+  title: string,
+  siteUrl: string,
+  coverUrl: string | null,
+  mentions: string[],
+  previous: {
+    synopsis: string | null;
+    score: number | null;
+    status: string | null;
+  },
+  snapshot: {
+    synopsis: string | null;
+    score: number | null;
+    status: string | null;
+  },
+  changedFields: string[],
+): Promise<boolean> {
+  const metadataFields = changedFields.filter((field) => field !== "chapters");
+  if (!metadataFields.length) return false;
+
+  try {
+    const channel = await client.channels.fetch(channelId);
+    if (!channel || !(channel instanceof TextChannel)) return false;
+
+    const labels: Record<string, string> = {
+      synopsis: "Sinopse",
+      score: "Nota",
+      status: "Status",
+    };
+    const fields = metadataFields.map((field) => {
+      if (field === "synopsis") {
+        return {
+          name: "📝 Sinopse atualizada",
+          value: `A sinopse da página foi alterada.\n\n**Nova sinopse:**\n${(snapshot.synopsis ?? "Não informada").slice(0, 900)}`,
+          inline: false,
+        };
+      }
+      const oldValue =
+        field === "score" ? previous.score ?? "—" : previous.status ?? "—";
+      const newValue =
+        field === "score" ? snapshot.score ?? "—" : snapshot.status ?? "—";
+      return {
+        name: `${field === "score" ? "⭐" : "📌"} ${labels[field] ?? field} atualizado`,
+        value: `**${String(oldValue)}** → **${String(newValue)}**`,
+        inline: true,
+      };
+    });
+
+    const embed = new EmbedBuilder()
+      .setTitle(`📝 Alteração na página: ${title}`.slice(0, 256))
+      .setURL(siteUrl || null)
+      .setColor(0x3498db)
+      .setDescription("A página deste título no MyAnimeList foi atualizada.")
+      .addFields(fields)
+      .setFooter({ text: "Alteração de página • MyAnimeList" });
+
+    if (coverUrl) embed.setThumbnail(coverUrl);
+    const content = mentions.length > 0 ? mentions.join(" ").slice(0, 2000) : undefined;
+    await channel.send({ content, embeds: [embed] });
+    return true;
+  } catch (err) {
+    logger.error({ err, channelId }, "Erro ao enviar notificação de alteração");
+    void recordBotError({
+      source: "notification",
+      errorCode: "METADATA_NOTIFICATION_SEND_FAILED",
+      error: err,
+      context: { channelId, title, changedFields: metadataFields },
+    });
+    return false;
+  }
+}
+
 export async function runCheck(
   client: Client,
   options: { verifyAllSources?: boolean } = {},
@@ -875,11 +949,43 @@ export async function runCheck(
               );
               if (sent) summary.notificationsSent++;
             }
-          } else if (changedFields.length) {
+          }
+
+          const metadataChanged = changedFields.filter((field) => field !== "chapters");
+          if (metadataChanged.length) {
             logger.info(
               { title: m.title, changedFields },
-              "Alteração de metadados do MAL registrada sem notificação",
+              "Alteração de metadados do MAL registrada",
             );
+            for (const canal of canais) {
+              if (!canal.alterationChannelId) continue;
+              const subscribers = await db
+                .select({ discordUserId: assinaturasTable.discordUserId })
+                .from(assinaturasTable)
+                .where(
+                  and(
+                    eq(assinaturasTable.manhwaId, m.manhwaId),
+                    eq(assinaturasTable.guildId, canal.guildId),
+                  ),
+                );
+              const mentions = subscribers.map((s) => `<@${s.discordUserId}>`);
+              const sent = await sendMetadataNotification(
+                client,
+                canal.alterationChannelId,
+                m.title,
+                m.siteUrl,
+                m.coverUrl ?? null,
+                mentions,
+                previous ?? {
+                  synopsis: null,
+                  score: null,
+                  status: null,
+                },
+                snapshot,
+                metadataChanged,
+              );
+              if (sent) summary.notificationsSent++;
+            }
           }
 
           await new Promise((r) => setTimeout(r, 500));
