@@ -153,8 +153,13 @@ export async function execute(interaction: ChatInputCommandInteraction) {
       inline: false,
     },
     {
+      name: "📝 /notificar canal-alteracoes <#canal>",
+      value: "Opcionalmente define um segundo canal para alterações de sinopse, nota e status na página do MAL.",
+      inline: false,
+    },
+    {
       name: "📭 /notificar status  •  🔕 /notificar desativar",
-      value: "Vê o canal configurado ou desativa as notificações.",
+      value: "Vê os canais configurados ou desativa as notificações.",
       inline: false,
     },
   );
