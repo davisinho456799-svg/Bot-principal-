@@ -11,7 +11,12 @@ import { eq, sql, and, desc, inArray } from "drizzle-orm";
 import { logger } from "../lib/logger.js";
 import { getErogamescapeLastUpdated } from "./erogamescape.js";
 import { buildScanLinksExternal } from "./commands/search.js";
-import { getJikanMangaById } from "./jikan.js";
+import { getJikanMangaById, getJikanAnimeById, searchJikanAnimeAny } from "./jikan.js";
+import { searchManhwaAny, searchAnime } from "./anilist.js";
+import { searchComickAny } from "./comick.js";
+import { searchMangaDexAny } from "./mangadex.js";
+import { searchMangaUpdates } from "./mangaupdates.js";
+import { searchJikanAny } from "./jikan.js";
 import { recordBotError } from "./error-log.js";
 
 const ANILIST_API = "https://graphql.anilist.co";
@@ -88,6 +93,27 @@ interface FetchResult {
   /** true = valor é timestamp/proxy, não um número de capítulos real */
   isProxy: boolean;
 }
+
+export type SourceAttempt = {
+  source: string;
+  status: "ok" | "sem_dados";
+  value: number | null;
+  selected: boolean;
+};
+
+export type NotificationCheckSummary = {
+  titlesChecked: number;
+  successfulSources: number;
+  sourcesWithoutData: number;
+  fallbackUsed: number;
+  notificationsSent: number;
+  attempts: Array<{
+    title: string;
+    primarySource: string;
+    selectedSource: string | null;
+    attempts: SourceAttempt[];
+  }>;
+};
 
 interface MalSnapshot {
   chapters: number | null;
@@ -270,6 +296,12 @@ async function fetchChapters(manhwaId: string, source: string): Promise<FetchRes
     }
   }
 
+  if (source === "jikan-anime") {
+    const anime = await getJikanAnimeById(Number(manhwaId));
+    if (anime?.episodes == null) return null;
+    return { value: anime.episodes, isProxy: false };
+  }
+
   if (source === 'comick') {
     try {
       const res = await fetch(`https://api.comick.io/comic/${manhwaId}`, {
@@ -422,6 +454,194 @@ async function getTrackedManhwas() {
   return favorites;
 }
 
+function normalizeTitle(title: string): string {
+  return title
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+}
+
+function likelySameTitle(left: string, right: string): boolean {
+  const a = normalizeTitle(left);
+  const b = normalizeTitle(right);
+  if (!a || !b) return false;
+  return a === b || (a.length >= 8 && (a.includes(b) || b.includes(a)));
+}
+
+type FallbackCandidate = { source: string; id: string; title: string };
+
+/**
+ * Encontra IDs equivalentes nas outras bases somente quando a fonte principal
+ * não respondeu. A confirmação pelo título evita trocar silenciosamente para
+ * uma obra diferente com nome parecido.
+ */
+async function findFallbackCandidates(title: string, primarySource: string): Promise<FallbackCandidate[]> {
+  const candidates: FallbackCandidate[] = [];
+  const isAnime = primarySource === "anilist-anime" || primarySource === "jikan-anime";
+
+  if (isAnime) {
+    const searches = await Promise.allSettled([searchAnime(title), searchJikanAnimeAny(title)]);
+    const [anilist, jikan] = searches;
+
+    if (anilist.status === "fulfilled") {
+      const match = anilist.value.find((item) =>
+        [item.title.english, item.title.romaji, item.title.native, ...item.synonyms].some(
+          (name) => name && likelySameTitle(name, title),
+        ),
+      );
+      if (match && primarySource !== "anilist-anime") {
+        candidates.push({ source: "anilist-anime", id: String(match.id), title });
+      }
+    }
+    if (jikan.status === "fulfilled") {
+      const match = jikan.value.find((item) =>
+        [item.mainTitle, item.englishTitle, item.japaneseTitle, ...item.synonyms].some(
+          (name) => name && likelySameTitle(name, title),
+        ),
+      );
+      if (match && primarySource !== "jikan-anime") {
+        candidates.push({ source: "jikan-anime", id: String(match.malId), title });
+      }
+    }
+    return candidates;
+  }
+
+  const searches = await Promise.allSettled([
+    searchManhwaAny(title),
+    searchComickAny(title),
+    searchMangaDexAny(title, 5),
+    searchMangaUpdates(title),
+    searchJikanAny(title),
+  ]);
+
+  const [anilist, comick, mangadex, mangaUpdates, jikan] = searches;
+  if (anilist.status === "fulfilled") {
+    const match = anilist.value.find((item) =>
+      [item.title.english, item.title.romaji, item.title.native].some(
+        (name) => name && likelySameTitle(name, title),
+      ),
+    );
+    if (match && primarySource !== "anilist") {
+      candidates.push({ source: "anilist", id: String(match.id), title });
+    }
+  }
+  if (comick.status === "fulfilled") {
+    const match = comick.value.find((item) => likelySameTitle(item.title, title));
+    if (match && primarySource !== "comick") {
+      candidates.push({ source: "comick", id: match.slug, title });
+    }
+  }
+  if (mangadex.status === "fulfilled") {
+    const match = mangadex.value.find((item) => likelySameTitle(item.mainTitle, title));
+    if (match && primarySource !== "mangadex") {
+      candidates.push({ source: "mangadex", id: match.id, title });
+    }
+  }
+  if (mangaUpdates.status === "fulfilled") {
+    const match = mangaUpdates.value.find((item) => likelySameTitle(item.title, title));
+    if (match && primarySource !== "mangaupdates") {
+      candidates.push({ source: "mangaupdates", id: match.id, title });
+    }
+  }
+  if (jikan.status === "fulfilled") {
+    const match = jikan.value.find((item) =>
+      [item.mainTitle, item.englishTitle, item.japaneseTitle, ...item.synonyms].some(
+        (name) => name && likelySameTitle(name, title),
+      ),
+    );
+    if (match && primarySource !== "jikan") {
+      candidates.push({ source: "jikan", id: String(match.malId), title });
+    }
+  }
+
+  return candidates;
+}
+
+async function fetchWithFallback(
+  title: string,
+  primarySource: string,
+  manhwaId: string,
+  verifyAllSources = false,
+): Promise<{ fetched: FetchResult | null; selectedSource: string | null; attempts: SourceAttempt[] }> {
+  const attempts: SourceAttempt[] = [];
+  const primary = await fetchChapters(manhwaId, primarySource);
+  attempts.push({
+    source: primarySource,
+    status: primary && !primary.isProxy ? "ok" : "sem_dados",
+    value: primary?.value ?? null,
+    selected: false,
+  });
+  if (primary && !primary.isProxy && !verifyAllSources) {
+    attempts[0]!.selected = true;
+    return { fetched: primary, selectedSource: primarySource, attempts };
+  }
+
+  const candidates = await findFallbackCandidates(title, primarySource);
+  const successful: Array<{ source: string; fetched: FetchResult }> = [];
+  for (const candidate of candidates) {
+    const fetched = await fetchChapters(candidate.id, candidate.source);
+    attempts.push({
+      source: candidate.source,
+      status: fetched && !fetched.isProxy ? "ok" : "sem_dados",
+      value: fetched?.value ?? null,
+      selected: false,
+    });
+    if (fetched && !fetched.isProxy) {
+      successful.push({ source: candidate.source, fetched });
+      if (!verifyAllSources) break;
+    }
+  }
+
+  const selected = primary
+    ? (!primary.isProxy ? { source: primarySource, fetched: primary } : successful[0] ?? null)
+    : successful[0] ?? null;
+  if (selected) {
+    const selectedAttempt = attempts.find((attempt) => attempt.source === selected.source);
+    if (selectedAttempt) selectedAttempt.selected = true;
+  }
+
+  return {
+    fetched: selected?.fetched ?? null,
+    selectedSource: selected?.source ?? null,
+    attempts,
+  };
+}
+
+function addDiagnosisToSummary(
+  summary: NotificationCheckSummary,
+  title: string,
+  primarySource: string,
+  diagnosis: Awaited<ReturnType<typeof fetchWithFallback>>,
+): void {
+  summary.attempts.push({
+    title,
+    primarySource,
+    selectedSource: diagnosis.selectedSource,
+    attempts: diagnosis.attempts,
+  });
+  if (diagnosis.selectedSource) {
+    summary.successfulSources++;
+    if (diagnosis.selectedSource !== primarySource) summary.fallbackUsed++;
+  } else {
+    summary.sourcesWithoutData++;
+  }
+
+  for (const attempt of diagnosis.attempts) {
+    if (attempt.status !== "sem_dados") continue;
+    void recordBotError({
+      source: "notification_source",
+      errorCode: "SOURCE_NO_DATA",
+      error: new Error(`A fonte ${attempt.source} não retornou capítulos`),
+      context: {
+        title,
+        primarySource,
+        attemptedSource: attempt.source,
+      },
+    });
+  }
+}
+
 async function sendNotification(
   client: Client,
   channelId: string,
@@ -433,10 +653,10 @@ async function sendNotification(
   mentions: string[] = [],
   source?: string,
   isProxy = false,
-) {
+): Promise<boolean> {
   try {
     const channel = await client.channels.fetch(channelId);
-    if (!channel || !(channel instanceof TextChannel)) return;
+    if (!channel || !(channel instanceof TextChannel)) return false;
 
     const isAnime = source === "anilist-anime";
     const unidade = isAnime ? "episódio(s)" : "capítulo(s)";
@@ -478,6 +698,7 @@ async function sendNotification(
     const content = mentions.length > 0 ? mentions.join(" ").slice(0, 2000) : undefined;
 
     await channel.send({ content, embeds: [embed] });
+    return true;
   } catch (err) {
     logger.error({ err, channelId }, "Erro ao enviar notificação");
     void recordBotError({
@@ -486,111 +707,159 @@ async function sendNotification(
       error: err,
       context: { channelId, title },
     });
+    return false;
   }
 }
 
-export async function runCheck(client: Client) {
+export async function runCheck(
+  client: Client,
+  options: { verifyAllSources?: boolean } = {},
+): Promise<NotificationCheckSummary> {
   logger.info("Verificando atualizações de capítulos...");
 
   const canais = await db.select().from(notificacaoCanaisTable);
   const manhwas = await getTrackedManhwas();
-  if (!manhwas.length) return;
+  const summary: NotificationCheckSummary = {
+    titlesChecked: manhwas.length,
+    successfulSources: 0,
+    sourcesWithoutData: 0,
+    fallbackUsed: 0,
+    notificationsSent: 0,
+    attempts: [],
+  };
+  if (!manhwas.length) return summary;
 
   for (const m of manhwas) {
     try {
+      let prefetchedDiagnosis: Awaited<ReturnType<typeof fetchWithFallback>> | null = null;
+
       if (m.source === "jikan") {
         const mal = await getJikanMangaById(Number(m.manhwaId));
-        if (!mal) {
+        if (!mal || mal.chapters == null) {
           logger.debug({ title: m.title, manhwaId: m.manhwaId }, "MAL/Jikan retornou null — pulando título");
-          continue;
+          prefetchedDiagnosis = await fetchWithFallback(
+            m.title,
+            m.source,
+            m.manhwaId,
+            options.verifyAllSources ?? false,
+          );
+        } else if (options.verifyAllSources) {
+          // O teste administrativo consulta as alternativas mesmo quando o
+          // MAL respondeu, para mostrar a saúde de todas as fontes.
+          prefetchedDiagnosis = await fetchWithFallback(m.title, m.source, m.manhwaId, true);
+          addDiagnosisToSummary(summary, m.title, m.source, prefetchedDiagnosis);
+        } else {
+          addDiagnosisToSummary(summary, m.title, m.source, {
+            fetched: { value: mal.chapters ?? 0, isProxy: false },
+            selectedSource: m.source,
+            attempts: [{
+              source: m.source,
+              status: mal.chapters != null ? "ok" : "sem_dados",
+              value: mal.chapters,
+              selected: mal.chapters != null,
+            }],
+          });
         }
 
-        const snapshot: MalSnapshot = {
+        if (mal && mal.chapters != null) {
+          const snapshot: MalSnapshot = {
           chapters: mal.chapters,
           synopsis: mal.synopsis,
           score: mal.score,
           status: mal.rawStatus ?? mal.status,
-        };
-        const [tracked] = await db
+          };
+          const [tracked] = await db
           .select({
             id: capitulosRastreados.id,
             lastChapters: capitulosRastreados.lastChapters,
           })
           .from(capitulosRastreados)
           .where(eq(capitulosRastreados.manhwaId, m.manhwaId));
-        const { previous, changedFields } = await recordMalSnapshot(m.manhwaId, m.title, snapshot);
+          const { previous, changedFields } = await recordMalSnapshot(m.manhwaId, m.title, snapshot);
 
-        if (!tracked) {
-          await db.insert(capitulosRastreados).values({
-            manhwaId: m.manhwaId,
-            source: m.source,
-            title: m.title,
-            coverUrl: m.coverUrl,
-            siteUrl: m.siteUrl,
-            lastChapters: snapshot.chapters,
-          });
-        } else {
-          const update: {
-            lastChecked: ReturnType<typeof sql>;
-            lastChapters?: number;
-          } = { lastChecked: sql`now()` };
-          if (snapshot.chapters != null && Number.isFinite(snapshot.chapters)) {
-            update.lastChapters = snapshot.chapters;
+          if (!tracked) {
+            await db.insert(capitulosRastreados).values({
+              manhwaId: m.manhwaId,
+              source: m.source,
+              title: m.title,
+              coverUrl: m.coverUrl,
+              siteUrl: m.siteUrl,
+              lastChapters: snapshot.chapters,
+            });
+          } else {
+            const update: {
+              lastChecked: ReturnType<typeof sql>;
+              lastChapters?: number;
+            } = { lastChecked: sql`now()` };
+            if (snapshot.chapters != null && Number.isFinite(snapshot.chapters)) {
+              update.lastChapters = snapshot.chapters;
+            }
+            await db
+              .update(capitulosRastreados)
+              .set(update)
+              .where(eq(capitulosRastreados.manhwaId, m.manhwaId));
           }
-          await db
-            .update(capitulosRastreados)
-            .set(update)
-            .where(eq(capitulosRastreados.manhwaId, m.manhwaId));
-        }
 
-        // Após a implantação do histórico, use o rastreador existente como
-        // baseline até que a primeira linha histórica esteja disponível.
-        const previousChapters = previous?.chapters ?? tracked?.lastChapters ?? null;
-        const chapterIncreased =
-          previousChapters != null &&
-          snapshot.chapters != null &&
-          snapshot.chapters > previousChapters;
+          // Após a implantação do histórico, use o rastreador existente como
+          // baseline até que a primeira linha histórica esteja disponível.
+          const previousChapters = previous?.chapters ?? tracked?.lastChapters ?? null;
+          const chapterIncreased =
+            previousChapters != null &&
+            snapshot.chapters != null &&
+            snapshot.chapters > previousChapters;
 
-        if (chapterIncreased && snapshot.chapters != null && previousChapters != null) {
-          logger.info(
-            { title: m.title, previousChapters, newChapters: snapshot.chapters, changedFields },
-            "Novo capítulo do MAL detectado",
-          );
-          for (const canal of canais) {
-            const subscribers = await db
-              .select({ discordUserId: assinaturasTable.discordUserId })
-              .from(assinaturasTable)
-              .where(
-                and(
-                  eq(assinaturasTable.manhwaId, m.manhwaId),
-                  eq(assinaturasTable.guildId, canal.guildId),
-                ),
+          if (chapterIncreased && snapshot.chapters != null && previousChapters != null) {
+            logger.info(
+              { title: m.title, previousChapters, newChapters: snapshot.chapters, changedFields },
+              "Novo capítulo do MAL detectado",
+            );
+            for (const canal of canais) {
+              const subscribers = await db
+                .select({ discordUserId: assinaturasTable.discordUserId })
+                .from(assinaturasTable)
+                .where(
+                  and(
+                    eq(assinaturasTable.manhwaId, m.manhwaId),
+                    eq(assinaturasTable.guildId, canal.guildId),
+                  ),
+                );
+              const mentions = subscribers.map((s) => `<@${s.discordUserId}>`);
+              const sent = await sendNotification(
+                client,
+                canal.channelId,
+                m.title,
+                snapshot.chapters,
+                previousChapters,
+                m.siteUrl,
+                m.coverUrl ?? null,
+                mentions,
+                m.source,
               );
-            const mentions = subscribers.map((s) => `<@${s.discordUserId}>`);
-            await sendNotification(
-              client,
-              canal.channelId,
-              m.title,
-              snapshot.chapters,
-              previousChapters,
-              m.siteUrl,
-              m.coverUrl ?? null,
-              mentions,
-              m.source,
+              if (sent) summary.notificationsSent++;
+            }
+          } else if (changedFields.length) {
+            logger.info(
+              { title: m.title, changedFields },
+              "Alteração de metadados do MAL registrada sem notificação",
             );
           }
-        } else if (changedFields.length) {
-          logger.info(
-            { title: m.title, changedFields },
-            "Alteração de metadados do MAL registrada sem notificação",
-          );
-        }
 
-        await new Promise((r) => setTimeout(r, 500));
-        continue;
+          await new Promise((r) => setTimeout(r, 500));
+          continue;
+        }
       }
 
-      const fetched = await fetchChapters(m.manhwaId, m.source);
+      const diagnosis = prefetchedDiagnosis ?? await fetchWithFallback(
+        m.title,
+        m.source,
+        m.manhwaId,
+        options.verifyAllSources ?? false,
+      );
+      if (!prefetchedDiagnosis || m.source !== "jikan" || !options.verifyAllSources) {
+        addDiagnosisToSummary(summary, m.title, m.source, diagnosis);
+      }
+
+      const fetched = diagnosis.fetched;
       if (fetched === null) {
         logger.debug({ title: m.title, source: m.source, manhwaId: m.manhwaId }, "API retornou null — pulando título");
         continue;
@@ -624,7 +893,7 @@ export async function runCheck(client: Client) {
         // Não enviamos notificação nesses casos — só atualizamos o DB — para evitar falsos positivos
         // causados por edições de metadados (capa, sinopse, etc.) que também alteram updatedAt.
         if (!isProxy) {
-          for (const canal of canais) {
+            for (const canal of canais) {
             const subscribers = await db
               .select({ discordUserId: assinaturasTable.discordUserId })
               .from(assinaturasTable)
@@ -635,7 +904,8 @@ export async function runCheck(client: Client) {
                 )
               );
             const mentions = subscribers.map((s) => `<@${s.discordUserId}>`);
-            await sendNotification(client, canal.channelId, m.title, newChapters, lastChapters, m.siteUrl, m.coverUrl ?? null, mentions, m.source, isProxy);
+              const sent = await sendNotification(client, canal.channelId, m.title, newChapters, lastChapters, m.siteUrl, m.coverUrl ?? null, mentions, diagnosis.selectedSource ?? m.source, isProxy);
+              if (sent) summary.notificationsSent++;
           }
         }
 
@@ -667,6 +937,7 @@ export async function runCheck(client: Client) {
   }
 
   logger.info("Verificação de capítulos concluída.");
+  return summary;
 }
 
 export function startNotificacaoService(client: Client) {
