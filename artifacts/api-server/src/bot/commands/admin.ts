@@ -397,15 +397,32 @@ async function handleTestarNotificacoes(interaction: ChatInputCommandInteraction
   await interaction.editReply({ embeds: [startEmbed] });
 
   try {
-    await runCheck(client);
+    const summary = await runCheck(client, { verifyAllSources: true });
+
+    const sourceLines = summary.attempts.slice(0, 8).map((item) => {
+      const attempts = item.attempts
+        .map((attempt) => {
+          const value = attempt.value != null ? ` (${attempt.value})` : "";
+          return `${attempt.status === "ok" ? "✅" : "❌"} ${attempt.source}${value}`;
+        })
+        .join(" · ");
+      const selected = item.selectedSource
+        ? ` → usando **${item.selectedSource}**`
+        : " → nenhuma fonte retornou dados";
+      return `**${item.title.slice(0, 60)}**${selected}\n${attempts}`;
+    });
 
     const doneEmbed = new EmbedBuilder()
       .setTitle("✅ Verificação Concluída")
       .setColor(0x2ecc71)
       .setDescription(
         "A verificação manual terminou com sucesso.\n\n" +
-        "> Se havia atualizações, as notificações já foram enviadas.\n" +
-        "> Se não chegou nada, é porque não há novidades desde a última checagem."
+        `> Títulos verificados: **${summary.titlesChecked}**\n` +
+        `> Fontes com resposta: **${summary.successfulSources}**\n` +
+        `> Sem dados: **${summary.sourcesWithoutData}**\n` +
+        `> Fallbacks usados: **${summary.fallbackUsed}**\n` +
+        `> Notificações enviadas: **${summary.notificationsSent}**\n\n` +
+        (sourceLines.length ? `**Diagnóstico das fontes:**\n${sourceLines.join("\n\n")}` : "Nenhum título rastreado.")
       );
 
     await interaction.editReply({ embeds: [doneEmbed] });
