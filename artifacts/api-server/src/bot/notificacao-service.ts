@@ -94,6 +94,54 @@ interface FetchResult {
   isProxy: boolean;
 }
 
+let mangaUpdatesSessionToken: string | null = null;
+let mangaUpdatesSessionExpiresAt = 0;
+
+async function getMangaUpdatesSessionToken(forceRefresh = false): Promise<string | null> {
+  if (
+    !forceRefresh &&
+    mangaUpdatesSessionToken &&
+    mangaUpdatesSessionExpiresAt > Date.now()
+  ) {
+    return mangaUpdatesSessionToken;
+  }
+
+  const username = process.env.MANGAUPDATES_USERNAME;
+  const password = process.env.MANGAUPDATES_PASSWORD;
+  if (!username || !password) return null;
+
+  try {
+    const res = await fetch("https://api.mangaupdates.com/v1/account/login", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ username, password }),
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) return null;
+
+    const json = (await res.json()) as {
+      context?: { session_token?: string };
+    };
+    const token = json.context?.session_token;
+    if (!token) return null;
+
+    // A sessão é reutilizada durante uma hora; em caso de 401 ela é renovada.
+    mangaUpdatesSessionToken = token;
+    mangaUpdatesSessionExpiresAt = Date.now() + 60 * 60 * 1000;
+    return token;
+  } catch {
+    return null;
+  }
+}
+
+function parseMangaUpdatesStatusChapter(status: string | null | undefined): number | null {
+  if (!status) return null;
+  const chapters = [...status.matchAll(/(\d+(?:\.\d+)?)\s+Chapters?/gi)]
+    .map((match) => Number(match[1]))
+    .filter((chapter) => Number.isFinite(chapter));
+  return chapters.length ? Math.max(...chapters) : null;
+}
+
 export type SourceAttempt = {
   source: string;
   status: "ok" | "sem_dados";
@@ -240,8 +288,8 @@ async function fetchChapters(manhwaId: string, source: string): Promise<FetchRes
         }
       }
 
-      // Sem crossref disponível: usa updatedAt como proxy silencioso (não notifica)
-      if (media.updatedAt != null) return { value: media.updatedAt, isProxy: true };
+      // updatedAt é apenas um timestamp da página, não uma contagem de capítulos.
+      // Não o use como baseline: alterações de capa/sinopse também mudam esse valor.
       return null;
     } catch {
       return null;
@@ -320,16 +368,40 @@ async function fetchChapters(manhwaId: string, source: string): Promise<FetchRes
 
   if (source === 'mangaupdates') {
     try {
-      // MangaUpdates no longer exposes this as JSON at /releases. The old
-      // endpoint now returns 405; the supported per-series feed is RSS/XML.
-      const res = await fetch(`https://api.mangaupdates.com/v1/series/${manhwaId}/rss`, {
-        headers: { Accept: 'application/rss+xml, application/xml, text/xml' },
-        signal: AbortSignal.timeout(8000),
-      });
+      const token = await getMangaUpdatesSessionToken();
+      if (!token) return null;
+
+      const requestSeries = async (sessionToken: string) => fetch(
+        `https://api.mangaupdates.com/v1/series/${encodeURIComponent(manhwaId)}`,
+        {
+          headers: {
+            Accept: "application/json",
+            Authorization: `Bearer ${sessionToken}`,
+          },
+          signal: AbortSignal.timeout(8000),
+        },
+      );
+
+      let res = await requestSeries(token);
+      if (res.status === 401) {
+        const refreshedToken = await getMangaUpdatesSessionToken(true);
+        if (!refreshedToken) return null;
+        res = await requestSeries(refreshedToken);
+      }
       if (!res.ok) return null;
-      const xml = await res.text();
-      const chapter = parseMangaUpdatesRssChapter(xml);
-      if (chapter === null) return null;
+
+      const series = (await res.json()) as {
+        latest_chapter?: number | null;
+        status?: string | null;
+      };
+      const latestChapter =
+        typeof series.latest_chapter === "number" && series.latest_chapter > 0
+          ? series.latest_chapter
+          : null;
+      const statusChapter = parseMangaUpdatesStatusChapter(series.status);
+      const chapter = Math.max(latestChapter ?? 0, statusChapter ?? 0);
+
+      if (!chapter) return null;
       return { value: chapter, isProxy: false };
     } catch {
       return null;
@@ -421,42 +493,6 @@ export async function checkTrackedTitle(
     hasNewChapters,
     durationMs: Date.now() - startedAt,
   };
-}
-
-/**
- * MangaUpdates' RSS titles use values such as "Title c.200", "c.4-10",
- * and sometimes non-numeric labels like "c.Prologue". The feed is ordered
- * newest-first, but we calculate the maximum so duplicate scanlation-group
- * entries cannot make the tracked value move backwards.
- */
-function parseMangaUpdatesRssChapter(xml: string): number | null {
-  const titles = [...xml.matchAll(/<title\b[^>]*>([\s\S]*?)<\/title>/gi)]
-    .map((match) => (match[1] ?? ""))
-    .map((title) =>
-      title
-        .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/gi, "$1")
-        .replace(/<[^>]+>/g, "")
-        .replace(/&amp;/gi, "&")
-        .replace(/&lt;/gi, "<")
-        .replace(/&gt;/gi, ">")
-        .replace(/&quot;/gi, '"')
-        .replace(/&#39;|&#039;/gi, "'")
-        .trim(),
-    );
-
-  const chapters: number[] = [];
-  for (const title of titles) {
-    const match = title.match(
-      /\b(?:chapter|ch|c)\.?\s*(\d+(?:\.\d+)?)(?:\s*[-–]\s*(\d+(?:\.\d+)?))?/i,
-    );
-    if (!match) continue;
-
-    const endChapter = match[2] ?? match[1];
-    const chapter = Number(endChapter);
-    if (Number.isFinite(chapter)) chapters.push(chapter);
-  }
-
-  return chapters.length > 0 ? Math.max(...chapters) : null;
 }
 
 async function getTrackedManhwas() {
@@ -755,7 +791,6 @@ async function sendMetadataNotification(
   title: string,
   siteUrl: string,
   coverUrl: string | null,
-  mentions: string[],
   previous: {
     synopsis: string | null;
     score: number | null;
@@ -808,8 +843,7 @@ async function sendMetadataNotification(
       .setFooter({ text: "Alteração de página • MyAnimeList" });
 
     if (coverUrl) embed.setThumbnail(coverUrl);
-    const content = mentions.length > 0 ? mentions.join(" ").slice(0, 2000) : undefined;
-    await channel.send({ content, embeds: [embed] });
+    await channel.send({ embeds: [embed], allowedMentions: { parse: [] } });
     return true;
   } catch (err) {
     logger.error({ err, channelId }, "Erro ao enviar notificação de alteração");
@@ -959,23 +993,12 @@ export async function runCheck(
             );
             for (const canal of canais) {
               if (!canal.alterationChannelId) continue;
-              const subscribers = await db
-                .select({ discordUserId: assinaturasTable.discordUserId })
-                .from(assinaturasTable)
-                .where(
-                  and(
-                    eq(assinaturasTable.manhwaId, m.manhwaId),
-                    eq(assinaturasTable.guildId, canal.guildId),
-                  ),
-                );
-              const mentions = subscribers.map((s) => `<@${s.discordUserId}>`);
               const sent = await sendMetadataNotification(
                 client,
                 canal.alterationChannelId,
                 m.title,
                 m.siteUrl,
                 m.coverUrl ?? null,
-                mentions,
                 previous ?? {
                   synopsis: null,
                   score: null,

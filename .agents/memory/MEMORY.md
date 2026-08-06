@@ -1,4 +1,4 @@
-- [MangaUpdates releases](mangaupdates-api.md) — per-series releases use the RSS/XML route; the legacy JSON releases route returns 405.
+- [MangaUpdates releases](mangaupdates-api.md) — authenticated series details provide the usable latest-chapter/status data; public RSS is global and must not be treated as per-series.
 - [Notification source fallback](notification-source-fallback.md) — saved sources stay primary; alternatives use title matching and one selected real count.
 - [Discord Render worker](render-discord-worker.md) — Discord workers need DATABASE_URL and must not require PORT; use a long-running worker service.
 - [Discord component interactions](discord-component-interactions.md) — acknowledge button clicks atomically and log collector failures without exposing secrets.

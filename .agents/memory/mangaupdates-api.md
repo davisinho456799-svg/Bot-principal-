@@ -3,8 +3,10 @@ name: MangaUpdates releases API
 description: External API behavior for tracking MangaUpdates releases.
 ---
 
-MangaUpdates' current per-series release endpoint is `GET /v1/series/{id}/rss` and returns RSS/XML. The older JSON-style `GET /v1/series/{id}/releases` route returns HTTP 405.
+MangaUpdates authentication uses `PUT /v1/account/login` with the account credentials and returns `context.session_token`; protected calls use `Authorization: Bearer <token>`.
 
-**Why:** The notification checker can silently skip a subscribed title when it assumes the old JSON response shape.
+The public `rss.php?type=series&id=...` feed is global and ignores the series ID. Do not use it as a per-series chapter source. Authenticated `GET /v1/series/{id}` returns `latest_chapter`, but webtoon records may report `0` or an unreliable value; the `status` text can contain the authoritative total such as `227 Chapters`.
 
-**How to apply:** Parse numeric chapter values from RSS item titles, including ranges such as `c.4-10`; ignore non-numeric labels such as `c.Prologue`.
+**Why:** The notification checker can silently skip a subscribed title or notify using another work's release if it assumes the public RSS query is scoped by ID.
+
+**How to apply:** Cache the session token only in memory, refresh it after HTTP 401, prefer a positive `latest_chapter`, and otherwise extract the greatest `N Chapters` value from the authenticated series status. Treat missing/zero values as no data.
