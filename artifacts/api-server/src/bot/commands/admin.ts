@@ -14,6 +14,7 @@ import {
 import { and, eq, desc, sql } from "drizzle-orm";
 import { requireAdmin } from "../admin-guard.js";
 import { runCheck } from "../notificacao-service.js";
+import { extractHttpStatus } from "../error-log.js";
 
 export const data = new SlashCommandBuilder()
   .setName("admin")
@@ -192,21 +193,33 @@ async function handleErros(interaction: ChatInputCommandInteraction) {
     return;
   }
 
+  const statusCounts = new Map<string, number>();
+  for (const row of rows) {
+    const status = row.httpStatus ?? extractHttpStatus(row.message);
+    const bucket = status === 403 || status === 404 || status === 504 ? String(status) : "outros";
+    statusCounts.set(bucket, (statusCounts.get(bucket) ?? 0) + 1);
+  }
+  const statusSummary = ["403", "404", "504", "outros"]
+    .map((status) => `${status}: **${statusCounts.get(status) ?? 0}**`)
+    .join(" • ");
+
   const lines = rows.map((row) => {
     const when = new Date(row.createdAt).toLocaleString("pt-BR", {
       timeZone: "America/Sao_Paulo",
     });
     const command = row.command ? ` \`/${row.command}\`` : "";
     const guild = row.discordGuildId ? ` • servidor \`${row.discordGuildId}\`` : "";
+    const httpStatus = row.httpStatus ?? extractHttpStatus(row.message);
+    const statusLabel = httpStatus ? ` • HTTP \`${httpStatus}\`` : "";
     return (
       `\`${when}\` **${row.errorCode}** — ${row.message.slice(0, 180)}` +
-      `\n↳ origem: \`${row.source}\`${command}${guild} • ID \`${row.id}\``
+      `\n↳ origem: \`${row.source}\`${command}${guild}${statusLabel} • ID \`${row.id}\``
     );
   });
 
   const embed = new EmbedBuilder()
     .setTitle(`🧾 Histórico de erros — ${rows.length} registro(s)`)
-    .setDescription(lines.join("\n\n").slice(0, 4096))
+    .setDescription(`**Por classe:** ${statusSummary}\n\n${lines.join("\n\n")}`.slice(0, 4096))
     .setColor(0xe74c3c)
     .setFooter({ text: "Retenção automática: 30 dias • máximo de 500 por servidor" });
 

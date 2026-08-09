@@ -97,6 +97,15 @@ interface FetchResult {
 let mangaUpdatesSessionToken: string | null = null;
 let mangaUpdatesSessionExpiresAt = 0;
 
+function recordSourceHttpError(source: string, manhwaId: string, status: number): void {
+  void recordBotError({
+    source: "notification_source",
+    errorCode: "SOURCE_HTTP_ERROR",
+    error: new Error(`${source} HTTP ${status}`),
+    context: { source, manhwaId },
+  });
+}
+
 async function getMangaUpdatesSessionToken(forceRefresh = false): Promise<string | null> {
   if (
     !forceRefresh &&
@@ -254,7 +263,10 @@ async function fetchChapters(manhwaId: string, source: string): Promise<FetchRes
         body: JSON.stringify({ query: CHAPTERS_QUERY, variables: { id: parseInt(manhwaId, 10) } }),
         signal: AbortSignal.timeout(8000),
       });
-      if (!res.ok) return null;
+      if (!res.ok) {
+        recordSourceHttpError(source, manhwaId, res.status);
+        return null;
+      }
       const json = (await res.json()) as { data: { Media: MediaInfo } };
       const media = json.data?.Media;
       if (!media) return null;
@@ -301,7 +313,10 @@ async function fetchChapters(manhwaId: string, source: string): Promise<FetchRes
       // Sem filtro de idioma: pega o capítulo mais recente em qualquer idioma
       const params = new URLSearchParams({ manga: manhwaId, limit: "1", "order[chapter]": "desc" });
       const res = await fetch(`https://api.mangadex.org/chapter?${params}`, { signal: AbortSignal.timeout(8000) });
-      if (!res.ok) return null;
+      if (!res.ok) {
+        recordSourceHttpError(source, manhwaId, res.status);
+        return null;
+      }
       const json = (await res.json()) as { data: { attributes: { chapter: string | null } }[]; total: number };
       if (!json.data?.length) return null;
       const chap = json.data[0].attributes.chapter;
@@ -330,7 +345,10 @@ async function fetchChapters(manhwaId: string, source: string): Promise<FetchRes
         body: JSON.stringify({ query: ANIME_EP_QUERY, variables: { id: parseInt(manhwaId, 10) } }),
         signal: AbortSignal.timeout(8000),
       });
-      if (!res.ok) return null;
+      if (!res.ok) {
+        recordSourceHttpError(source, manhwaId, res.status);
+        return null;
+      }
       const json = (await res.json()) as {
         data: { Media: { episodes: number | null; nextAiringEpisode: { episode: number } | null; status: string | null } };
       };
@@ -356,7 +374,10 @@ async function fetchChapters(manhwaId: string, source: string): Promise<FetchRes
         headers: { Accept: 'application/json', 'User-Agent': 'Mozilla/5.0' },
         signal: AbortSignal.timeout(8000),
       });
-      if (!res.ok) return null;
+      if (!res.ok) {
+        recordSourceHttpError(source, manhwaId, res.status);
+        return null;
+      }
       const json = (await res.json()) as { comic?: { last_chapter?: number | null }; last_chapter?: number | null };
       const lastChapter = json.comic?.last_chapter ?? (json as { last_chapter?: number | null }).last_chapter ?? null;
       if (lastChapter == null) return null;
@@ -388,7 +409,10 @@ async function fetchChapters(manhwaId: string, source: string): Promise<FetchRes
         if (!refreshedToken) return null;
         res = await requestSeries(refreshedToken);
       }
-      if (!res.ok) return null;
+      if (!res.ok) {
+        recordSourceHttpError(source, manhwaId, res.status);
+        return null;
+      }
 
       const series = (await res.json()) as {
         latest_chapter?: number | null;
@@ -415,7 +439,10 @@ async function fetchChapters(manhwaId: string, source: string): Promise<FetchRes
         headers: { Accept: 'application/json' },
         signal: AbortSignal.timeout(8000),
       });
-      if (!res.ok) return null;
+      if (!res.ok) {
+        recordSourceHttpError(source, manhwaId, res.status);
+        return null;
+      }
       const json = (await res.json()) as { data?: { chapters?: number | null } };
       const chapters = json.data?.chapters;
       if (chapters == null) return null;
@@ -437,7 +464,10 @@ async function fetchChapters(manhwaId: string, source: string): Promise<FetchRes
         }),
         signal: AbortSignal.timeout(8000),
       });
-      if (!res.ok) return null;
+      if (!res.ok) {
+        recordSourceHttpError(source, manhwaId, res.status);
+        return null;
+      }
       const json = (await res.json()) as { count?: number; results?: unknown[] };
       const count = json.count ?? json.results?.length ?? null;
       if (count == null) return null;

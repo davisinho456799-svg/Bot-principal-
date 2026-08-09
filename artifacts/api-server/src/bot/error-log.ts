@@ -15,6 +15,55 @@ export type BotErrorInput = {
   context?: Record<string, unknown> | null;
 };
 
+type ErrorWithHttpStatus = {
+  status?: unknown;
+  statusCode?: unknown;
+  code?: unknown;
+  response?: { status?: unknown; statusCode?: unknown };
+  cause?: unknown;
+};
+
+function asHttpStatus(value: unknown): number | null {
+  if (typeof value === "number" && Number.isInteger(value) && value >= 100 && value <= 599) {
+    return value;
+  }
+  if (typeof value === "string" && /^\d{3}$/.test(value)) {
+    const status = Number(value);
+    return status >= 100 && status <= 599 ? status : null;
+  }
+  return null;
+}
+
+/**
+ * Obtém o status HTTP de erros do fetch, Discord e clientes de API.
+ * Também reconhece mensagens antigas como "API error: 504".
+ */
+export function extractHttpStatus(error: unknown): number | null {
+  if (error && typeof error === "object") {
+    const value = error as ErrorWithHttpStatus;
+    const directStatus =
+      asHttpStatus(value.status) ??
+      asHttpStatus(value.statusCode) ??
+      asHttpStatus(value.response?.status) ??
+      asHttpStatus(value.response?.statusCode);
+    if (directStatus !== null) return directStatus;
+
+    if (value.cause !== undefined) {
+      const causeStatus = extractHttpStatus(value.cause);
+      if (causeStatus !== null) return causeStatus;
+    }
+  }
+
+  const message =
+    error instanceof Error
+      ? error.message
+      : typeof error === "string"
+        ? error
+        : "";
+  const match = message.match(/\b([1-5]\d{2})\b/);
+  return match ? asHttpStatus(match[1]) : null;
+}
+
 function describeError(error: unknown): { message: string; stack: string | null } {
   if (error instanceof Error) {
     return { message: error.message || error.name, stack: error.stack ?? null };
@@ -64,6 +113,7 @@ function redactContext(context: Record<string, unknown> | null): Record<string, 
  */
 export async function recordBotError(input: BotErrorInput): Promise<number | null> {
   const { message, stack } = describeError(input.error);
+  const httpStatus = extractHttpStatus(input.error);
 
   try {
     const [created] = await db
@@ -75,6 +125,7 @@ export async function recordBotError(input: BotErrorInput): Promise<number | nul
         source: input.source,
         errorCode: input.errorCode,
         message: redactSensitive(message).slice(0, 4000),
+        httpStatus,
         context: {
           ...redactContext(input.context ?? null),
           stack: stack ? redactSensitive(stack).slice(0, 8000) : null,
