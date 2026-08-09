@@ -5,7 +5,7 @@ import {
   SlashCommandBuilder,
 } from "discord.js";
 import { db, assinaturasTable, favoritosTable } from "@workspace/db";
-import { and, eq, ilike } from "drizzle-orm";
+import { and, desc, eq, ilike } from "drizzle-orm";
 import { checkTrackedTitle } from "../notificacao-service.js";
 
 const SOURCE_LABELS: Record<string, string> = {
@@ -59,7 +59,7 @@ export async function autocomplete(interaction: AutocompleteInteraction): Promis
   const focused = interaction.options.getFocused().trim();
   const guildId = interaction.guildId;
 
-  if (!guildId || focused.length < 2) {
+  if (!guildId) {
     await interaction.respond([]);
     return;
   }
@@ -72,6 +72,23 @@ export async function autocomplete(interaction: AutocompleteInteraction): Promis
   }
 
   const pattern = `%${focused}%`;
+  const favoriteWhere = focused
+    ? and(
+        eq(favoritosTable.discordUserId, interaction.user.id),
+        ilike(favoritosTable.title, pattern),
+      )
+    : eq(favoritosTable.discordUserId, interaction.user.id);
+  const subscriptionWhere = focused
+    ? and(
+        eq(assinaturasTable.discordUserId, interaction.user.id),
+        eq(assinaturasTable.guildId, guildId),
+        ilike(assinaturasTable.title, pattern),
+      )
+    : and(
+        eq(assinaturasTable.discordUserId, interaction.user.id),
+        eq(assinaturasTable.guildId, guildId),
+      );
+
   const [favorites, subscriptions] = await Promise.all([
     db
       .select({
@@ -80,12 +97,8 @@ export async function autocomplete(interaction: AutocompleteInteraction): Promis
         title: favoritosTable.title,
       })
       .from(favoritosTable)
-      .where(
-        and(
-          eq(favoritosTable.discordUserId, interaction.user.id),
-          ilike(favoritosTable.title, pattern),
-        ),
-      )
+      .where(favoriteWhere)
+      .orderBy(desc(favoritosTable.addedAt))
       .limit(25),
     db
       .select({
@@ -94,13 +107,8 @@ export async function autocomplete(interaction: AutocompleteInteraction): Promis
         title: assinaturasTable.title,
       })
       .from(assinaturasTable)
-      .where(
-        and(
-          eq(assinaturasTable.discordUserId, interaction.user.id),
-          eq(assinaturasTable.guildId, guildId),
-          ilike(assinaturasTable.title, pattern),
-        ),
-      )
+      .where(subscriptionWhere)
+      .orderBy(desc(assinaturasTable.addedAt))
       .limit(25),
   ]);
 
@@ -182,18 +190,31 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
   await interaction.deferReply({ ephemeral: true });
 
   try {
-    const result = await checkTrackedTitle(manhwaId, source);
+    const result = await checkTrackedTitle(manhwaId, source, title);
+    const consultedSource = result.selectedSource ?? source;
     const embed = new EmbedBuilder()
       .setTitle(`🔎 Verificação: ${title}`.slice(0, 256))
       .setColor(result.currentChapters == null ? 0xe67e22 : 0x3498db)
       .addFields(
-        { name: "Fonte consultada", value: `${sourceIcon(source)} ${sourceLabel(source)}`, inline: true },
+        {
+          name: "Fonte consultada",
+          value: `${sourceIcon(consultedSource)} ${sourceLabel(consultedSource)}`,
+          inline: true,
+        },
         {
           name: "Tempo da consulta",
           value: `${(result.durationMs / 1000).toFixed(1)}s`,
           inline: true,
         },
       );
+
+    if (consultedSource !== source) {
+      embed.addFields({
+        name: "Fonte original",
+        value: `${sourceIcon(source)} ${sourceLabel(source)} não retornou capítulos; usei uma fonte equivalente.`,
+        inline: false,
+      });
+    }
 
     if (result.currentChapters == null) {
       embed.setDescription(

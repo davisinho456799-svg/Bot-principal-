@@ -492,6 +492,7 @@ export interface TitleCheckResult {
   lastChapters: number | null;
   isProxy: boolean;
   hasNewChapters: boolean | null;
+  selectedSource: string | null;
   durationMs: number;
 }
 
@@ -502,13 +503,25 @@ export interface TitleCheckResult {
 export async function checkTrackedTitle(
   manhwaId: string,
   source: string,
+  title?: string,
 ): Promise<TitleCheckResult> {
   const startedAt = Date.now();
   const [tracked] = await db
     .select({ lastChapters: capitulosRastreados.lastChapters })
     .from(capitulosRastreados)
     .where(eq(capitulosRastreados.manhwaId, manhwaId));
-  const fetched = await fetchChapters(manhwaId, source);
+  let fetched = await fetchChapters(manhwaId, source);
+  let selectedSource = fetched ? source : null;
+
+  // O MAL/Jikan frequentemente deixa `chapters` nulo em obras em andamento.
+  // Nesse caso, tenta uma fonte equivalente pelo título, sem alterar a linha
+  // de base nem disparar notificações.
+  if ((!fetched || fetched.isProxy) && title) {
+    const diagnosis = await fetchWithFallback(title, source, manhwaId);
+    fetched = diagnosis.fetched;
+    selectedSource = diagnosis.selectedSource;
+  }
+
   const currentChapters = fetched?.value ?? null;
   const isProxy = fetched?.isProxy ?? false;
   const hasNewChapters =
@@ -521,6 +534,7 @@ export async function checkTrackedTitle(
     lastChapters: tracked?.lastChapters ?? null,
     isProxy,
     hasNewChapters,
+    selectedSource,
     durationMs: Date.now() - startedAt,
   };
 }
