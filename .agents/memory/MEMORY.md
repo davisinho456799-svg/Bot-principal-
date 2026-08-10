@@ -5,3 +5,4 @@
 - [MAL history rollout](mal-history-rollout.md) — keep the initial snapshot plus 10 changes; apply Neon schema before activation and ask before commit/push.
 - [Notification channel schema](notification-channel-schema.md) — extend the legacy channel table additively; Drizzle push may require interactive conflict resolution.
 - [Notification HTTP status logging](notification-http-status-logging.md) — classify source failures through the existing error history without interrupting Render worker fallback.
+- [GitHub publishing](github-publishing.md) — GitHub authorization must be bound to this Repl; a configured HTTPS remote alone cannot push or force-push.
