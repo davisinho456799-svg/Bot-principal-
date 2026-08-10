@@ -6,21 +6,31 @@
  * OpenAPI spec version: 0.1.0
  */
 import {
+  useMutation,
   useQuery
 } from '@tanstack/react-query';
 import type {
+  MutationFunction,
   QueryFunction,
   QueryKey,
+  UseMutationOptions,
+  UseMutationResult,
   UseQueryOptions,
   UseQueryResult
 } from '@tanstack/react-query';
 
 import type {
   ChapterList,
+  CheckResult,
+  ErrorLog,
+  ErrorLogInput,
+  ErrorResponse,
   GetMangaUpdatesSeriesParams,
   GetMangaUpdatesTrackingParams,
   HealthStatus,
   ListComickChaptersParams,
+  ListErrorLogsParams,
+  ListSubscriptionsParams,
   MangaAggregate,
   MangaUpdatesReleaseResponse,
   MangaUpdatesSearchResponse,
@@ -28,11 +38,13 @@ import type {
   MangaUpdatesTrackingSnapshot,
   SearchMangaAggregateParams,
   SearchMangaUpdatesParams,
-  SearchMangaUpdatesReleasesParams
+  SearchMangaUpdatesReleasesParams,
+  Subscription,
+  SubscriptionInput
 } from './api.schemas';
 
 import { customFetch } from '../custom-fetch';
-import type { ErrorType } from '../custom-fetch';
+import type { ErrorType , BodyType } from '../custom-fetch';
 
 type AwaitedInput<T> = PromiseLike<T> | T;
 
@@ -639,4 +651,462 @@ export function useGetMangaUpdatesTracking<TData = Awaited<ReturnType<typeof get
 
 
 
+
+export const getListSubscriptionsUrl = (params?: ListSubscriptionsParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : String(value))
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/subscriptions?${stringifiedParams}` : `/api/subscriptions`
+}
+
+/**
+ * Returns all active MAL subscriptions, optionally filtered by guild
+ * @summary List all subscriptions
+ */
+export const listSubscriptions = async (params?: ListSubscriptionsParams, options?: Parameters<typeof customFetch>[1]): Promise<Subscription[]> => {
+
+  return customFetch<Subscription[]>(getListSubscriptionsUrl(params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getListSubscriptionsQueryKey = (params?: ListSubscriptionsParams,) => {
+    return [
+    `/api/subscriptions`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getListSubscriptionsQueryOptions = <TData = Awaited<ReturnType<typeof listSubscriptions>>, TError = ErrorType<unknown>>(params?: ListSubscriptionsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listSubscriptions>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListSubscriptionsQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listSubscriptions>>> = ({ signal }) => listSubscriptions(params, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listSubscriptions>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type ListSubscriptionsQueryResult = NonNullable<Awaited<ReturnType<typeof listSubscriptions>>>
+export type ListSubscriptionsQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary List all subscriptions
+ */
+
+export function useListSubscriptions<TData = Awaited<ReturnType<typeof listSubscriptions>>, TError = ErrorType<unknown>>(
+ params?: ListSubscriptionsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listSubscriptions>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getListSubscriptionsQueryOptions(params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getCreateSubscriptionUrl = () => {
+
+
+
+
+  return `/api/subscriptions`
+}
+
+/**
+ * Subscribes a Discord user to receive notifications for a MAL manga/anime
+ * @summary Subscribe to a MAL item
+ */
+export const createSubscription = async (subscriptionInput: SubscriptionInput, options?: Parameters<typeof customFetch>[1]): Promise<Subscription> => {
+
+  return customFetch<Subscription>(getCreateSubscriptionUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(subscriptionInput)
+  }
+);}
+
+
+
+
+
+export const getCreateSubscriptionMutationOptions = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createSubscription>>, TError,{data: BodyType<SubscriptionInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof createSubscription>>, TError,{data: BodyType<SubscriptionInput>}, TContext> => {
+
+const mutationKey = ['createSubscription'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof createSubscription>>, {data: BodyType<SubscriptionInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  createSubscription(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CreateSubscriptionMutationResult = NonNullable<Awaited<ReturnType<typeof createSubscription>>>
+    export type CreateSubscriptionMutationBody = BodyType<SubscriptionInput>
+    export type CreateSubscriptionMutationError = ErrorType<ErrorResponse>
+
+    /**
+ * @summary Subscribe to a MAL item
+ */
+export const useCreateSubscription = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createSubscription>>, TError,{data: BodyType<SubscriptionInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof createSubscription>>,
+        TError,
+        {data: BodyType<SubscriptionInput>},
+        TContext
+      > => {
+      return useMutation(getCreateSubscriptionMutationOptions(options));
+    }
+
+export const getDeleteSubscriptionUrl = (id: number,) => {
+
+
+
+
+  return `/api/subscriptions/${id}`
+}
+
+/**
+ * Removes a subscription by ID
+ * @summary Remove a subscription
+ */
+export const deleteSubscription = async (id: number, options?: Parameters<typeof customFetch>[1]): Promise<void> => {
+
+  return customFetch<void>(getDeleteSubscriptionUrl(id),
+  {
+    ...options,
+    method: 'DELETE'
+
+
+  }
+);}
+
+
+
+
+
+export const getDeleteSubscriptionMutationOptions = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteSubscription>>, TError,{id: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof deleteSubscription>>, TError,{id: number}, TContext> => {
+
+const mutationKey = ['deleteSubscription'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof deleteSubscription>>, {id: number}> = (props) => {
+          const {id} = props ?? {};
+
+          return  deleteSubscription(id,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type DeleteSubscriptionMutationResult = NonNullable<Awaited<ReturnType<typeof deleteSubscription>>>
+
+    export type DeleteSubscriptionMutationError = ErrorType<ErrorResponse>
+
+    /**
+ * @summary Remove a subscription
+ */
+export const useDeleteSubscription = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteSubscription>>, TError,{id: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof deleteSubscription>>,
+        TError,
+        {id: number},
+        TContext
+      > => {
+      return useMutation(getDeleteSubscriptionMutationOptions(options));
+    }
+
+export const getCheckSubscriptionUrl = (id: number,) => {
+
+
+
+
+  return `/api/subscriptions/${id}/check`
+}
+
+/**
+ * Fetches the latest data from MAL for this subscription, stores a snapshot (synopsis, score, status, chapters), and returns whether chapters changed. Keeps only the 2 most recent snapshots — oldest is deleted automatically. Only returns changed=true when the chapter count increases.
+ * @summary Check for updates on a subscription
+ */
+export const checkSubscription = async (id: number, options?: Parameters<typeof customFetch>[1]): Promise<CheckResult> => {
+
+  return customFetch<CheckResult>(getCheckSubscriptionUrl(id),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+
+
+export const getCheckSubscriptionMutationOptions = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof checkSubscription>>, TError,{id: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof checkSubscription>>, TError,{id: number}, TContext> => {
+
+const mutationKey = ['checkSubscription'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof checkSubscription>>, {id: number}> = (props) => {
+          const {id} = props ?? {};
+
+          return  checkSubscription(id,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CheckSubscriptionMutationResult = NonNullable<Awaited<ReturnType<typeof checkSubscription>>>
+
+    export type CheckSubscriptionMutationError = ErrorType<ErrorResponse>
+
+    /**
+ * @summary Check for updates on a subscription
+ */
+export const useCheckSubscription = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof checkSubscription>>, TError,{id: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof checkSubscription>>,
+        TError,
+        {id: number},
+        TContext
+      > => {
+      return useMutation(getCheckSubscriptionMutationOptions(options));
+    }
+
+export const getListErrorLogsUrl = (params?: ListErrorLogsParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : String(value))
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/errors?${stringifiedParams}` : `/api/errors`
+}
+
+/**
+ * Returns recent errors, optionally filtered by Discord guild.
+ * @summary List bot errors
+ */
+export const listErrorLogs = async (params?: ListErrorLogsParams, options?: Parameters<typeof customFetch>[1]): Promise<ErrorLog[]> => {
+
+  return customFetch<ErrorLog[]>(getListErrorLogsUrl(params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getListErrorLogsQueryKey = (params?: ListErrorLogsParams,) => {
+    return [
+    `/api/errors`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getListErrorLogsQueryOptions = <TData = Awaited<ReturnType<typeof listErrorLogs>>, TError = ErrorType<unknown>>(params?: ListErrorLogsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listErrorLogs>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListErrorLogsQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listErrorLogs>>> = ({ signal }) => listErrorLogs(params, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listErrorLogs>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type ListErrorLogsQueryResult = NonNullable<Awaited<ReturnType<typeof listErrorLogs>>>
+export type ListErrorLogsQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary List bot errors
+ */
+
+export function useListErrorLogs<TData = Awaited<ReturnType<typeof listErrorLogs>>, TError = ErrorType<unknown>>(
+ params?: ListErrorLogsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listErrorLogs>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getListErrorLogsQueryOptions(params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getCreateErrorLogUrl = () => {
+
+
+
+
+  return `/api/errors`
+}
+
+/**
+ * Stores an error reported by the Discord bot in Neon for later inspection.
+ * @summary Record a bot error
+ */
+export const createErrorLog = async (errorLogInput: ErrorLogInput, options?: Parameters<typeof customFetch>[1]): Promise<ErrorLog> => {
+
+  return customFetch<ErrorLog>(getCreateErrorLogUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(errorLogInput)
+  }
+);}
+
+
+
+
+
+export const getCreateErrorLogMutationOptions = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createErrorLog>>, TError,{data: BodyType<ErrorLogInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof createErrorLog>>, TError,{data: BodyType<ErrorLogInput>}, TContext> => {
+
+const mutationKey = ['createErrorLog'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof createErrorLog>>, {data: BodyType<ErrorLogInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  createErrorLog(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CreateErrorLogMutationResult = NonNullable<Awaited<ReturnType<typeof createErrorLog>>>
+    export type CreateErrorLogMutationBody = BodyType<ErrorLogInput>
+    export type CreateErrorLogMutationError = ErrorType<ErrorResponse>
+
+    /**
+ * @summary Record a bot error
+ */
+export const useCreateErrorLog = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createErrorLog>>, TError,{data: BodyType<ErrorLogInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof createErrorLog>>,
+        TError,
+        {data: BodyType<ErrorLogInput>},
+        TContext
+      > => {
+      return useMutation(getCreateErrorLogMutationOptions(options));
+    }
 

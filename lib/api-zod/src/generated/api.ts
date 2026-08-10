@@ -217,3 +217,155 @@ export const GetMangaUpdatesTrackingResponse = zod.object({
 })
 
 
+/**
+ * Returns all active MAL subscriptions, optionally filtered by guild
+ * @summary List all subscriptions
+ */
+export const ListSubscriptionsQueryParams = zod.object({
+  "guild_id": zod.coerce.string().optional().describe('Filter by Discord guild ID')
+})
+
+export const ListSubscriptionsResponseItem = zod.object({
+  "id": zod.number(),
+  "discord_user_id": zod.string(),
+  "discord_channel_id": zod.string(),
+  "discord_guild_id": zod.string(),
+  "mal_item_id": zod.number(),
+  "mal_item_type": zod.enum(['manga', 'anime']),
+  "item_name": zod.string(),
+  "created_at": zod.coerce.date()
+})
+export const ListSubscriptionsResponse = zod.array(ListSubscriptionsResponseItem)
+
+
+/**
+ * Subscribes a Discord user to receive notifications for a MAL manga/anime
+ * @summary Subscribe to a MAL item
+ */
+export const CreateSubscriptionBody = zod.object({
+  "discord_user_id": zod.string(),
+  "discord_channel_id": zod.string(),
+  "discord_guild_id": zod.string(),
+  "mal_item_id": zod.number(),
+  "mal_item_type": zod.enum(['manga', 'anime']),
+  "item_name": zod.string()
+})
+
+export const CreateSubscriptionResponse = zod.object({
+  "id": zod.number(),
+  "discord_user_id": zod.string(),
+  "discord_channel_id": zod.string(),
+  "discord_guild_id": zod.string(),
+  "mal_item_id": zod.number(),
+  "mal_item_type": zod.enum(['manga', 'anime']),
+  "item_name": zod.string(),
+  "created_at": zod.coerce.date()
+})
+
+
+/**
+ * Removes a subscription by ID
+ * @summary Remove a subscription
+ */
+export const DeleteSubscriptionParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const DeleteSubscriptionResponse = zod.void()
+
+
+/**
+ * Fetches the latest data from MAL for this subscription, stores a snapshot (synopsis, score, status, chapters), and returns whether chapters changed. Keeps only the 2 most recent snapshots — oldest is deleted automatically. Only returns changed=true when the chapter count increases.
+ * @summary Check for updates on a subscription
+ */
+export const CheckSubscriptionParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const CheckSubscriptionResponse = zod.object({
+  "changed": zod.boolean().describe('True only when chapter\/episode count increased'),
+  "subscription_id": zod.number(),
+  "item_name": zod.string(),
+  "mal_item_id": zod.number(),
+  "mal_item_type": zod.string(),
+  "current": zod.object({
+  "synopsis": zod.string().nullable(),
+  "score": zod.number().nullable(),
+  "status": zod.string().nullable(),
+  "chapters": zod.number().nullable(),
+  "checked_at": zod.coerce.date()
+}),
+  "previous": zod.union([zod.object({
+  "synopsis": zod.string().nullable(),
+  "score": zod.number().nullable(),
+  "status": zod.string().nullable(),
+  "chapters": zod.number().nullable(),
+  "checked_at": zod.coerce.date()
+}),zod.null()]).optional()
+})
+
+
+/**
+ * Returns recent errors, optionally filtered by Discord guild.
+ * @summary List bot errors
+ */
+export const listErrorLogsQueryLimitDefault = 25;
+export const listErrorLogsQueryLimitMax = 100;
+
+
+
+export const ListErrorLogsQueryParams = zod.object({
+  "guild_id": zod.coerce.string().optional(),
+  "limit": zod.coerce.number().min(1).max(listErrorLogsQueryLimitMax).default(listErrorLogsQueryLimitDefault)
+})
+
+export const ListErrorLogsResponseItem = zod.object({
+  "id": zod.number(),
+  "discord_guild_id": zod.string().nullish(),
+  "discord_user_id": zod.string().nullish(),
+  "command": zod.string().nullish(),
+  "route": zod.string().nullish(),
+  "error_code": zod.string(),
+  "message": zod.string(),
+  "http_status": zod.number().nullish(),
+  "context": zod.record(zod.string(), zod.unknown()).nullish(),
+  "created_at": zod.coerce.date()
+})
+export const ListErrorLogsResponse = zod.array(ListErrorLogsResponseItem)
+
+
+/**
+ * Stores an error reported by the Discord bot in Neon for later inspection.
+ * @summary Record a bot error
+ */
+export const createErrorLogBodyErrorCodeMax = 100;
+
+export const createErrorLogBodyMessageMax = 2000;
+
+
+
+export const CreateErrorLogBody = zod.object({
+  "discord_guild_id": zod.string().optional(),
+  "discord_user_id": zod.string().optional(),
+  "command": zod.string().optional(),
+  "route": zod.string().optional(),
+  "error_code": zod.string().min(1).max(createErrorLogBodyErrorCodeMax),
+  "message": zod.string().min(1).max(createErrorLogBodyMessageMax),
+  "http_status": zod.number().optional(),
+  "context": zod.record(zod.string(), zod.unknown()).optional()
+})
+
+export const CreateErrorLogResponse = zod.object({
+  "id": zod.number(),
+  "discord_guild_id": zod.string().nullish(),
+  "discord_user_id": zod.string().nullish(),
+  "command": zod.string().nullish(),
+  "route": zod.string().nullish(),
+  "error_code": zod.string(),
+  "message": zod.string(),
+  "http_status": zod.number().nullish(),
+  "context": zod.record(zod.string(), zod.unknown()).nullish(),
+  "created_at": zod.coerce.date()
+})
+
+

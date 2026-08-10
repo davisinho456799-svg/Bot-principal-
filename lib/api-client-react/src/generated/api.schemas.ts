@@ -212,6 +212,115 @@ export interface MangaUpdatesTrackingSnapshot {
   chaptersAreOfficialSource: false;
 }
 
+export interface ErrorResponse {
+  error: string;
+  error_id?: number;
+}
+
+/**
+ * @nullable
+ */
+export type ErrorLogContext = { [key: string]: unknown } | null;
+
+export interface ErrorLog {
+  id: number;
+  /** @nullable */
+  discord_guild_id?: string | null;
+  /** @nullable */
+  discord_user_id?: string | null;
+  /** @nullable */
+  command?: string | null;
+  /** @nullable */
+  route?: string | null;
+  error_code: string;
+  message: string;
+  /** @nullable */
+  http_status?: number | null;
+  /** @nullable */
+  context?: ErrorLogContext;
+  created_at: string;
+}
+
+export type ErrorLogInputContext = { [key: string]: unknown };
+
+export interface ErrorLogInput {
+  discord_guild_id?: string;
+  discord_user_id?: string;
+  command?: string;
+  route?: string;
+  /**
+     * @minLength 1
+     * @maxLength 100
+     */
+  error_code: string;
+  /**
+     * @minLength 1
+     * @maxLength 2000
+     */
+  message: string;
+  http_status?: number;
+  context?: ErrorLogInputContext;
+}
+
+export type SubscriptionMalItemType = typeof SubscriptionMalItemType[keyof typeof SubscriptionMalItemType];
+
+
+export const SubscriptionMalItemType = {
+  manga: 'manga',
+  anime: 'anime',
+} as const;
+
+export interface Subscription {
+  id: number;
+  discord_user_id: string;
+  discord_channel_id: string;
+  discord_guild_id: string;
+  mal_item_id: number;
+  mal_item_type: SubscriptionMalItemType;
+  item_name: string;
+  created_at: string;
+}
+
+export type SubscriptionInputMalItemType = typeof SubscriptionInputMalItemType[keyof typeof SubscriptionInputMalItemType];
+
+
+export const SubscriptionInputMalItemType = {
+  manga: 'manga',
+  anime: 'anime',
+} as const;
+
+export interface SubscriptionInput {
+  discord_user_id: string;
+  discord_channel_id: string;
+  discord_guild_id: string;
+  mal_item_id: number;
+  mal_item_type: SubscriptionInputMalItemType;
+  item_name: string;
+}
+
+export interface SnapshotData {
+  /** @nullable */
+  synopsis: string | null;
+  /** @nullable */
+  score: number | null;
+  /** @nullable */
+  status: string | null;
+  /** @nullable */
+  chapters: number | null;
+  checked_at: string;
+}
+
+export interface CheckResult {
+  /** True only when chapter/episode count increased */
+  changed: boolean;
+  subscription_id: number;
+  item_name: string;
+  mal_item_id: number;
+  mal_item_type: string;
+  current: SnapshotData;
+  previous?: SnapshotData | null;
+}
+
 export type SearchMangaAggregateParams = {
 /**
  * @minLength 2
@@ -254,5 +363,21 @@ limit?: number;
 
 export type GetMangaUpdatesTrackingParams = {
 id: string;
+};
+
+export type ListSubscriptionsParams = {
+/**
+ * Filter by Discord guild ID
+ */
+guild_id?: string;
+};
+
+export type ListErrorLogsParams = {
+guild_id?: string;
+/**
+ * @minimum 1
+ * @maximum 100
+ */
+limit?: number;
 };
 

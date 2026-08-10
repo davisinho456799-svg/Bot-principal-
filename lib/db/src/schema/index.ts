@@ -1,5 +1,7 @@
 import { pgTable, text, serial, timestamp, real, json, unique, boolean } from "drizzle-orm/pg-core";
 export * from "./errorLogs";
+export * from "./subscriptions";
+export * from "./malSnapshots";
 
 // ─── Status de leitura ───────────────────────────────────────────────────────
 
