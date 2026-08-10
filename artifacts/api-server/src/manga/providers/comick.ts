@@ -1,0 +1,127 @@
+import { asNullableNumber, fetchJson, uniqueTitles } from "../http";
+import type { ChapterRecord, MangaRecord } from "../types";
+
+const API_BASE = "https://api.comick.io";
+const COVER_BASE = "https://meo.comick.pictures";
+
+interface ComickTitle {
+  title?: string;
+  lang?: string | null;
+}
+
+interface ComickCover {
+  b2key?: string;
+}
+
+interface ComickSearchItem {
+  hid?: string;
+  slug?: string;
+  title?: string;
+  md_titles?: ComickTitle[];
+  status?: number | null;
+  rating?: string | null;
+  genres?: Array<{ name?: string }>;
+  country?: string | null;
+  year?: number | null;
+  md_covers?: ComickCover[];
+  last_chapter?: number | null;
+  desc?: string | null;
+}
+
+interface ComickChapter {
+  hid?: string;
+  chap?: string | number | null;
+  vol?: string | number | null;
+  title?: string | null;
+  lang?: string | null;
+  created_at?: string | null;
+  published_at?: string | null;
+}
+
+interface ComickChapterResponse {
+  chapters?: ComickChapter[];
+}
+
+const STATUS_MAP: Record<number, string> = {
+  1: "RELEASING",
+  2: "FINISHED",
+  3: "CANCELLED",
+  4: "HIATUS",
+};
+
+const COUNTRY_MAP: Record<string, string> = {
+  ko: "KR",
+  cn: "CN",
+  jp: "JP",
+};
+
+const headers = {
+  Accept: "application/json",
+  "User-Agent": "MangaAggregator/1.0",
+};
+
+function coverUrl(item: ComickSearchItem): string | null {
+  const key = item.md_covers?.[0]?.b2key;
+  return key ? `${COVER_BASE}/${key}` : null;
+}
+
+function toRecord(item: ComickSearchItem): MangaRecord | null {
+  if (!item.hid || !item.slug || !item.title) return null;
+
+  return {
+    source: "comick",
+    id: item.slug,
+    title: item.title,
+    alternativeTitles: uniqueTitles((item.md_titles ?? []).map((title) => title.title)),
+    description: item.desc ?? null,
+    coverUrl: coverUrl(item),
+    score: asNullableNumber(item.rating),
+    genres: (item.genres ?? [])
+      .map((genre) => genre.name?.trim() ?? "")
+      .filter(Boolean),
+    status: item.status == null ? null : STATUS_MAP[item.status] ?? null,
+    chapters: asNullableNumber(item.last_chapter),
+    year: item.year ?? null,
+    country: item.country ? COUNTRY_MAP[item.country] ?? item.country.toUpperCase() : null,
+    url: `https://comick.io/comic/${item.slug}`,
+  };
+}
+
+export async function searchComick(query: string): Promise<MangaRecord[]> {
+  const params = new URLSearchParams({ q: query, limit: "10" });
+  const response = await fetchJson<ComickSearchItem[]>(
+    `${API_BASE}/v1.0/search?${params.toString()}`,
+    { headers },
+  );
+
+  return response.map(toRecord).filter((item): item is MangaRecord => item !== null);
+}
+
+export async function getComickChapters(
+  slug: string,
+  options: { language?: string; limit?: number } = {},
+): Promise<ChapterRecord[]> {
+  const params = new URLSearchParams({
+    lang: options.language ?? "en",
+    limit: String(options.limit ?? 100),
+    order: "desc",
+  });
+  const response = await fetchJson<ComickChapterResponse>(
+    `${API_BASE}/comic/${encodeURIComponent(slug)}/chapters?${params.toString()}`,
+    { headers },
+  );
+
+  return (response.chapters ?? [])
+    .filter((chapter) => chapter.hid && chapter.chap != null)
+    .map((chapter) => ({
+      id: chapter.hid as string,
+      chapter: String(chapter.chap),
+      volume: chapter.vol == null ? null : String(chapter.vol),
+      title: chapter.title ?? null,
+      language: chapter.lang ?? options.language ?? null,
+      publishedAt: chapter.published_at ?? chapter.created_at ?? null,
+      url: `https://comick.io/chapter/${chapter.hid}`,
+      group: null,
+      source: "comick" as const,
+    }));
+}
