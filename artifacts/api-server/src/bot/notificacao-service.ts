@@ -589,12 +589,36 @@ function likelySameTitle(left: string, right: string): boolean {
 
 type FallbackCandidate = { source: string; id: string; title: string };
 
+const MANGA_NOTIFICATION_SOURCES = new Set([
+  "anilist",
+  "comick",
+  "mangadex",
+  "mangaupdates",
+  "jikan",
+]);
+
+const MANGA_NOTIFICATION_SOURCE_ORDER = [
+  "comick",
+  "mangadex",
+  "mangaupdates",
+  "jikan",
+  "anilist",
+];
+
+function isMangaNotificationSource(source: string): boolean {
+  return MANGA_NOTIFICATION_SOURCES.has(source);
+}
+
 /**
  * Encontra IDs equivalentes nas outras bases somente quando a fonte principal
  * não respondeu. A confirmação pelo título evita trocar silenciosamente para
  * uma obra diferente com nome parecido.
  */
-async function findFallbackCandidates(title: string, primarySource: string): Promise<FallbackCandidate[]> {
+async function findFallbackCandidates(
+  title: string,
+  primarySource: string,
+  includePrimary = false,
+): Promise<FallbackCandidate[]> {
   const candidates: FallbackCandidate[] = [];
   const isAnime = primarySource === "anilist-anime" || primarySource === "jikan-anime";
 
@@ -640,25 +664,25 @@ async function findFallbackCandidates(title: string, primarySource: string): Pro
         (name) => name && likelySameTitle(name, title),
       ),
     );
-    if (match && primarySource !== "anilist") {
+    if (match && (includePrimary || primarySource !== "anilist")) {
       candidates.push({ source: "anilist", id: String(match.id), title });
     }
   }
   if (comick.status === "fulfilled") {
     const match = comick.value.find((item) => likelySameTitle(item.title, title));
-    if (match && primarySource !== "comick") {
+    if (match && (includePrimary || primarySource !== "comick")) {
       candidates.push({ source: "comick", id: match.slug, title });
     }
   }
   if (mangadex.status === "fulfilled") {
     const match = mangadex.value.find((item) => likelySameTitle(item.mainTitle, title));
-    if (match && primarySource !== "mangadex") {
+    if (match && (includePrimary || primarySource !== "mangadex")) {
       candidates.push({ source: "mangadex", id: match.id, title });
     }
   }
   if (mangaUpdates.status === "fulfilled") {
     const match = mangaUpdates.value.find((item) => likelySameTitle(item.title, title));
-    if (match && primarySource !== "mangaupdates") {
+    if (match && (includePrimary || primarySource !== "mangaupdates")) {
       candidates.push({ source: "mangaupdates", id: match.id, title });
     }
   }
@@ -668,12 +692,16 @@ async function findFallbackCandidates(title: string, primarySource: string): Pro
         (name) => name && likelySameTitle(name, title),
       ),
     );
-    if (match && primarySource !== "jikan") {
+    if (match && (includePrimary || primarySource !== "jikan")) {
       candidates.push({ source: "jikan", id: String(match.malId), title });
     }
   }
 
-  return candidates;
+  return candidates.sort(
+    (left, right) =>
+      MANGA_NOTIFICATION_SOURCE_ORDER.indexOf(left.source) -
+      MANGA_NOTIFICATION_SOURCE_ORDER.indexOf(right.source),
+  );
 }
 
 async function fetchWithFallback(
@@ -683,6 +711,56 @@ async function fetchWithFallback(
   verifyAllSources = false,
 ): Promise<{ fetched: FetchResult | null; selectedSource: string | null; attempts: SourceAttempt[] }> {
   const attempts: SourceAttempt[] = [];
+
+  // A fonte gravada no banco pode ser antiga (por exemplo, AniList).
+  // Para manga/manhwa, a política atual é sempre tentar o Comick primeiro,
+  // mantendo a fonte gravada e o AniList como fallback compatível.
+  if (isMangaNotificationSource(primarySource) && primarySource !== "comick") {
+    const candidates = await findFallbackCandidates(title, primarySource, true);
+    const directCandidate: FallbackCandidate = {
+      source: primarySource,
+      id: manhwaId,
+      title,
+    };
+    const orderedCandidates = [
+      ...candidates,
+      directCandidate,
+    ].filter(
+      (candidate, index, all) =>
+        all.findIndex(
+          (other) => other.source === candidate.source && other.id === candidate.id,
+        ) === index,
+    );
+    const successful: Array<{ source: string; fetched: FetchResult }> = [];
+
+    for (const candidate of orderedCandidates) {
+      const fetched = await fetchChapters(candidate.id, candidate.source);
+      attempts.push({
+        source: candidate.source,
+        status: fetched && !fetched.isProxy ? "ok" : "sem_dados",
+        value: fetched?.value ?? null,
+        selected: false,
+      });
+
+      if (fetched && !fetched.isProxy) {
+        successful.push({ source: candidate.source, fetched });
+        if (!verifyAllSources) break;
+      }
+    }
+
+    const selected = successful[0] ?? null;
+    if (selected) {
+      const selectedAttempt = attempts.find((attempt) => attempt.source === selected.source);
+      if (selectedAttempt) selectedAttempt.selected = true;
+    }
+
+    return {
+      fetched: selected?.fetched ?? null,
+      selectedSource: selected?.source ?? null,
+      attempts,
+    };
+  }
+
   const primary = await fetchChapters(manhwaId, primarySource);
   attempts.push({
     source: primarySource,
