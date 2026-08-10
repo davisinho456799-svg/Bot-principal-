@@ -87,3 +87,133 @@ export const ListComickChaptersResponse = zod.object({
 })
 
 
+/**
+ * @summary Search MangaUpdates metadata
+ */
+export const searchMangaUpdatesQueryQueryMin = 2;
+
+
+
+export const SearchMangaUpdatesQueryParams = zod.object({
+  "query": zod.coerce.string().min(searchMangaUpdatesQueryQueryMin)
+})
+
+export const SearchMangaUpdatesResponse = zod.object({
+  "source": zod.enum(['mangaupdates']),
+  "results": zod.array(zod.object({
+  "source": zod.enum(['comick', 'mangaupdates', 'mangadex', 'jikan', 'anilist']),
+  "id": zod.string(),
+  "title": zod.string(),
+  "alternativeTitles": zod.array(zod.string()),
+  "description": zod.string().nullable(),
+  "coverUrl": zod.string().nullable(),
+  "score": zod.number().nullable(),
+  "genres": zod.array(zod.string()),
+  "status": zod.string().nullable(),
+  "chapters": zod.number().nullable(),
+  "year": zod.number().nullable(),
+  "country": zod.string().nullable(),
+  "url": zod.string()
+}).and(zod.object({
+  "sourceRole": zod.enum(['metadata-and-releases']),
+  "latestChapter": zod.number().nullable(),
+  "statusText": zod.string().nullable(),
+  "groups": zod.array(zod.object({
+  "id": zod.string().nullable(),
+  "name": zod.string(),
+  "url": zod.string().nullable()
+})),
+  "lastUpdated": zod.string().nullable()
+})))
+})
+
+
+/**
+ * @summary Get MangaUpdates series metadata
+ */
+export const GetMangaUpdatesSeriesQueryParams = zod.object({
+  "id": zod.coerce.string()
+})
+
+export const GetMangaUpdatesSeriesResponse = zod.object({
+  "source": zod.enum(['comick', 'mangaupdates', 'mangadex', 'jikan', 'anilist']),
+  "id": zod.string(),
+  "title": zod.string(),
+  "alternativeTitles": zod.array(zod.string()),
+  "description": zod.string().nullable(),
+  "coverUrl": zod.string().nullable(),
+  "score": zod.number().nullable(),
+  "genres": zod.array(zod.string()),
+  "status": zod.string().nullable(),
+  "chapters": zod.number().nullable(),
+  "year": zod.number().nullable(),
+  "country": zod.string().nullable(),
+  "url": zod.string()
+}).and(zod.object({
+  "sourceRole": zod.enum(['metadata-and-releases']),
+  "latestChapter": zod.number().nullable(),
+  "statusText": zod.string().nullable(),
+  "groups": zod.array(zod.object({
+  "id": zod.string().nullable(),
+  "name": zod.string(),
+  "url": zod.string().nullable()
+})),
+  "lastUpdated": zod.string().nullable()
+}))
+
+
+/**
+ * @summary Search MangaUpdates releases
+ */
+export const searchMangaUpdatesReleasesQueryQueryMin = 2;
+
+export const searchMangaUpdatesReleasesQueryLimitDefault = 20;
+export const searchMangaUpdatesReleasesQueryLimitMax = 100;
+
+
+
+export const SearchMangaUpdatesReleasesQueryParams = zod.object({
+  "query": zod.coerce.string().min(searchMangaUpdatesReleasesQueryQueryMin),
+  "limit": zod.coerce.number().min(1).max(searchMangaUpdatesReleasesQueryLimitMax).default(searchMangaUpdatesReleasesQueryLimitDefault)
+})
+
+export const SearchMangaUpdatesReleasesResponse = zod.object({
+  "source": zod.enum(['mangaupdates']),
+  "query": zod.string(),
+  "releases": zod.array(zod.object({
+  "id": zod.string(),
+  "title": zod.string(),
+  "volume": zod.string().nullable(),
+  "chapter": zod.string(),
+  "groups": zod.array(zod.object({
+  "id": zod.string().nullable(),
+  "name": zod.string(),
+  "url": zod.string().nullable()
+})),
+  "releaseDate": zod.string().nullable(),
+  "addedAt": zod.string().nullable(),
+  "url": zod.string()
+}))
+})
+
+
+/**
+ * @summary Get MangaUpdates tracking snapshot
+ */
+export const GetMangaUpdatesTrackingQueryParams = zod.object({
+  "id": zod.coerce.string()
+})
+
+export const GetMangaUpdatesTrackingResponse = zod.object({
+  "source": zod.enum(['mangaupdates']),
+  "seriesId": zod.string(),
+  "title": zod.string(),
+  "latestChapter": zod.number().nullable(),
+  "status": zod.string().nullable(),
+  "statusText": zod.string().nullable(),
+  "lastUpdated": zod.string().nullable(),
+  "checkedAt": zod.string(),
+  "chaptersAreOfficialSource": zod.literal(false)
+})
+
+

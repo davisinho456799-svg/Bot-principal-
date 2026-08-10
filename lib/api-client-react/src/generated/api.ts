@@ -17,10 +17,18 @@ import type {
 
 import type {
   ChapterList,
+  GetMangaUpdatesSeriesParams,
+  GetMangaUpdatesTrackingParams,
   HealthStatus,
   ListComickChaptersParams,
   MangaAggregate,
-  SearchMangaAggregateParams
+  MangaUpdatesReleaseResponse,
+  MangaUpdatesSearchResponse,
+  MangaUpdatesSeries,
+  MangaUpdatesTrackingSnapshot,
+  SearchMangaAggregateParams,
+  SearchMangaUpdatesParams,
+  SearchMangaUpdatesReleasesParams
 } from './api.schemas';
 
 import { customFetch } from '../custom-fetch';
@@ -284,6 +292,342 @@ export function useListComickChapters<TData = Awaited<ReturnType<typeof listComi
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
 
   const queryOptions = getListComickChaptersQueryOptions(params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getSearchMangaUpdatesUrl = (params: SearchMangaUpdatesParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : String(value))
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/manga/mangaupdates/search?${stringifiedParams}` : `/api/manga/mangaupdates/search`
+}
+
+/**
+ * @summary Search MangaUpdates metadata
+ */
+export const searchMangaUpdates = async (params: SearchMangaUpdatesParams, options?: Parameters<typeof customFetch>[1]): Promise<MangaUpdatesSearchResponse> => {
+
+  return customFetch<MangaUpdatesSearchResponse>(getSearchMangaUpdatesUrl(params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getSearchMangaUpdatesQueryKey = (params?: SearchMangaUpdatesParams,) => {
+    return [
+    `/api/manga/mangaupdates/search`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getSearchMangaUpdatesQueryOptions = <TData = Awaited<ReturnType<typeof searchMangaUpdates>>, TError = ErrorType<void>>(params: SearchMangaUpdatesParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof searchMangaUpdates>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getSearchMangaUpdatesQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof searchMangaUpdates>>> = ({ signal }) => searchMangaUpdates(params, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof searchMangaUpdates>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type SearchMangaUpdatesQueryResult = NonNullable<Awaited<ReturnType<typeof searchMangaUpdates>>>
+export type SearchMangaUpdatesQueryError = ErrorType<void>
+
+
+/**
+ * @summary Search MangaUpdates metadata
+ */
+
+export function useSearchMangaUpdates<TData = Awaited<ReturnType<typeof searchMangaUpdates>>, TError = ErrorType<void>>(
+ params: SearchMangaUpdatesParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof searchMangaUpdates>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getSearchMangaUpdatesQueryOptions(params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getGetMangaUpdatesSeriesUrl = (params: GetMangaUpdatesSeriesParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : String(value))
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/manga/mangaupdates/series?${stringifiedParams}` : `/api/manga/mangaupdates/series`
+}
+
+/**
+ * @summary Get MangaUpdates series metadata
+ */
+export const getMangaUpdatesSeries = async (params: GetMangaUpdatesSeriesParams, options?: Parameters<typeof customFetch>[1]): Promise<MangaUpdatesSeries> => {
+
+  return customFetch<MangaUpdatesSeries>(getGetMangaUpdatesSeriesUrl(params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetMangaUpdatesSeriesQueryKey = (params?: GetMangaUpdatesSeriesParams,) => {
+    return [
+    `/api/manga/mangaupdates/series`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getGetMangaUpdatesSeriesQueryOptions = <TData = Awaited<ReturnType<typeof getMangaUpdatesSeries>>, TError = ErrorType<void>>(params: GetMangaUpdatesSeriesParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getMangaUpdatesSeries>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetMangaUpdatesSeriesQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getMangaUpdatesSeries>>> = ({ signal }) => getMangaUpdatesSeries(params, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getMangaUpdatesSeries>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetMangaUpdatesSeriesQueryResult = NonNullable<Awaited<ReturnType<typeof getMangaUpdatesSeries>>>
+export type GetMangaUpdatesSeriesQueryError = ErrorType<void>
+
+
+/**
+ * @summary Get MangaUpdates series metadata
+ */
+
+export function useGetMangaUpdatesSeries<TData = Awaited<ReturnType<typeof getMangaUpdatesSeries>>, TError = ErrorType<void>>(
+ params: GetMangaUpdatesSeriesParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getMangaUpdatesSeries>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetMangaUpdatesSeriesQueryOptions(params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getSearchMangaUpdatesReleasesUrl = (params: SearchMangaUpdatesReleasesParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : String(value))
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/manga/mangaupdates/releases?${stringifiedParams}` : `/api/manga/mangaupdates/releases`
+}
+
+/**
+ * @summary Search MangaUpdates releases
+ */
+export const searchMangaUpdatesReleases = async (params: SearchMangaUpdatesReleasesParams, options?: Parameters<typeof customFetch>[1]): Promise<MangaUpdatesReleaseResponse> => {
+
+  return customFetch<MangaUpdatesReleaseResponse>(getSearchMangaUpdatesReleasesUrl(params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getSearchMangaUpdatesReleasesQueryKey = (params?: SearchMangaUpdatesReleasesParams,) => {
+    return [
+    `/api/manga/mangaupdates/releases`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getSearchMangaUpdatesReleasesQueryOptions = <TData = Awaited<ReturnType<typeof searchMangaUpdatesReleases>>, TError = ErrorType<void>>(params: SearchMangaUpdatesReleasesParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof searchMangaUpdatesReleases>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getSearchMangaUpdatesReleasesQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof searchMangaUpdatesReleases>>> = ({ signal }) => searchMangaUpdatesReleases(params, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof searchMangaUpdatesReleases>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type SearchMangaUpdatesReleasesQueryResult = NonNullable<Awaited<ReturnType<typeof searchMangaUpdatesReleases>>>
+export type SearchMangaUpdatesReleasesQueryError = ErrorType<void>
+
+
+/**
+ * @summary Search MangaUpdates releases
+ */
+
+export function useSearchMangaUpdatesReleases<TData = Awaited<ReturnType<typeof searchMangaUpdatesReleases>>, TError = ErrorType<void>>(
+ params: SearchMangaUpdatesReleasesParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof searchMangaUpdatesReleases>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getSearchMangaUpdatesReleasesQueryOptions(params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getGetMangaUpdatesTrackingUrl = (params: GetMangaUpdatesTrackingParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : String(value))
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/manga/mangaupdates/tracking?${stringifiedParams}` : `/api/manga/mangaupdates/tracking`
+}
+
+/**
+ * @summary Get MangaUpdates tracking snapshot
+ */
+export const getMangaUpdatesTracking = async (params: GetMangaUpdatesTrackingParams, options?: Parameters<typeof customFetch>[1]): Promise<MangaUpdatesTrackingSnapshot> => {
+
+  return customFetch<MangaUpdatesTrackingSnapshot>(getGetMangaUpdatesTrackingUrl(params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetMangaUpdatesTrackingQueryKey = (params?: GetMangaUpdatesTrackingParams,) => {
+    return [
+    `/api/manga/mangaupdates/tracking`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getGetMangaUpdatesTrackingQueryOptions = <TData = Awaited<ReturnType<typeof getMangaUpdatesTracking>>, TError = ErrorType<void>>(params: GetMangaUpdatesTrackingParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getMangaUpdatesTracking>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetMangaUpdatesTrackingQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getMangaUpdatesTracking>>> = ({ signal }) => getMangaUpdatesTracking(params, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getMangaUpdatesTracking>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetMangaUpdatesTrackingQueryResult = NonNullable<Awaited<ReturnType<typeof getMangaUpdatesTracking>>>
+export type GetMangaUpdatesTrackingQueryError = ErrorType<void>
+
+
+/**
+ * @summary Get MangaUpdates tracking snapshot
+ */
+
+export function useGetMangaUpdatesTracking<TData = Awaited<ReturnType<typeof getMangaUpdatesTracking>>, TError = ErrorType<void>>(
+ params: GetMangaUpdatesTrackingParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getMangaUpdatesTracking>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetMangaUpdatesTrackingQueryOptions(params,options)
 
   const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
 

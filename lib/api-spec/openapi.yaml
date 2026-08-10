@@ -79,6 +79,103 @@ paths:
                 $ref: "#/components/schemas/ChapterList"
         "502":
           description: Comick unavailable
+  /manga/mangaupdates/search:
+    get:
+      operationId: searchMangaUpdates
+      tags: [manga]
+      summary: Search MangaUpdates metadata
+      parameters:
+        - name: query
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 2
+      responses:
+        "200":
+          description: MangaUpdates series
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MangaUpdatesSearchResponse"
+        "400":
+          description: Invalid query
+        "502":
+          description: MangaUpdates unavailable
+  /manga/mangaupdates/series:
+    get:
+      operationId: getMangaUpdatesSeries
+      tags: [manga]
+      summary: Get MangaUpdates series metadata
+      parameters:
+        - name: id
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: MangaUpdates series
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MangaUpdatesSeries"
+        "404":
+          description: Series not found
+        "502":
+          description: MangaUpdates unavailable
+  /manga/mangaupdates/releases:
+    get:
+      operationId: searchMangaUpdatesReleases
+      tags: [manga]
+      summary: Search MangaUpdates releases
+      parameters:
+        - name: query
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 2
+        - name: limit
+          in: query
+          schema:
+            type: number
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        "200":
+          description: MangaUpdates releases
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MangaUpdatesReleaseResponse"
+        "400":
+          description: Invalid query
+        "502":
+          description: MangaUpdates unavailable
+  /manga/mangaupdates/tracking:
+    get:
+      operationId: getMangaUpdatesTracking
+      tags: [manga]
+      summary: Get MangaUpdates tracking snapshot
+      parameters:
+        - name: id
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Tracking snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MangaUpdatesTrackingSnapshot"
+        "404":
+          description: Series not found
+        "502":
+          description: MangaUpdates unavailable
 components:
   schemas:
     HealthStatus:
@@ -166,4 +263,82 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Chapter"
+    MangaUpdatesGroup:
+      type: object
+      required: [id, name, url]
+      properties:
+        id: { type: ["string", "null"] }
+        name: { type: string }
+        url: { type: ["string", "null"] }
+    MangaUpdatesSeries:
+      allOf:
+        - $ref: "#/components/schemas/MangaRecord"
+        - type: object
+          required: [sourceRole, latestChapter, statusText, groups, lastUpdated]
+          properties:
+            sourceRole:
+              type: string
+              enum: [metadata-and-releases]
+            latestChapter: { type: ["number", "null"] }
+            statusText: { type: ["string", "null"] }
+            groups:
+              type: array
+              items:
+                $ref: "#/components/schemas/MangaUpdatesGroup"
+            lastUpdated: { type: ["string", "null"] }
+    MangaUpdatesSearchResponse:
+      type: object
+      required: [source, results]
+      properties:
+        source:
+          type: string
+          enum: [mangaupdates]
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/MangaUpdatesSeries"
+    MangaUpdatesRelease:
+      type: object
+      required: [id, title, volume, chapter, groups, releaseDate, addedAt, url]
+      properties:
+        id: { type: string }
+        title: { type: string }
+        volume: { type: ["string", "null"] }
+        chapter: { type: string }
+        groups:
+          type: array
+          items:
+            $ref: "#/components/schemas/MangaUpdatesGroup"
+        releaseDate: { type: ["string", "null"] }
+        addedAt: { type: ["string", "null"] }
+        url: { type: string }
+    MangaUpdatesReleaseResponse:
+      type: object
+      required: [source, query, releases]
+      properties:
+        source:
+          type: string
+          enum: [mangaupdates]
+        query: { type: string }
+        releases:
+          type: array
+          items:
+            $ref: "#/components/schemas/MangaUpdatesRelease"
+    MangaUpdatesTrackingSnapshot:
+      type: object
+      required: [source, seriesId, title, latestChapter, status, statusText, lastUpdated, checkedAt, chaptersAreOfficialSource]
+      properties:
+        source:
+          type: string
+          enum: [mangaupdates]
+        seriesId: { type: string }
+        title: { type: string }
+        latestChapter: { type: ["number", "null"] }
+        status: { type: ["string", "null"] }
+        statusText: { type: ["string", "null"] }
+        lastUpdated: { type: ["string", "null"] }
+        checkedAt: { type: string }
+        chaptersAreOfficialSource:
+          type: boolean
+          enum: [false]
 

@@ -124,6 +124,94 @@ export interface ChapterList {
   chapters: Chapter[];
 }
 
+export interface MangaUpdatesGroup {
+  /** @nullable */
+  id: string | null;
+  name: string;
+  /** @nullable */
+  url: string | null;
+}
+
+export type MangaUpdatesSeriesSourceRole = typeof MangaUpdatesSeriesSourceRole[keyof typeof MangaUpdatesSeriesSourceRole];
+
+
+export const MangaUpdatesSeriesSourceRole = {
+  'metadata-and-releases': 'metadata-and-releases',
+} as const;
+
+export type MangaUpdatesSeries = MangaRecord & ({
+  sourceRole: MangaUpdatesSeriesSourceRole;
+  /** @nullable */
+  latestChapter: number | null;
+  /** @nullable */
+  statusText: string | null;
+  groups: MangaUpdatesGroup[];
+  /** @nullable */
+  lastUpdated: string | null;
+});
+
+export type MangaUpdatesSearchResponseSource = typeof MangaUpdatesSearchResponseSource[keyof typeof MangaUpdatesSearchResponseSource];
+
+
+export const MangaUpdatesSearchResponseSource = {
+  mangaupdates: 'mangaupdates',
+} as const;
+
+export interface MangaUpdatesSearchResponse {
+  source: MangaUpdatesSearchResponseSource;
+  results: MangaUpdatesSeries[];
+}
+
+export interface MangaUpdatesRelease {
+  id: string;
+  title: string;
+  /** @nullable */
+  volume: string | null;
+  chapter: string;
+  groups: MangaUpdatesGroup[];
+  /** @nullable */
+  releaseDate: string | null;
+  /** @nullable */
+  addedAt: string | null;
+  url: string;
+}
+
+export type MangaUpdatesReleaseResponseSource = typeof MangaUpdatesReleaseResponseSource[keyof typeof MangaUpdatesReleaseResponseSource];
+
+
+export const MangaUpdatesReleaseResponseSource = {
+  mangaupdates: 'mangaupdates',
+} as const;
+
+export interface MangaUpdatesReleaseResponse {
+  source: MangaUpdatesReleaseResponseSource;
+  query: string;
+  releases: MangaUpdatesRelease[];
+}
+
+export type MangaUpdatesTrackingSnapshotSource = typeof MangaUpdatesTrackingSnapshotSource[keyof typeof MangaUpdatesTrackingSnapshotSource];
+
+
+export const MangaUpdatesTrackingSnapshotSource = {
+  mangaupdates: 'mangaupdates',
+} as const;
+
+export interface MangaUpdatesTrackingSnapshot {
+  source: MangaUpdatesTrackingSnapshotSource;
+  seriesId: string;
+  title: string;
+  /** @nullable */
+  latestChapter: number | null;
+  /** @nullable */
+  status: string | null;
+  /** @nullable */
+  statusText: string | null;
+  /** @nullable */
+  lastUpdated: string | null;
+  checkedAt: string;
+  chaptersAreOfficialSource: false;
+}
+
 export type SearchMangaAggregateParams = {
 /**
  * @minLength 2
@@ -139,5 +227,32 @@ language?: string;
  * @maximum 500
  */
 limit?: number;
+};
+
+export type SearchMangaUpdatesParams = {
+/**
+ * @minLength 2
+ */
+query: string;
+};
+
+export type GetMangaUpdatesSeriesParams = {
+id: string;
+};
+
+export type SearchMangaUpdatesReleasesParams = {
+/**
+ * @minLength 2
+ */
+query: string;
+/**
+ * @minimum 1
+ * @maximum 100
+ */
+limit?: number;
+};
+
+export type GetMangaUpdatesTrackingParams = {
+id: string;
 };
 
