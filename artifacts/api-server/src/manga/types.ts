@@ -54,3 +54,42 @@ export interface MangaAggregate {
   results: MangaRecord[];
   sources: SourceStatus[];
 }
+
+export interface MangaUpdatesGroup {
+  id: string | null;
+  name: string;
+  url: string | null;
+}
+
+export interface MangaUpdatesSeries extends MangaRecord {
+  source: "mangaupdates";
+  sourceRole: "metadata-and-releases";
+  latestChapter: number | null;
+  statusText: string | null;
+  alternativeTitles: string[];
+  groups: MangaUpdatesGroup[];
+  lastUpdated: string | null;
+}
+
+export interface MangaUpdatesRelease {
+  id: string;
+  title: string;
+  volume: string | null;
+  chapter: string;
+  groups: MangaUpdatesGroup[];
+  releaseDate: string | null;
+  addedAt: string | null;
+  url: string;
+}
+
+export interface MangaUpdatesTrackingSnapshot {
+  source: "mangaupdates";
+  seriesId: string;
+  title: string;
+  latestChapter: number | null;
+  status: string | null;
+  statusText: string | null;
+  lastUpdated: string | null;
+  checkedAt: string;
+  chaptersAreOfficialSource: false;
+}
