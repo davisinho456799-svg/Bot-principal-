@@ -582,17 +582,19 @@ function rankAndFilter(
 
 /** Tier 1 — só manhwa/manhwa coreano (mais estrito) */
 async function runSearchKorean(query: string): Promise<UnifiedResult[]> {
-  const [anilistRaw, mangadexRaw, comickRaw, muRaw, jikanRaw] = await Promise.allSettled([
+  // Comick é a fonte principal para manga/manhwa. As demais fontes continuam
+  // como complemento e fallback para ampliar a cobertura.
+  const [comickRaw, anilistRaw, mangadexRaw, muRaw, jikanRaw] = await Promise.allSettled([
+    fetchSource("comick-kr", query, () => searchComick(query), []),
     fetchSource("anilist-kr", query, () => searchManhwa(query), []),
     fetchSource("mangadex-kr", query, () => searchMangaDex(query), []),
-    fetchSource("comick-kr", query, () => searchComick(query), []),
     fetchSource("mangaupdates-kr", query, () => searchMangaUpdates(query, "Manhwa"), []),
     fetchSource("jikan-kr", query, () => searchJikan(query, "manhwa"), []),
   ]);
   return dedupeRaw([
+    ...(comickRaw.status === "fulfilled" ? comickRaw.value.map(comickToUnified) : []),
     ...(anilistRaw.status === "fulfilled" ? anilistRaw.value.map(anilistToUnified) : []),
     ...(mangadexRaw.status === "fulfilled" ? mangadexRaw.value.map(mangadexToUnified) : []),
-    ...(comickRaw.status === "fulfilled" ? comickRaw.value.map(comickToUnified) : []),
     ...(muRaw.status === "fulfilled" ? muRaw.value.map(mangaupdatesToUnified) : []),
     ...(jikanRaw.status === "fulfilled" ? jikanRaw.value.map(jikanToUnified) : []),
   ]);
@@ -604,16 +606,16 @@ async function runSearchKorean(query: string): Promise<UnifiedResult[]> {
  * e títulos de outros países que são estilo manhwa.
  */
 async function runSearchAny(query: string): Promise<UnifiedResult[]> {
-  const [anilistRaw, comickRaw, muRaw, jikanRaw, mangadexRaw] = await Promise.allSettled([
-    fetchSource("anilist-any", query, () => searchManhwaAny(query), []),
+  const [comickRaw, anilistRaw, muRaw, jikanRaw, mangadexRaw] = await Promise.allSettled([
     fetchSource("comick-any", query, () => searchComickAny(query), []),
+    fetchSource("anilist-any", query, () => searchManhwaAny(query), []),
     fetchSource("mangaupdates-any", query, () => searchMangaUpdates(query), []),
     fetchSource("jikan-any", query, () => searchJikanAny(query), []),
     fetchSource("mangadex-any", query, () => searchMangaDexAny(query), []),
   ]);
   return dedupeRaw([
-    ...(anilistRaw.status === "fulfilled" ? anilistRaw.value.map(anilistToUnified) : []),
     ...(comickRaw.status === "fulfilled" ? comickRaw.value.map(comickToUnified) : []),
+    ...(anilistRaw.status === "fulfilled" ? anilistRaw.value.map(anilistToUnified) : []),
     ...(muRaw.status === "fulfilled" ? muRaw.value.map(mangaupdatesToUnified) : []),
     ...(jikanRaw.status === "fulfilled" ? jikanRaw.value.map(jikanToUnified) : []),
     ...(mangadexRaw.status === "fulfilled" ? mangadexRaw.value.map(mangadexToUnified) : []),
@@ -731,7 +733,10 @@ function markEmptyQuery(query: string): void {
 // ─── Cache de resultados (DB) ──────────────────────────────────────────────────
 
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
-const normalizeQuery = (q: string) => q.toLowerCase().trim().slice(0, 200);
+// Evita servir resultados gravados antes da troca do provedor principal.
+const SEARCH_CACHE_VERSION = "comick-primary-v1";
+const normalizeQuery = (q: string) =>
+  `${SEARCH_CACHE_VERSION}:${q.toLowerCase().trim().slice(0, 200)}`;
 
 async function getCachedSearch(query: string): Promise<UnifiedResult[] | null> {
   try {

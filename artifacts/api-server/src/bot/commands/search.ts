@@ -21,7 +21,7 @@ import { respondAutocomplete } from "../autocomplete.js";
 
 export const data = new SlashCommandBuilder()
   .setName("manhwa")
-  .setDescription("Pesquisa um manhwa no AniList e MangaDex com sinopse traduzida")
+  .setDescription("Pesquisa um manhwa no Comick com sinopse traduzida")
   .addStringOption((opt) =>
     opt.setName("titulo").setDescription("Nome do manhwa para pesquisar").setRequired(false).setAutocomplete(true)
   )

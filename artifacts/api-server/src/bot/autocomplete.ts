@@ -58,13 +58,12 @@ export async function respondAutocomplete(
     return;
   }
 
-  // Fontes relevantes para manga/manhwa, em ordem de prioridade.
-  // AniList e Comick são as mais rápidas e têm melhor cobertura de manhwa.
-  // MangaDex, MangaUpdates e Jikan complementam com obras que não estão no AL.
-  const [anilistRaw, comickRaw, mangadexRaw, muRaw, jikanRaw] =
+  // Comick é a fonte principal. As demais complementam a busca sem bloquear
+  // o autocomplete quando alguma API estiver indisponível.
+  const [comickRaw, anilistRaw, mangadexRaw, muRaw, jikanRaw] =
     await Promise.allSettled([
-      withTimeout(searchManhwa(query),       TIMEOUT_MS),
       withTimeout(searchComick(query),        TIMEOUT_MS),
+      withTimeout(searchManhwa(query),       TIMEOUT_MS),
       withTimeout(searchMangaDex(query),      TIMEOUT_MS),
       withTimeout(searchMangaUpdates(query, "Manhwa"),  TIMEOUT_MS),
       withTimeout(searchJikan(query),         TIMEOUT_MS),
@@ -72,6 +71,18 @@ export async function respondAutocomplete(
 
   const seen        = new Set<string>();
   const suggestions: Suggestion[] = [];
+
+  if (comickRaw.status === "fulfilled") {
+    let count = 0;
+    for (const m of comickRaw.value) {
+      if (count >= PER_SOURCE_LIMIT) break;
+      if (m.title && !seen.has(m.title.toLowerCase())) {
+        seen.add(m.title.toLowerCase());
+        suggestions.push({ name: m.title.slice(0, 100), value: `comick:${m.slug}` });
+        count++;
+      }
+    }
+  }
 
   if (anilistRaw.status === "fulfilled") {
     let count = 0;
@@ -81,18 +92,6 @@ export async function respondAutocomplete(
       if (title && !seen.has(title.toLowerCase())) {
         seen.add(title.toLowerCase());
         suggestions.push({ name: title.slice(0, 100), value: `anilist:${m.id}` });
-        count++;
-      }
-    }
-  }
-
-  if (comickRaw.status === "fulfilled") {
-    let count = 0;
-    for (const m of comickRaw.value) {
-      if (count >= PER_SOURCE_LIMIT) break;
-      if (m.title && !seen.has(m.title.toLowerCase())) {
-        seen.add(m.title.toLowerCase());
-        suggestions.push({ name: m.title.slice(0, 100), value: `comick:${m.slug}` });
         count++;
       }
     }
