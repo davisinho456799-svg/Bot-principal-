@@ -21,6 +21,8 @@ export * from './getMangaUpdatesTrackingParams';
 export * from './healthStatus';
 export * from './listComickChaptersParams';
 export * from './listErrorLogsParams';
+export * from './listMangaChaptersParams';
+export * from './listMangaDexChaptersParams';
 export * from './listSubscriptionsParams';
 export * from './mangaAggregate';
 export * from './mangaAggregatePrimarySource';

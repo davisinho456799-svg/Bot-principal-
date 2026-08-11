@@ -30,6 +30,8 @@ import type {
   HealthStatus,
   ListComickChaptersParams,
   ListErrorLogsParams,
+  ListMangaChaptersParams,
+  ListMangaDexChaptersParams,
   ListSubscriptionsParams,
   MangaAggregate,
   MangaUpdatesReleaseResponse,
@@ -304,6 +306,174 @@ export function useListComickChapters<TData = Awaited<ReturnType<typeof listComi
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
 
   const queryOptions = getListComickChaptersQueryOptions(params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getListMangaChaptersUrl = (params?: ListMangaChaptersParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : String(value))
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/manga/chapters?${stringifiedParams}` : `/api/manga/chapters`
+}
+
+/**
+ * @summary List chapters using Comick first and MangaDex as fallback
+ */
+export const listMangaChapters = async (params?: ListMangaChaptersParams, options?: Parameters<typeof customFetch>[1]): Promise<ChapterList> => {
+
+  return customFetch<ChapterList>(getListMangaChaptersUrl(params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getListMangaChaptersQueryKey = (params?: ListMangaChaptersParams,) => {
+    return [
+    `/api/manga/chapters`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getListMangaChaptersQueryOptions = <TData = Awaited<ReturnType<typeof listMangaChapters>>, TError = ErrorType<void>>(params?: ListMangaChaptersParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listMangaChapters>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListMangaChaptersQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listMangaChapters>>> = ({ signal }) => listMangaChapters(params, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listMangaChapters>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type ListMangaChaptersQueryResult = NonNullable<Awaited<ReturnType<typeof listMangaChapters>>>
+export type ListMangaChaptersQueryError = ErrorType<void>
+
+
+/**
+ * @summary List chapters using Comick first and MangaDex as fallback
+ */
+
+export function useListMangaChapters<TData = Awaited<ReturnType<typeof listMangaChapters>>, TError = ErrorType<void>>(
+ params?: ListMangaChaptersParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listMangaChapters>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getListMangaChaptersQueryOptions(params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getListMangaDexChaptersUrl = (params: ListMangaDexChaptersParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : String(value))
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/manga/mangadex/chapters?${stringifiedParams}` : `/api/manga/mangadex/chapters`
+}
+
+/**
+ * @summary List fallback chapters from MangaDex
+ */
+export const listMangaDexChapters = async (params: ListMangaDexChaptersParams, options?: Parameters<typeof customFetch>[1]): Promise<ChapterList> => {
+
+  return customFetch<ChapterList>(getListMangaDexChaptersUrl(params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getListMangaDexChaptersQueryKey = (params?: ListMangaDexChaptersParams,) => {
+    return [
+    `/api/manga/mangadex/chapters`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getListMangaDexChaptersQueryOptions = <TData = Awaited<ReturnType<typeof listMangaDexChapters>>, TError = ErrorType<void>>(params: ListMangaDexChaptersParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listMangaDexChapters>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListMangaDexChaptersQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listMangaDexChapters>>> = ({ signal }) => listMangaDexChapters(params, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listMangaDexChapters>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type ListMangaDexChaptersQueryResult = NonNullable<Awaited<ReturnType<typeof listMangaDexChapters>>>
+export type ListMangaDexChaptersQueryError = ErrorType<void>
+
+
+/**
+ * @summary List fallback chapters from MangaDex
+ */
+
+export function useListMangaDexChapters<TData = Awaited<ReturnType<typeof listMangaDexChapters>>, TError = ErrorType<void>>(
+ params: ListMangaDexChaptersParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listMangaDexChapters>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getListMangaDexChaptersQueryOptions(params,options)
 
   const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
 

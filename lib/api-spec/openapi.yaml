@@ -79,6 +79,77 @@ paths:
                 $ref: "#/components/schemas/ChapterList"
         "502":
           description: Comick unavailable
+  /manga/chapters:
+    get:
+      operationId: listMangaChapters
+      tags: [manga]
+      summary: List chapters using Comick first and MangaDex as fallback
+      parameters:
+        - name: comickSlug
+          in: query
+          schema:
+            type: string
+        - name: mangadexId
+          in: query
+          schema:
+            type: string
+        - name: language
+          in: query
+          schema:
+            type: string
+            default: en
+        - name: limit
+          in: query
+          schema:
+            type: number
+            minimum: 1
+            maximum: 500
+            default: 100
+      responses:
+        "200":
+          description: Chapters from the first available source
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChapterList"
+        "400":
+          description: A source identifier is required
+        "502":
+          description: Both chapter sources are unavailable
+  /manga/mangadex/chapters:
+    get:
+      operationId: listMangaDexChapters
+      tags: [manga]
+      summary: List fallback chapters from MangaDex
+      parameters:
+        - name: id
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: language
+          in: query
+          schema:
+            type: string
+            default: en
+        - name: limit
+          in: query
+          schema:
+            type: number
+            minimum: 1
+            maximum: 500
+            default: 100
+      responses:
+        "200":
+          description: MangaDex chapters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChapterList"
+        "400":
+          description: MangaDex id is required
+        "502":
+          description: MangaDex unavailable
   /manga/mangaupdates/search:
     get:
       operationId: searchMangaUpdates

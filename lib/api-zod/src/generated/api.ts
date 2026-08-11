@@ -88,6 +88,71 @@ export const ListComickChaptersResponse = zod.object({
 
 
 /**
+ * @summary List chapters using Comick first and MangaDex as fallback
+ */
+export const listMangaChaptersQueryLanguageDefault = `en`;
+export const listMangaChaptersQueryLimitDefault = 100;
+export const listMangaChaptersQueryLimitMax = 500;
+
+
+
+export const ListMangaChaptersQueryParams = zod.object({
+  "comickSlug": zod.coerce.string().optional(),
+  "mangadexId": zod.coerce.string().optional(),
+  "language": zod.coerce.string().default(listMangaChaptersQueryLanguageDefault),
+  "limit": zod.coerce.number().min(1).max(listMangaChaptersQueryLimitMax).default(listMangaChaptersQueryLimitDefault)
+})
+
+export const ListMangaChaptersResponse = zod.object({
+  "source": zod.enum(['comick', 'mangadex']),
+  "mangaId": zod.string(),
+  "chapters": zod.array(zod.object({
+  "id": zod.string(),
+  "chapter": zod.string(),
+  "volume": zod.string().nullable(),
+  "title": zod.string().nullable(),
+  "language": zod.string().nullable(),
+  "publishedAt": zod.string().nullable(),
+  "url": zod.string().nullable(),
+  "group": zod.string().nullable(),
+  "source": zod.enum(['comick', 'mangadex'])
+}))
+})
+
+
+/**
+ * @summary List fallback chapters from MangaDex
+ */
+export const listMangaDexChaptersQueryLanguageDefault = `en`;
+export const listMangaDexChaptersQueryLimitDefault = 100;
+export const listMangaDexChaptersQueryLimitMax = 500;
+
+
+
+export const ListMangaDexChaptersQueryParams = zod.object({
+  "id": zod.coerce.string(),
+  "language": zod.coerce.string().default(listMangaDexChaptersQueryLanguageDefault),
+  "limit": zod.coerce.number().min(1).max(listMangaDexChaptersQueryLimitMax).default(listMangaDexChaptersQueryLimitDefault)
+})
+
+export const ListMangaDexChaptersResponse = zod.object({
+  "source": zod.enum(['comick', 'mangadex']),
+  "mangaId": zod.string(),
+  "chapters": zod.array(zod.object({
+  "id": zod.string(),
+  "chapter": zod.string(),
+  "volume": zod.string().nullable(),
+  "title": zod.string().nullable(),
+  "language": zod.string().nullable(),
+  "publishedAt": zod.string().nullable(),
+  "url": zod.string().nullable(),
+  "group": zod.string().nullable(),
+  "source": zod.enum(['comick', 'mangadex'])
+}))
+})
+
+
+/**
  * @summary Search MangaUpdates metadata
  */
 export const searchMangaUpdatesQueryQueryMin = 2;

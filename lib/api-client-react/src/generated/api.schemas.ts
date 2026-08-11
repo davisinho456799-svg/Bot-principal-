@@ -338,6 +338,27 @@ language?: string;
 limit?: number;
 };
 
+export type ListMangaChaptersParams = {
+comickSlug?: string;
+mangadexId?: string;
+language?: string;
+/**
+ * @minimum 1
+ * @maximum 500
+ */
+limit?: number;
+};
+
+export type ListMangaDexChaptersParams = {
+id: string;
+language?: string;
+/**
+ * @minimum 1
+ * @maximum 500
+ */
+limit?: number;
+};
+
 export type SearchMangaUpdatesParams = {
 /**
  * @minLength 2
