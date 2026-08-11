@@ -3,8 +3,8 @@ name: GitHub publishing
 description: Replit/GitHub authorization behavior when pushing an existing branch.
 ---
 
-The GitHub connector can appear available in account-level discovery while still being unavailable to the current Repl. In that state, the managed push reports that an existing branch cannot be updated, and direct HTTPS Git push fails authentication; force-push does not bypass authorization.
+For an existing GitHub branch, the connector can be authorized but a bearer-style HTTPS header may still be rejected by Git. Basic authentication using `x-access-token:<token>` works for fetch and push when the token has repository write permission. The remote branch may also be far ahead of the local starter branch and must be fetched and integrated before pushing.
 
-**Why:** A force flag only changes ref overwrite behavior. It cannot supply missing GitHub credentials or bind an account connection to the environment.
+**Why:** GitHub's accepted auth format and non-fast-forward protection are separate concerns; force-pushing would risk overwriting the bot's existing history.
 
-**How to apply:** Check the connection status for the current Repl before retrying publication. If it is not bound, leave the remote branch unchanged and document the authentication block rather than repeatedly forcing the push.
+**How to apply:** Prefer the secure secret flow for `GITHUB_TOKEN`, authenticate Git operations with Basic `x-access-token`, fetch the target branch, preserve its history, and push a normal fast-forward update.
