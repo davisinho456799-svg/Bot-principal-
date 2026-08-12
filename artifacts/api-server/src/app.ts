@@ -86,6 +86,12 @@ app.use((req, res, next) => {
   next();
 });
 
+// Render's default health check targets the root path. Keep it healthy even
+// when the service is not configured with the more specific /api/healthz path.
+app.get("/", (_req, res) => {
+  res.json({ status: "ok" });
+});
+
 app.use("/api", router);
 
 app.use(async (err: unknown, req: express.Request, res: express.Response, _next: express.NextFunction) => {
