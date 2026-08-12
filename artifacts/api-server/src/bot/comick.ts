@@ -1,35 +1,35 @@
-const BASE = "https://api.comick.io";
+const BASE = (process.env.COMICK_API_BASE ?? "https://api.comick.dev").replace(/\/+$/, "");
 const COVER_BASE = "https://meo.comick.pictures";
 
 interface ComickTitle {
-  title: string;
-  lang: string | null;
+  title?: string;
+  lang?: string | null;
 }
 
 interface ComickCover {
-  b2key: string;
-  vol: string | null;
-  w: number;
-  h: number;
+  b2key?: string;
+  vol?: string | null;
+  w?: number;
+  h?: number;
 }
 
 interface ComickGenre {
-  name: string;
+  name?: string;
 }
 
 export interface ComickResult {
-  hid: string;
-  slug: string;
-  title: string;
-  md_titles: ComickTitle[];
-  status: number | null;
-  rating: string | null;
-  genres: ComickGenre[];
-  country: string | null;
-  year: number | null;
-  md_covers: ComickCover[];
-  last_chapter: number | null;
-  desc: string | null;
+  hid?: string;
+  slug?: string;
+  title?: string;
+  md_titles?: ComickTitle[];
+  status?: number | null;
+  rating?: string | null;
+  genres?: Array<ComickGenre | number>;
+  country?: string | null;
+  year?: number | null;
+  md_covers?: ComickCover[];
+  last_chapter?: number | null;
+  desc?: string | null;
 }
 
 const STATUS_MAP: Record<number, string> = {
@@ -62,7 +62,7 @@ export function comickCountry(country: string | null): string | null {
 const BROWSER_HEADERS = {
   Accept: "application/json",
   "User-Agent":
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "MangaAggregator/1.0 (+https://comick.dev)",
   Referer: "https://comick.io/",
 };
 
@@ -92,8 +92,8 @@ export async function searchComickAny(query: string): Promise<ComickResult[]> {
 
 export async function getComickBySlug(slug: string): Promise<ComickResult | null> {
   try {
-    const res = await fetch(`${BASE}/comic/${slug}`, {
-      headers: { Accept: "application/json" },
+    const res = await fetch(`${BASE}/comic/${encodeURIComponent(slug)}`, {
+      headers: BROWSER_HEADERS,
       signal: AbortSignal.timeout(8000),
     });
     if (!res.ok) return null;

@@ -76,7 +76,7 @@ function extractComickSlug(url: string): string | null {
 /** Consulta o capítulo mais recente no Comick dado o slug da obra */
 async function fetchComickLatestChapter(slug: string): Promise<number | null> {
   try {
-    const res = await fetch(`https://api.comick.io/comic/${slug}`, {
+    const res = await fetch(`https://api.comick.dev/comic/${encodeURIComponent(slug)}`, {
       headers: { Accept: "application/json", "User-Agent": "Mozilla/5.0" },
       signal: AbortSignal.timeout(8000),
     });
@@ -370,7 +370,7 @@ async function fetchChapters(manhwaId: string, source: string): Promise<FetchRes
 
   if (source === 'comick') {
     try {
-      const res = await fetch(`https://api.comick.io/comic/${manhwaId}`, {
+      const res = await fetch(`https://api.comick.dev/comic/${encodeURIComponent(manhwaId)}`, {
         headers: { Accept: 'application/json', 'User-Agent': 'Mozilla/5.0' },
         signal: AbortSignal.timeout(8000),
       });
@@ -669,8 +669,13 @@ async function findFallbackCandidates(
     }
   }
   if (comick.status === "fulfilled") {
-    const match = comick.value.find((item) => likelySameTitle(item.title, title));
-    if (match && (includePrimary || primarySource !== "comick")) {
+    const match = comick.value.find(
+      (item) =>
+        typeof item.title === "string" &&
+        typeof item.slug === "string" &&
+        likelySameTitle(item.title, title),
+    );
+    if (match?.slug && (includePrimary || primarySource !== "comick")) {
       candidates.push({ source: "comick", id: match.slug, title });
     }
   }

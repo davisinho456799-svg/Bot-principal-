@@ -133,11 +133,19 @@ function mangadexToUnified(m: MangaDexResult): UnifiedResult {
 }
 
 function comickToUnified(m: ComickResult): UnifiedResult {
-  const allTitles = (m.md_titles ?? []).map((t) => t.title);
+  const allTitles = (m.md_titles ?? [])
+    .map((t) => t.title?.trim() ?? "")
+    .filter(Boolean);
+  const genres = (m.genres ?? [])
+    .filter((genre): genre is { name?: string } =>
+      typeof genre === "object" && genre !== null,
+    )
+    .map((genre) => genre.name?.trim() ?? "")
+    .filter(Boolean);
   return {
     source: "comick",
-    id: m.slug,
-    mainTitle: m.title,
+    id: m.slug ?? m.hid ?? "",
+    mainTitle: m.title ?? "Sem título",
     nativeTitle: null,
     romajiTitle: null,
     synonyms: allTitles,
@@ -145,10 +153,10 @@ function comickToUnified(m: ComickResult): UnifiedResult {
     coverUrl: comickCoverUrl(m),
     accentColor: 0x26a69a,
     score: m.rating ? Math.round(parseFloat(m.rating) * 10) : null,
-    genres: (m.genres ?? []).map((g) => g.name),
+    genres,
     chapters: m.last_chapter ?? null,
-    status: comickStatus(m.status),
-    siteUrl: `https://comick.io/comic/${m.slug}`,
+    status: comickStatus(m.status ?? null),
+    siteUrl: `https://comick.dev/comic/${m.slug ?? m.hid ?? ""}`,
     year: m.year ?? null,
     ptBrUrl: null,
   };

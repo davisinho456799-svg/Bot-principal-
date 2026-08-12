@@ -1,7 +1,7 @@
 import { asNullableNumber, fetchJson, uniqueTitles } from "../http";
 import type { ChapterRecord, MangaRecord } from "../types";
 
-const API_BASE = "https://api.comick.io";
+const API_BASE = (process.env.COMICK_API_BASE ?? "https://api.comick.dev").replace(/\/+$/, "");
 const COVER_BASE = "https://meo.comick.pictures";
 
 interface ComickTitle {
@@ -20,7 +20,7 @@ interface ComickSearchItem {
   md_titles?: ComickTitle[];
   status?: number | null;
   rating?: string | null;
-  genres?: Array<{ name?: string }>;
+  genres?: Array<{ name?: string } | number>;
   country?: string | null;
   year?: number | null;
   md_covers?: ComickCover[];
@@ -36,6 +36,7 @@ interface ComickChapter {
   lang?: string | null;
   created_at?: string | null;
   published_at?: string | null;
+  publish_at?: string | null;
 }
 
 interface ComickChapterResponse {
@@ -77,13 +78,14 @@ function toRecord(item: ComickSearchItem): MangaRecord | null {
     coverUrl: coverUrl(item),
     score: asNullableNumber(item.rating),
     genres: (item.genres ?? [])
+      .filter((genre): genre is { name?: string } => typeof genre === "object")
       .map((genre) => genre.name?.trim() ?? "")
       .filter(Boolean),
     status: item.status == null ? null : STATUS_MAP[item.status] ?? null,
     chapters: asNullableNumber(item.last_chapter),
     year: item.year ?? null,
     country: item.country ? COUNTRY_MAP[item.country] ?? item.country.toUpperCase() : null,
-    url: `https://comick.io/comic/${item.slug}`,
+    url: `https://comick.dev/comic/${item.slug}`,
   };
 }
 
@@ -98,16 +100,25 @@ export async function searchComick(query: string): Promise<MangaRecord[]> {
 }
 
 export async function getComickChapters(
-  slug: string,
+  identifier: string,
   options: { language?: string; limit?: number } = {},
 ): Promise<ChapterRecord[]> {
+  const detail = await fetchJson<{ comic?: { hid?: string } }>(
+    `${API_BASE}/comic/${encodeURIComponent(identifier)}`,
+    { headers },
+  );
+  const hid = detail.comic?.hid;
+  if (!hid) {
+    throw new Error("Comick comic detail did not include a hid");
+  }
+
   const params = new URLSearchParams({
     lang: options.language ?? "en",
-    limit: String(options.limit ?? 100),
-    order: "desc",
+    limit: String(Math.min(Math.max(options.limit ?? 100, 1), 300)),
+    "date-order": "1",
   });
   const response = await fetchJson<ComickChapterResponse>(
-    `${API_BASE}/comic/${encodeURIComponent(slug)}/chapters?${params.toString()}`,
+    `${API_BASE}/comic/${encodeURIComponent(hid)}/chapters?${params.toString()}`,
     { headers },
   );
 
@@ -119,8 +130,8 @@ export async function getComickChapters(
       volume: chapter.vol == null ? null : String(chapter.vol),
       title: chapter.title ?? null,
       language: chapter.lang ?? options.language ?? null,
-      publishedAt: chapter.published_at ?? chapter.created_at ?? null,
-      url: `https://comick.io/chapter/${chapter.hid}`,
+      publishedAt: chapter.publish_at ?? chapter.published_at ?? chapter.created_at ?? null,
+      url: `https://comick.dev/chapter/${chapter.hid}`,
       group: null,
       source: "comick" as const,
     }));
