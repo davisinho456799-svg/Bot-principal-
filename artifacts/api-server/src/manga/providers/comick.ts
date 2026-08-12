@@ -59,6 +59,10 @@ const COUNTRY_MAP: Record<string, string> = {
 const headers = {
   Accept: "application/json",
   "User-Agent": "MangaAggregator/1.0",
+  Referer: "https://comick.io/",
+  Origin: "https://comick.io",
+  "x-origin": "https://comick.io",
+  "x-referer": "https://api.comick.dev",
 };
 
 function coverUrl(item: ComickSearchItem): string | null {

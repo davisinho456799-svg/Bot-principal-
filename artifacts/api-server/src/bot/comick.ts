@@ -64,6 +64,9 @@ const BROWSER_HEADERS = {
   "User-Agent":
     "MangaAggregator/1.0 (+https://comick.dev)",
   Referer: "https://comick.io/",
+  Origin: "https://comick.io",
+  "x-origin": "https://comick.io",
+  "x-referer": "https://api.comick.dev",
 };
 
 export async function searchComick(query: string): Promise<ComickResult[]> {

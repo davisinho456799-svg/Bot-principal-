@@ -20,6 +20,15 @@ import { searchJikanAny } from "./jikan.js";
 import { recordBotError } from "./error-log.js";
 
 const ANILIST_API = "https://graphql.anilist.co";
+const COMICK_API_BASE = (process.env.COMICK_API_BASE ?? "https://api.comick.dev").replace(/\/+$/, "");
+const COMICK_HEADERS = {
+  Accept: "application/json",
+  "User-Agent": "MangaAggregator/1.0 (+https://comick.dev)",
+  Referer: "https://comick.io/",
+  Origin: "https://comick.io",
+  "x-origin": "https://comick.io",
+  "x-referer": "https://api.comick.dev",
+};
 const CHECK_INTERVAL_MS = 2 * 60 * 60 * 1000; // 2 horas
 
 const CHAPTERS_QUERY = `
@@ -76,8 +85,8 @@ function extractComickSlug(url: string): string | null {
 /** Consulta o capítulo mais recente no Comick dado o slug da obra */
 async function fetchComickLatestChapter(slug: string): Promise<number | null> {
   try {
-    const res = await fetch(`https://api.comick.dev/comic/${encodeURIComponent(slug)}`, {
-      headers: { Accept: "application/json", "User-Agent": "Mozilla/5.0" },
+    const res = await fetch(`${COMICK_API_BASE}/comic/${encodeURIComponent(slug)}`, {
+      headers: COMICK_HEADERS,
       signal: AbortSignal.timeout(8000),
     });
     if (!res.ok) return null;
@@ -370,8 +379,8 @@ async function fetchChapters(manhwaId: string, source: string): Promise<FetchRes
 
   if (source === 'comick') {
     try {
-      const res = await fetch(`https://api.comick.dev/comic/${encodeURIComponent(manhwaId)}`, {
-        headers: { Accept: 'application/json', 'User-Agent': 'Mozilla/5.0' },
+      const res = await fetch(`${COMICK_API_BASE}/comic/${encodeURIComponent(manhwaId)}`, {
+        headers: COMICK_HEADERS,
         signal: AbortSignal.timeout(8000),
       });
       if (!res.ok) {
