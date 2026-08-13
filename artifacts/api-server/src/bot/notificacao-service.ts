@@ -669,8 +669,9 @@ async function findFallbackCandidates(
     return candidates;
   }
 
+  const shouldSearchAniList = includePrimary || primarySource !== "anilist";
   const searches = await Promise.allSettled([
-    searchManhwaAny(title),
+    shouldSearchAniList ? searchManhwaAny(title) : Promise.resolve([]),
     searchComickAny(title),
     searchMangaDexAny(title, 5),
     searchMangaUpdates(title),
