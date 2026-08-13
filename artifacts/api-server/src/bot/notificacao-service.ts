@@ -519,13 +519,24 @@ export async function checkTrackedTitle(
     .select({ lastChapters: capitulosRastreados.lastChapters })
     .from(capitulosRastreados)
     .where(eq(capitulosRastreados.manhwaId, manhwaId));
-  let fetched = await fetchChapters(manhwaId, source);
-  let selectedSource = fetched ? source : null;
+  let fetched: FetchResult | null;
+  let selectedSource: string | null;
+
+  // Registros antigos do AniList devem ser verificados pelo Comick primeiro.
+  // Mantemos o ID original apenas para comparar com a linha de base salva.
+  if (source === "anilist" && title) {
+    const diagnosis = await fetchWithFallback(title, source, manhwaId, false, false);
+    fetched = diagnosis.fetched;
+    selectedSource = diagnosis.selectedSource;
+  } else {
+    fetched = await fetchChapters(manhwaId, source);
+    selectedSource = fetched ? source : null;
+  }
 
   // O MAL/Jikan frequentemente deixa `chapters` nulo em obras em andamento.
   // Nesse caso, tenta uma fonte equivalente pelo título, sem alterar a linha
   // de base nem disparar notificações.
-  if ((!fetched || fetched.isProxy) && title) {
+  if ((!fetched || fetched.isProxy) && title && source !== "anilist") {
     const diagnosis = await fetchWithFallback(title, source, manhwaId);
     fetched = diagnosis.fetched;
     selectedSource = diagnosis.selectedSource;
@@ -723,6 +734,7 @@ async function fetchWithFallback(
   primarySource: string,
   manhwaId: string,
   verifyAllSources = false,
+  includePrimarySource = true,
 ): Promise<{ fetched: FetchResult | null; selectedSource: string | null; attempts: SourceAttempt[] }> {
   const attempts: SourceAttempt[] = [];
 
@@ -730,7 +742,7 @@ async function fetchWithFallback(
   // Para manga/manhwa, a política atual é sempre tentar o Comick primeiro,
   // mantendo a fonte gravada e o AniList como fallback compatível.
   if (isMangaNotificationSource(primarySource) && primarySource !== "comick") {
-    const candidates = await findFallbackCandidates(title, primarySource, true);
+    const candidates = await findFallbackCandidates(title, primarySource, includePrimarySource);
     const directCandidate: FallbackCandidate = {
       source: primarySource,
       id: manhwaId,

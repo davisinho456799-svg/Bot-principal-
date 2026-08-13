@@ -44,6 +44,11 @@ function sourceIcon(source: string): string {
   return SOURCE_ICONS[source] ?? "🔎";
 }
 
+function displayedSource(source: string): string {
+  // Registros antigos do AniList são encaminhados para o Comick na consulta.
+  return source === "anilist" ? "comick" : source;
+}
+
 export const data = new SlashCommandBuilder()
   .setName("verificar")
   .setDescription("Consulta agora se um título acompanhado recebeu capítulos novos")
@@ -118,8 +123,9 @@ export async function autocomplete(interaction: AutocompleteInteraction): Promis
     const value = `${item.source}:${item.manhwaId}`;
     if (seen.has(value)) continue;
     seen.add(value);
+    const visibleSource = displayedSource(item.source);
     results.push({
-      name: `${sourceIcon(item.source)} ${item.title} • ${sourceLabel(item.source)}`.slice(0, 100),
+      name: `${sourceIcon(visibleSource)} ${item.title} • ${sourceLabel(visibleSource)}`.slice(0, 100),
       value,
     });
     if (results.length >= 25) break;
@@ -191,7 +197,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
 
   try {
     const result = await checkTrackedTitle(manhwaId, source, title);
-    const consultedSource = result.selectedSource ?? source;
+    const consultedSource = result.selectedSource ?? displayedSource(source);
     const embed = new EmbedBuilder()
       .setTitle(`🔎 Verificação: ${title}`.slice(0, 256))
       .setColor(result.currentChapters == null ? 0xe67e22 : 0x3498db)
@@ -208,7 +214,16 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
         },
       );
 
-    if (consultedSource !== source) {
+    if (source === "anilist") {
+      embed.addFields({
+        name: "Redirecionamento da fonte",
+        value:
+          consultedSource === "comick"
+            ? "🟢 Registro antigo redirecionado para o Comick."
+            : `🟢 Comick sem dados; consultei ${sourceLabel(consultedSource)} como alternativa.`,
+        inline: false,
+      });
+    } else if (consultedSource !== source) {
       embed.addFields({
         name: "Fonte original",
         value: `${sourceIcon(source)} ${sourceLabel(source)} não retornou capítulos; usei uma fonte equivalente.`,
