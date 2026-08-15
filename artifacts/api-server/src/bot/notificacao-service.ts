@@ -1334,6 +1334,23 @@ export async function runCheck(
         continue;
       }
 
+      // Guard de sanidade: detecta baseline gravado como timestamp Unix (> 100 000).
+      // Nenhuma obra realista tem mais de ~10 000 capítulos; se o valor salvo
+      // ultrapassa esse limiar, foi corrompido (ex: updatedAt armazenado por engano).
+      // Redefine para o valor atual da API sem enviar notificação neste ciclo.
+      const CHAPTER_SANITY_MAX = 100_000;
+      if (existing.lastChapters != null && existing.lastChapters > CHAPTER_SANITY_MAX) {
+        logger.warn(
+          { title: m.title, corruptedLastChapters: existing.lastChapters, newChapters },
+          "Linha de base parece ser um timestamp — redefinindo para o valor atual da API",
+        );
+        await db
+          .update(capitulosRastreados)
+          .set({ lastChapters: newChapters, lastChecked: sql`now()` })
+          .where(eq(capitulosRastreados.manhwaId, m.manhwaId));
+        continue;
+      }
+
       const lastChapters = existing.lastChapters ?? 0;
 
       // Guard final: garante que NaN/Infinity nunca seja gravado no banco
