@@ -34,13 +34,14 @@ export type { SourceErrorKind } from "./notificacao-utils.js";
 
 const ANILIST_API = "https://graphql.anilist.co";
 const COMICK_API_BASE = (process.env.COMICK_API_BASE ?? "https://api.comick.dev").replace(/\/+$/, "");
+// O Cloudflare da Comick bloqueia bots com User-Agent customizado (403 challenge).
+// Usar headers idênticos ao navegador para passar pela proteção.
 const COMICK_HEADERS = {
   Accept: "application/json",
-  "User-Agent": "MangaAggregator/1.0 (+https://comick.dev)",
+  "User-Agent":
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
   Referer: "https://comick.io/",
   Origin: "https://comick.io",
-  "x-origin": "https://comick.io",
-  "x-referer": "https://api.comick.dev",
 };
 const CHECK_INTERVAL_MS = 2 * 60 * 60 * 1000; // 2 horas
 
