@@ -13,7 +13,7 @@ import { getErogamescapeLastUpdated } from "./erogamescape.js";
 import { buildScanLinksExternal } from "./commands/search.js";
 import { getJikanMangaById, getJikanAnimeById, searchJikanAnimeAny } from "./jikan.js";
 import { searchManhwaAny, searchAnime } from "./anilist.js";
-import { searchComickAny } from "./comick.js";
+import { searchComickAny, getComickBySlug } from "./comick.js";
 import { searchMangaDexAny } from "./mangadex.js";
 import { searchMangaUpdates } from "./mangaupdates.js";
 import { searchJikanAny } from "./jikan.js";
@@ -89,6 +89,11 @@ async function fetchComickLatestChapter(slug: string): Promise<number | null> {
       headers: COMICK_HEADERS,
       signal: AbortSignal.timeout(8000),
     });
+    // 404 pode indicar slug renomeado; tenta recuperar via busca antes de desistir
+    if (res.status === 404) {
+      const recovered = await getComickBySlug(slug);
+      return recovered?.last_chapter ?? null;
+    }
     if (!res.ok) return null;
     const json = (await res.json()) as { comic?: { last_chapter?: number | null } };
     return json.comic?.last_chapter ?? null;
@@ -384,6 +389,14 @@ async function fetchChapters(manhwaId: string, source: string): Promise<FetchRes
         signal: AbortSignal.timeout(8000),
       });
       if (!res.ok) {
+        // 404 pode indicar que o slug foi renomeado; tenta recuperar via busca
+        // antes de tratar como obra indisponível.
+        if (res.status === 404) {
+          const recovered = await getComickBySlug(manhwaId);
+          const lastChapter = recovered?.last_chapter ?? null;
+          if (lastChapter == null) return null;
+          return { value: lastChapter, isProxy: false };
+        }
         recordSourceHttpError(source, manhwaId, res.status);
         return null;
       }
