@@ -11,7 +11,7 @@ import { eq } from "drizzle-orm";
 
 export const data = new SlashCommandBuilder()
   .setName("notificar")
-  .setDescription("Configura as notificações dos seus favoritos")
+  .setDescription("Configura o canal de notificações automáticas de capítulos e episódios")
   .addSubcommand((sub) =>
     sub
       .setName("canal")
@@ -74,10 +74,10 @@ async function handleCanal(interaction: ChatInputCommandInteraction) {
     .setTitle("🔔 Notificações Configuradas!")
     .setColor(0x2ecc71)
     .setDescription(
-      `O bot vai avisar em ${canal} sempre que um manhwa da lista de favoritos de alguém tiver **novos capítulos**.\n\n` +
+      `O bot vai avisar em ${canal} sempre que um título assinado tiver **novos capítulos ou episódios**.\n\n` +
       `> ✅ A verificação acontece automaticamente a cada **2 horas**.\n` +
-      `> ✅ Somente manhwas marcados como favoritos com status "Em lançamento" são monitorados.\n` +
-      `> ✅ Cada manhwa só gera uma notificação por atualização de capítulo.`
+      `> ✅ Todos os títulos assinados via \`/assinar adicionar\` são monitorados.\n` +
+      `> ✅ Cada título gera apenas uma notificação por ciclo de atualização.`
     )
     .setFooter({ text: "Use /notificar desativar para parar as notificações" });
 

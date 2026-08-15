@@ -43,8 +43,9 @@ export const data = new SlashCommandBuilder()
       .addStringOption((opt) =>
         opt
           .setName("titulo")
-          .setDescription("Nome ou parte do título da assinatura a cancelar")
+          .setDescription("Digite para filtrar suas assinaturas +18")
           .setRequired(true)
+          .setAutocomplete(true)
       )
   )
   .addSubcommand((sub) =>
@@ -52,6 +53,35 @@ export const data = new SlashCommandBuilder()
   );
 
 export async function autocomplete(interaction: AutocompleteInteraction): Promise<void> {
+  const sub = interaction.options.getSubcommand(false);
+
+  // Autocomplete do /assinar18 remover — mostra só as assinaturas +18 do próprio usuário
+  if (sub === "remover") {
+    if (!interaction.guildId) { await interaction.respond([]); return; }
+    const focused  = interaction.options.getFocused();
+    const userId   = interaction.user.id;
+    const guildId  = interaction.guildId;
+    try {
+      const subs = await db
+        .select({ title: assinaturasTable.title, manhwaId: assinaturasTable.manhwaId })
+        .from(assinaturasTable)
+        .where(and(
+          eq(assinaturasTable.discordUserId, userId),
+          eq(assinaturasTable.guildId, guildId),
+          eq(assinaturasTable.adult, true),
+          focused ? ilike(assinaturasTable.title, `%${focused}%`) : undefined,
+        ))
+        .limit(25);
+      await interaction.respond(
+        subs.map((s) => ({ name: s.title.slice(0, 100), value: s.manhwaId })),
+      );
+    } catch {
+      await interaction.respond([]);
+    }
+    return;
+  }
+
+  // Autocomplete do /assinar18 adicionar
   const tipo    = interaction.options.getString("tipo") ?? "manhwa";
   const focused = interaction.options.getFocused();
   if (tipo === "anime") {
@@ -168,15 +198,28 @@ async function handleRemover(interaction: ChatInputCommandInteraction) {
   const guildId = interaction.guildId;
   const titulo  = interaction.options.getString("titulo", true);
 
-  const subs = await db
+  // Valor do autocomplete = manhwaId exato; texto livre = busca por título.
+  let subs = await db
     .select()
     .from(assinaturasTable)
     .where(and(
       eq(assinaturasTable.discordUserId, userId),
       eq(assinaturasTable.guildId, guildId),
       eq(assinaturasTable.adult, true),
-      ilike(assinaturasTable.title, `%${titulo}%`),
+      eq(assinaturasTable.manhwaId, titulo),
     ));
+
+  if (!subs.length) {
+    subs = await db
+      .select()
+      .from(assinaturasTable)
+      .where(and(
+        eq(assinaturasTable.discordUserId, userId),
+        eq(assinaturasTable.guildId, guildId),
+        eq(assinaturasTable.adult, true),
+        ilike(assinaturasTable.title, `%${titulo}%`),
+      ));
+  }
 
   if (!subs.length) {
     await interaction.editReply(`❌ Nenhuma assinatura +18 encontrada com **${titulo}**.\nUse \`/assinar18 listar\` para ver suas assinaturas.`);

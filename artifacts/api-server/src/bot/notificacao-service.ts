@@ -586,6 +586,50 @@ export interface TitleCheckResult {
  * Consulta uma única fonte sem alterar a linha de base nem enviar notificações.
  * Usado pelo comando /verificar para diagnóstico manual.
  */
+export interface TitleResetResult {
+  currentChapters: number | null;
+  previousLastChapters: number | null;
+  resetDone: boolean;
+  selectedSource: string | null;
+  durationMs: number;
+}
+
+/**
+ * Consulta a fonte e atualiza a linha de base para o valor atual.
+ * Permite corrigir manualmente um baseline corrompido ou desatualizado.
+ */
+export async function resetTrackedTitle(
+  manhwaId: string,
+  source: string,
+  title?: string,
+): Promise<TitleResetResult> {
+  const startedAt = Date.now();
+  const check = await checkTrackedTitle(manhwaId, source, title);
+
+  if (check.currentChapters == null || check.isProxy) {
+    return {
+      currentChapters: check.currentChapters,
+      previousLastChapters: check.lastChapters,
+      resetDone: false,
+      selectedSource: check.selectedSource,
+      durationMs: Date.now() - startedAt,
+    };
+  }
+
+  await db
+    .update(capitulosRastreados)
+    .set({ lastChapters: check.currentChapters, lastChecked: sql`now()` })
+    .where(eq(capitulosRastreados.manhwaId, manhwaId));
+
+  return {
+    currentChapters: check.currentChapters,
+    previousLastChapters: check.lastChapters,
+    resetDone: true,
+    selectedSource: check.selectedSource,
+    durationMs: Date.now() - startedAt,
+  };
+}
+
 export async function checkTrackedTitle(
   manhwaId: string,
   source: string,

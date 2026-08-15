@@ -6,7 +6,7 @@ import {
 } from "discord.js";
 import { db, assinaturasTable, favoritosTable } from "@workspace/db";
 import { and, desc, eq, ilike } from "drizzle-orm";
-import { checkTrackedTitle } from "../notificacao-service.js";
+import { checkTrackedTitle, resetTrackedTitle } from "../notificacao-service.js";
 
 const SOURCE_LABELS: Record<string, string> = {
   anilist: "AniList",
@@ -58,6 +58,12 @@ export const data = new SlashCommandBuilder()
       .setDescription("Título que você favoritou ou acompanha")
       .setRequired(true)
       .setAutocomplete(true),
+  )
+  .addBooleanOption((option) =>
+    option
+      .setName("resetar")
+      .setDescription("Atualiza a referência salva para o capítulo atual da API (corrige baseline errado)")
+      .setRequired(false),
   );
 
 export async function autocomplete(interaction: AutocompleteInteraction): Promise<void> {
@@ -147,7 +153,8 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     return;
   }
 
-  const selected = interaction.options.getString("titulo", true);
+  const selected  = interaction.options.getString("titulo", true);
+  const fazerReset = interaction.options.getBoolean("resetar") ?? false;
   const match = /^(anilist|anilist-anime|mangadex|comick|mangaupdates|jikan|vndb|erogamescape):(.+)$/.exec(selected);
   if (!match) {
     await interaction.reply({
@@ -195,6 +202,38 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
 
   await interaction.deferReply({ ephemeral: true });
 
+  // ── Reset de baseline ───────────────────────────────────────────────────────
+  if (fazerReset) {
+    try {
+      const reset = await resetTrackedTitle(manhwaId, source, title);
+      const embed = new EmbedBuilder()
+        .setTitle(`🔄 Reset de Baseline: ${title}`.slice(0, 256))
+        .setColor(reset.resetDone ? 0x2ecc71 : 0xe67e22);
+
+      if (!reset.resetDone) {
+        embed.setDescription(
+          "⚠️ Não foi possível resetar: a API não retornou um número de capítulos válido agora.\n" +
+          "Tente novamente em alguns instantes.",
+        );
+      } else {
+        embed
+          .setDescription("✅ Linha de base atualizada com sucesso.")
+          .addFields(
+            { name: "Referência anterior", value: String(reset.previousLastChapters ?? "—"), inline: true },
+            { name: "Nova referência",      value: String(reset.currentChapters),             inline: true },
+            { name: "Fonte usada",          value: `${sourceIcon(reset.selectedSource ?? source)} ${sourceLabel(reset.selectedSource ?? source)}`, inline: true },
+          );
+      }
+
+      embed.setFooter({ text: `Reset manual • ${(reset.durationMs / 1000).toFixed(1)}s` });
+      await interaction.editReply({ embeds: [embed] });
+    } catch {
+      await interaction.editReply("❌ Erro ao tentar resetar a linha de base.");
+    }
+    return;
+  }
+
+  // ── Verificação normal ─────────────────────────────────────────────────────
   try {
     const result = await checkTrackedTitle(manhwaId, source, title);
     const consultedSource = result.selectedSource ?? displayedSource(source);
