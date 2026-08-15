@@ -431,6 +431,26 @@ async function fetchChapters(
               : undefined;
           return { value: lastChapter, isProxy: false, newManhwaId };
         }
+        // Para 403/429/5xx: tenta o endpoint de busca como fallback interno do
+        // Comick antes de desistir. O endpoint /v1.0/search tem proteção CF mais
+        // leve que /comic/{slug} e já inclui last_chapter na resposta.
+        logger.debug({ manhwaId, httpStatus: res.status }, "Comick /comic/{slug} bloqueado — tentando /v1.0/search");
+        try {
+          const searchRes = await fetch(
+            `${COMICK_API_BASE}/v1.0/search?${new URLSearchParams({ q: manhwaId, limit: "10" })}`,
+            { headers: COMICK_HEADERS, signal: AbortSignal.timeout(8000) },
+          );
+          if (searchRes.ok) {
+            const items = (await searchRes.json()) as Array<{ slug?: string; last_chapter?: number | null }>;
+            const match = items.find((item) => item.slug === manhwaId);
+            if (match && match.last_chapter != null) {
+              logger.debug({ manhwaId, last_chapter: match.last_chapter }, "Comick search fallback bem-sucedido");
+              return { value: match.last_chapter, isProxy: false };
+            }
+          }
+        } catch {
+          // Search também falhou — segue para o erro original
+        }
         const kind = classifyHttpStatus(res.status);
         recordSourceError(source, manhwaId, kind, res.status);
         return fetchError(kind, res.status);
