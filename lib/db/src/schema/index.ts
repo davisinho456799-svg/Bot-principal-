@@ -1,4 +1,4 @@
-import { pgTable, text, serial, timestamp, real, json, unique, boolean } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, timestamp, real, json, unique } from "drizzle-orm/pg-core";
 export * from "./errorLogs";
 export * from "./subscriptions";
 export * from "./malSnapshots";
@@ -178,35 +178,3 @@ export const descriptionMatches = pgTable(
   },
   (t) => [unique().on(t.descriptionHash, t.canonicalTitle)]
 );
-
-// ─── Tabela: assinaturas ──────────────────────────────────────────────────────
-// Usuários inscritos para receber menções quando novos capítulos saírem.
-
-export const assinaturasTable = pgTable(
-  "assinaturas",
-  {
-    id: serial("id").primaryKey(),
-    discordUserId: text("discord_user_id").notNull(),
-    guildId: text("guild_id").notNull(),
-    manhwaId: text("manhwa_id").notNull(),
-    source: text("source").notNull(),
-    title: text("title").notNull(),
-    coverUrl: text("cover_url"),
-    siteUrl: text("site_url").notNull(),
-    /** "anime" | "manga" | "manhwa" */
-    tipo: text("tipo").notNull().default("manhwa"),
-    /** true = conteúdo adulto (+18) */
-    adult: boolean("adult").notNull().default(false),
-    addedAt: timestamp("added_at").notNull().defaultNow(),
-  },
-  (t) => [
-    unique("assinaturas_discord_user_id_manhwa_id_guild_id_key").on(
-      t.discordUserId,
-      t.manhwaId,
-      t.guildId,
-    ),
-  ]
-);
-
-export type Assinatura = typeof assinaturasTable.$inferSelect;
-export type InsertAssinatura = typeof assinaturasTable.$inferInsert;

@@ -1,7 +1,11 @@
 import { Router, type IRouter } from "express";
 import { eq, asc, and } from "drizzle-orm";
 import { db } from "@workspace/db";
-import { subscriptionsTable, malSnapshotsTable } from "@workspace/db";
+import {
+  assinaturasTable,
+  malSnapshotsTable,
+  notificacaoCanaisTable,
+} from "@workspace/db";
 import {
   ListSubscriptionsQueryParams,
   CreateSubscriptionBody,
@@ -13,6 +17,25 @@ import { recordError } from "../lib/error-logging";
 
 const router: IRouter = Router();
 
+function toSubscriptionResponse(
+  row: typeof assinaturasTable.$inferSelect,
+  channelId: string | null,
+) {
+  return {
+    id: row.id,
+    discord_user_id: row.discordUserId,
+    discord_channel_id: channelId ?? "",
+    discord_guild_id: row.guildId,
+    // A rota legada aceita apenas IDs numéricos do MAL. Assinaturas criadas
+    // pelo bot podem usar slugs; nesse caso o valor não é representável neste
+    // contrato antigo e será serializado como null pelo JSON.
+    mal_item_id: Number(row.manhwaId),
+    mal_item_type: row.tipo === "anime" ? "anime" : "manga",
+    item_name: row.title,
+    created_at: row.addedAt,
+  };
+}
+
 // GET /subscriptions
 router.get("/subscriptions", async (req, res): Promise<void> => {
   const query = ListSubscriptionsQueryParams.safeParse(req.query);
@@ -22,27 +45,23 @@ router.get("/subscriptions", async (req, res): Promise<void> => {
   }
 
   const conditions = query.data.guild_id
-    ? [eq(subscriptionsTable.discordGuildId, query.data.guild_id)]
+    ? [eq(assinaturasTable.guildId, query.data.guild_id)]
     : [];
 
   const rows = await db
-    .select()
-    .from(subscriptionsTable)
+    .select({
+      subscription: assinaturasTable,
+      channelId: notificacaoCanaisTable.channelId,
+    })
+    .from(assinaturasTable)
+    .leftJoin(
+      notificacaoCanaisTable,
+      eq(assinaturasTable.guildId, notificacaoCanaisTable.guildId),
+    )
     .where(conditions.length > 0 ? and(...conditions) : undefined)
-    .orderBy(asc(subscriptionsTable.createdAt));
+    .orderBy(asc(assinaturasTable.addedAt));
 
-  res.json(
-    rows.map((r) => ({
-      id: r.id,
-      discord_user_id: r.discordUserId,
-      discord_channel_id: r.discordChannelId,
-      discord_guild_id: r.discordGuildId,
-      mal_item_id: r.malItemId,
-      mal_item_type: r.malItemType,
-      item_name: r.itemName,
-      created_at: r.createdAt,
-    })),
-  );
+  res.json(rows.map((r) => toSubscriptionResponse(r.subscription, r.channelId)));
 });
 
 // POST /subscriptions
@@ -58,12 +77,12 @@ router.post("/subscriptions", async (req, res): Promise<void> => {
   // Check duplicate
   const existing = await db
     .select()
-    .from(subscriptionsTable)
+    .from(assinaturasTable)
     .where(
       and(
-        eq(subscriptionsTable.discordUserId, body.discord_user_id),
-        eq(subscriptionsTable.malItemId, body.mal_item_id),
-        eq(subscriptionsTable.discordGuildId, body.discord_guild_id),
+        eq(assinaturasTable.discordUserId, body.discord_user_id),
+        eq(assinaturasTable.manhwaId, String(body.mal_item_id)),
+        eq(assinaturasTable.guildId, body.discord_guild_id),
       ),
     )
     .limit(1);
@@ -74,27 +93,21 @@ router.post("/subscriptions", async (req, res): Promise<void> => {
   }
 
   const [row] = await db
-    .insert(subscriptionsTable)
+    .insert(assinaturasTable)
     .values({
       discordUserId: body.discord_user_id,
-      discordChannelId: body.discord_channel_id,
-      discordGuildId: body.discord_guild_id,
-      malItemId: body.mal_item_id,
-      malItemType: body.mal_item_type,
-      itemName: body.item_name,
+      guildId: body.discord_guild_id,
+      manhwaId: String(body.mal_item_id),
+      source: "jikan",
+      title: body.item_name,
+      coverUrl: null,
+      siteUrl: `https://myanimelist.net/${body.mal_item_type}/${body.mal_item_id}`,
+      tipo: body.mal_item_type,
+      adult: false,
     })
     .returning();
 
-  res.status(201).json({
-    id: row.id,
-    discord_user_id: row.discordUserId,
-    discord_channel_id: row.discordChannelId,
-    discord_guild_id: row.discordGuildId,
-    mal_item_id: row.malItemId,
-    mal_item_type: row.malItemType,
-    item_name: row.itemName,
-    created_at: row.createdAt,
-  });
+  res.status(201).json(toSubscriptionResponse(row, body.discord_channel_id));
 });
 
 // DELETE /subscriptions/:id
@@ -106,8 +119,8 @@ router.delete("/subscriptions/:id", async (req, res): Promise<void> => {
   }
 
   const [deleted] = await db
-    .delete(subscriptionsTable)
-    .where(eq(subscriptionsTable.id, params.data.id))
+    .delete(assinaturasTable)
+    .where(eq(assinaturasTable.id, params.data.id))
     .returning();
 
   if (!deleted) {
@@ -139,8 +152,8 @@ router.post("/subscriptions/:id/check", async (req, res): Promise<void> => {
 
   const [sub] = await db
     .select()
-    .from(subscriptionsTable)
-    .where(eq(subscriptionsTable.id, params.data.id))
+    .from(assinaturasTable)
+    .where(eq(assinaturasTable.id, params.data.id))
     .limit(1);
 
   if (!sub) {
