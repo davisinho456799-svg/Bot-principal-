@@ -116,12 +116,60 @@ interface FetchResult {
 let mangaUpdatesSessionToken: string | null = null;
 let mangaUpdatesSessionExpiresAt = 0;
 
-function recordSourceHttpError(source: string, manhwaId: string, status: number): void {
+// ─── Classificação e registo de erros de fonte ───────────────────────────────
+
+export type SourceErrorKind =
+  | "http_404"
+  | "http_403"
+  | "http_429"
+  | "http_5xx"
+  | "http_other"
+  | "timeout"
+  | "invalid_response"
+  | "no_data";
+
+/** Objeto retornado por fetchChapters quando a falha é identificada. */
+interface FetchError {
+  readonly _err: true;
+  kind: SourceErrorKind;
+  httpStatus?: number;
+}
+
+function fetchError(kind: SourceErrorKind, httpStatus?: number): FetchError {
+  return { _err: true, kind, httpStatus };
+}
+
+function isFetchError(r: FetchResult | FetchError | null): r is FetchError {
+  return r !== null && "_err" in r;
+}
+
+function classifyHttpStatus(status: number): SourceErrorKind {
+  if (status === 404) return "http_404";
+  if (status === 403) return "http_403";
+  if (status === 429) return "http_429";
+  if (status >= 500) return "http_5xx";
+  return "http_other";
+}
+
+function classifyException(err: unknown): SourceErrorKind {
+  if (err instanceof Error) {
+    if (err.name === "TimeoutError" || err.name === "AbortError") return "timeout";
+    if (err instanceof SyntaxError) return "invalid_response";
+  }
+  return "http_other";
+}
+
+function recordSourceError(
+  source: string,
+  manhwaId: string,
+  kind: SourceErrorKind,
+  httpStatus?: number,
+): void {
   void recordBotError({
     source: "notification_source",
-    errorCode: "SOURCE_HTTP_ERROR",
-    error: new Error(`${source} HTTP ${status}`),
-    context: { source, manhwaId },
+    errorCode: `SOURCE_${kind.toUpperCase().replace(/-/g, "_")}`,
+    error: new Error(httpStatus ? `${source} HTTP ${httpStatus}` : `${source} ${kind}`),
+    context: { source, manhwaId, errorKind: kind, ...(httpStatus ? { httpStatus } : {}) },
   });
 }
 
@@ -175,6 +223,10 @@ export type SourceAttempt = {
   status: "ok" | "sem_dados";
   value: number | null;
   selected: boolean;
+  /** Tipo de falha; presente quando status é "sem_dados". */
+  errorKind?: SourceErrorKind;
+  /** HTTP status code quando a falha é HTTP. */
+  httpStatus?: number;
 };
 
 export type NotificationCheckSummary = {
@@ -273,7 +325,10 @@ async function recordMalSnapshot(malId: string, title: string, snapshot: MalSnap
   return { previous, changedFields };
 }
 
-async function fetchChapters(manhwaId: string, source: string): Promise<FetchResult | null> {
+async function fetchChapters(
+  manhwaId: string,
+  source: string,
+): Promise<FetchResult | FetchError | null> {
   if (source === "anilist") {
     try {
       const res = await fetch(ANILIST_API, {
@@ -283,12 +338,13 @@ async function fetchChapters(manhwaId: string, source: string): Promise<FetchRes
         signal: AbortSignal.timeout(8000),
       });
       if (!res.ok) {
-        recordSourceHttpError(source, manhwaId, res.status);
-        return null;
+        const kind = classifyHttpStatus(res.status);
+        recordSourceError(source, manhwaId, kind, res.status);
+        return fetchError(kind, res.status);
       }
       const json = (await res.json()) as { data: { Media: MediaInfo } };
       const media = json.data?.Media;
-      if (!media) return null;
+      if (!media) return fetchError("invalid_response");
       if (media.chapters != null) return { value: media.chapters, isProxy: false };
 
       // Série em andamento: AniList não informa o capítulo atual.
@@ -321,9 +377,11 @@ async function fetchChapters(manhwaId: string, source: string): Promise<FetchRes
 
       // updatedAt é apenas um timestamp da página, não uma contagem de capítulos.
       // Não o use como baseline: alterações de capa/sinopse também mudam esse valor.
-      return null;
-    } catch {
-      return null;
+      return fetchError("no_data");
+    } catch (err) {
+      const kind = classifyException(err);
+      recordSourceError(source, manhwaId, kind);
+      return fetchError(kind);
     }
   }
 
@@ -333,16 +391,19 @@ async function fetchChapters(manhwaId: string, source: string): Promise<FetchRes
       const params = new URLSearchParams({ manga: manhwaId, limit: "1", "order[chapter]": "desc" });
       const res = await fetch(`https://api.mangadex.org/chapter?${params}`, { signal: AbortSignal.timeout(8000) });
       if (!res.ok) {
-        recordSourceHttpError(source, manhwaId, res.status);
-        return null;
+        const kind = classifyHttpStatus(res.status);
+        recordSourceError(source, manhwaId, kind, res.status);
+        return fetchError(kind, res.status);
       }
       const json = (await res.json()) as { data: { attributes: { chapter: string | null } }[]; total: number };
-      if (!json.data?.length) return null;
+      if (!json.data?.length) return fetchError("no_data");
       const chap = json.data[0].attributes.chapter;
       const value = chap ? parseFloat(chap) : json.total;
       return { value, isProxy: false };
-    } catch {
-      return null;
+    } catch (err) {
+      const kind = classifyException(err);
+      recordSourceError(source, manhwaId, kind);
+      return fetchError(kind);
     }
   }
 
@@ -365,29 +426,32 @@ async function fetchChapters(manhwaId: string, source: string): Promise<FetchRes
         signal: AbortSignal.timeout(8000),
       });
       if (!res.ok) {
-        recordSourceHttpError(source, manhwaId, res.status);
-        return null;
+        const kind = classifyHttpStatus(res.status);
+        recordSourceError(source, manhwaId, kind, res.status);
+        return fetchError(kind, res.status);
       }
       const json = (await res.json()) as {
         data: { Media: { episodes: number | null; nextAiringEpisode: { episode: number } | null; status: string | null } };
       };
       const media = json.data?.Media;
-      if (!media) return null;
+      if (!media) return fetchError("invalid_response");
       if (media.nextAiringEpisode) return { value: media.nextAiringEpisode.episode - 1, isProxy: false };
       if (media.episodes != null) return { value: media.episodes, isProxy: false };
-      return null;
-    } catch {
-      return null;
+      return fetchError("no_data");
+    } catch (err) {
+      const kind = classifyException(err);
+      recordSourceError(source, manhwaId, kind);
+      return fetchError(kind);
     }
   }
 
   if (source === "jikan-anime") {
     const anime = await getJikanAnimeById(Number(manhwaId));
-    if (anime?.episodes == null) return null;
+    if (anime?.episodes == null) return fetchError("no_data");
     return { value: anime.episodes, isProxy: false };
   }
 
-  if (source === 'comick') {
+  if (source === "comick") {
     try {
       const res = await fetch(`${COMICK_API_BASE}/comic/${encodeURIComponent(manhwaId)}`, {
         headers: COMICK_HEADERS,
@@ -398,42 +462,46 @@ async function fetchChapters(manhwaId: string, source: string): Promise<FetchRes
         // antes de tratar como obra indisponível.
         if (res.status === 404) {
           const recovered = await getComickBySlug(manhwaId);
-          if (!recovered) return null;
+          if (!recovered) {
+            recordSourceError(source, manhwaId, "http_404", 404);
+            return fetchError("http_404", 404);
+          }
           const lastChapter = recovered.last_chapter ?? null;
-          if (lastChapter == null) return null;
+          if (lastChapter == null) return fetchError("no_data");
           const newManhwaId =
             recovered.slug && recovered.slug !== manhwaId
               ? recovered.slug
               : undefined;
           return { value: lastChapter, isProxy: false, newManhwaId };
         }
-        recordSourceHttpError(source, manhwaId, res.status);
-        return null;
+        const kind = classifyHttpStatus(res.status);
+        recordSourceError(source, manhwaId, kind, res.status);
+        return fetchError(kind, res.status);
       }
       const json = (await res.json()) as { comic?: { last_chapter?: number | null }; last_chapter?: number | null };
       const lastChapter = json.comic?.last_chapter ?? (json as { last_chapter?: number | null }).last_chapter ?? null;
-      if (lastChapter == null) return null;
+      if (lastChapter == null) return fetchError("no_data");
       return { value: lastChapter, isProxy: false };
-    } catch {
-      return null;
+    } catch (err) {
+      const kind = classifyException(err);
+      recordSourceError(source, manhwaId, kind);
+      return fetchError(kind);
     }
   }
 
-  if (source === 'mangaupdates') {
+  if (source === "mangaupdates") {
     try {
       const token = await getMangaUpdatesSessionToken();
-      if (!token) return null;
+      if (!token) return null; // credencial ausente — não é erro de API
 
-      const requestSeries = async (sessionToken: string) => fetch(
-        `https://api.mangaupdates.com/v1/series/${encodeURIComponent(manhwaId)}`,
-        {
+      const requestSeries = async (sessionToken: string) =>
+        fetch(`https://api.mangaupdates.com/v1/series/${encodeURIComponent(manhwaId)}`, {
           headers: {
             Accept: "application/json",
             Authorization: `Bearer ${sessionToken}`,
           },
           signal: AbortSignal.timeout(8000),
-        },
-      );
+        });
 
       let res = await requestSeries(token);
       if (res.status === 401) {
@@ -442,8 +510,9 @@ async function fetchChapters(manhwaId: string, source: string): Promise<FetchRes
         res = await requestSeries(refreshedToken);
       }
       if (!res.ok) {
-        recordSourceHttpError(source, manhwaId, res.status);
-        return null;
+        const kind = classifyHttpStatus(res.status);
+        recordSourceError(source, manhwaId, kind, res.status);
+        return fetchError(kind, res.status);
       }
 
       const series = (await res.json()) as {
@@ -457,66 +526,74 @@ async function fetchChapters(manhwaId: string, source: string): Promise<FetchRes
       const statusChapter = parseMangaUpdatesStatusChapter(series.status);
       const chapter = Math.max(latestChapter ?? 0, statusChapter ?? 0);
 
-      if (!chapter) return null;
+      if (!chapter) return fetchError("no_data");
       return { value: chapter, isProxy: false };
-    } catch {
-      return null;
+    } catch (err) {
+      const kind = classifyException(err);
+      recordSourceError(source, manhwaId, kind);
+      return fetchError(kind);
     }
   }
 
-  if (source === 'jikan') {
+  if (source === "jikan") {
     try {
       await new Promise((r) => setTimeout(r, 400));
       const res = await fetch(`https://api.jikan.moe/v4/manga/${manhwaId}`, {
-        headers: { Accept: 'application/json' },
+        headers: { Accept: "application/json" },
         signal: AbortSignal.timeout(8000),
       });
       if (!res.ok) {
-        recordSourceHttpError(source, manhwaId, res.status);
-        return null;
+        const kind = classifyHttpStatus(res.status);
+        recordSourceError(source, manhwaId, kind, res.status);
+        return fetchError(kind, res.status);
       }
       const json = (await res.json()) as { data?: { chapters?: number | null } };
       const chapters = json.data?.chapters;
-      if (chapters == null) return null;
+      if (chapters == null) return fetchError("no_data");
       return { value: chapters, isProxy: false };
-    } catch {
-      return null;
+    } catch (err) {
+      const kind = classifyException(err);
+      recordSourceError(source, manhwaId, kind);
+      return fetchError(kind);
     }
   }
 
-  if (source === 'vndb') {
+  if (source === "vndb") {
     try {
-      const res = await fetch('https://api.vndb.org/kana/release', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+      const res = await fetch("https://api.vndb.org/kana/release", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          filters: ['vn', '=', ['id', '=', manhwaId]],
-          fields: 'id',
+          filters: ["vn", "=", ["id", "=", manhwaId]],
+          fields: "id",
           results: 100,
         }),
         signal: AbortSignal.timeout(8000),
       });
       if (!res.ok) {
-        recordSourceHttpError(source, manhwaId, res.status);
-        return null;
+        const kind = classifyHttpStatus(res.status);
+        recordSourceError(source, manhwaId, kind, res.status);
+        return fetchError(kind, res.status);
       }
       const json = (await res.json()) as { count?: number; results?: unknown[] };
       const count = json.count ?? json.results?.length ?? null;
-      if (count == null) return null;
+      if (count == null) return fetchError("no_data");
       return { value: count, isProxy: false };
-    } catch {
-      return null;
+    } catch (err) {
+      const kind = classifyException(err);
+      recordSourceError(source, manhwaId, kind);
+      return fetchError(kind);
     }
   }
 
   if (source === "erogamescape") {
     // Rastreia via data de última atualização (最終更新日) — timestamp como proxy
     const ts = await getErogamescapeLastUpdated(manhwaId);
-    if (ts === null) return null;
+    if (ts === null) return fetchError("no_data");
     return { value: Math.floor(ts / 1000), isProxy: true };
   }
 
-  return null;
+  return null; // fonte desconhecida
 }
 
 export interface TitleCheckResult {
@@ -552,7 +629,8 @@ export async function checkTrackedTitle(
     fetched = diagnosis.fetched;
     selectedSource = diagnosis.selectedSource;
   } else {
-    fetched = await fetchChapters(manhwaId, source);
+    const raw = await fetchChapters(manhwaId, source);
+    fetched = isFetchError(raw) ? null : raw;
     selectedSource = fetched ? source : null;
   }
 
@@ -764,12 +842,15 @@ async function fetchWithFallback(
 
   // ── Anime / VN: comportamento sequencial preservado ──────────────────────
   if (!isMangaNotificationSource(primarySource)) {
-    const primary = await fetchChapters(manhwaId, primarySource);
+    const rawPrimary = await fetchChapters(manhwaId, primarySource);
+    const primary = isFetchError(rawPrimary) ? null : rawPrimary;
     attempts.push({
       source: primarySource,
       status: primary && !primary.isProxy ? "ok" : "sem_dados",
       value: primary?.value ?? null,
       selected: false,
+      errorKind: isFetchError(rawPrimary) ? rawPrimary.kind : (primary == null ? "no_data" : undefined),
+      httpStatus: isFetchError(rawPrimary) ? rawPrimary.httpStatus : undefined,
     });
     if (primary && !primary.isProxy && !verifyAllSources) {
       attempts[0]!.selected = true;
@@ -779,12 +860,15 @@ async function fetchWithFallback(
     const candidates = await findFallbackCandidates(title, primarySource);
     const successful: Array<{ source: string; fetched: FetchResult }> = [];
     for (const candidate of candidates) {
-      const fetched = await fetchChapters(candidate.id, candidate.source);
+      const rawFetched = await fetchChapters(candidate.id, candidate.source);
+      const fetched = isFetchError(rawFetched) ? null : rawFetched;
       attempts.push({
         source: candidate.source,
         status: fetched && !fetched.isProxy ? "ok" : "sem_dados",
         value: fetched?.value ?? null,
         selected: false,
+        errorKind: isFetchError(rawFetched) ? rawFetched.kind : (fetched == null ? "no_data" : undefined),
+        httpStatus: isFetchError(rawFetched) ? rawFetched.httpStatus : undefined,
       });
       if (fetched && !fetched.isProxy) {
         successful.push({ source: candidate.source, fetched });
@@ -840,9 +924,15 @@ async function fetchWithFallback(
       }
     }
 
-    if (!id) return { source, fetched: null as FetchResult | null };
-    const fetched = await fetchChapters(id, source);
-    return { source, fetched };
+    if (!id) return { source, fetched: null as FetchResult | null, errorKind: undefined as SourceErrorKind | undefined, httpStatus: undefined as number | undefined };
+    const raw = await fetchChapters(id, source);
+    const fetched = isFetchError(raw) ? null : raw;
+    return {
+      source,
+      fetched,
+      errorKind: isFetchError(raw) ? raw.kind : undefined,
+      httpStatus: isFetchError(raw) ? raw.httpStatus : undefined,
+    };
   });
 
   const settled = await Promise.allSettled(parallelTasks);
@@ -854,12 +944,14 @@ async function fetchWithFallback(
       // Exceção inesperada na tarefa — não bloqueia as outras fontes
       continue;
     }
-    const { source, fetched } = result.value;
+    const { source, fetched, errorKind, httpStatus } = result.value;
     attempts.push({
       source,
       status: fetched && !fetched.isProxy ? "ok" : "sem_dados",
       value: fetched?.value ?? null,
       selected: false,
+      errorKind: errorKind ?? (fetched == null ? "no_data" : undefined),
+      httpStatus,
     });
     if (fetched && !fetched.isProxy) {
       successful.push({ source, fetched });
@@ -910,15 +1002,19 @@ function addDiagnosisToSummary(
   }
 
   for (const attempt of diagnosis.attempts) {
-    if (attempt.status !== "sem_dados") continue;
+    if (attempt.status === "ok") continue;
+    const kind = attempt.errorKind ?? "no_data";
+    const httpInfo = attempt.httpStatus ? ` (HTTP ${attempt.httpStatus})` : "";
     void recordBotError({
       source: "notification_source",
-      errorCode: "SOURCE_NO_DATA",
-      error: new Error(`A fonte ${attempt.source} não retornou capítulos`),
+      errorCode: `SOURCE_${kind.toUpperCase().replace(/-/g, "_")}`,
+      error: new Error(`${attempt.source}: ${kind}${httpInfo}`),
       context: {
         title,
         primarySource,
         attemptedSource: attempt.source,
+        errorKind: kind,
+        ...(attempt.httpStatus ? { httpStatus: attempt.httpStatus } : {}),
       },
     });
   }
