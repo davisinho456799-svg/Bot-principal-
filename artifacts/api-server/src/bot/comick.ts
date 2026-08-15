@@ -62,11 +62,7 @@ export function comickCountry(country: string | null): string | null {
 const BROWSER_HEADERS = {
   Accept: "application/json",
   "User-Agent":
-    "MangaAggregator/1.0 (+https://comick.dev)",
-  Referer: "https://comick.io/",
-  Origin: "https://comick.io",
-  "x-origin": "https://comick.io",
-  "x-referer": "https://api.comick.dev",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
 };
 
 // ─── Helpers de comparação para recuperação de 404 ───────────────────────────
