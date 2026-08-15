@@ -1049,8 +1049,13 @@ async function sendNotification(
 
     if (coverUrl) embed.setThumbnail(coverUrl);
 
+    // Modo silencioso: entre 22h e 07h no horário de Brasília (UTC-3) o embed é
+    // enviado sem @mencionar os usuários para não acordar ninguém.
+    const nowBrasilia = new Date(Date.now() - 3 * 60 * 60 * 1000);
+    const hourBrasilia = nowBrasilia.getUTCHours();
+    const isSilent = hourBrasilia >= 22 || hourBrasilia < 7;
     // Menciona os inscritos — respeita o limite de 2000 chars do Discord
-    const content = mentions.length > 0 ? mentions.join(" ").slice(0, 2000) : undefined;
+    const content = mentions.length > 0 && !isSilent ? mentions.join(" ").slice(0, 2000) : undefined;
 
     await channel.send({ content, embeds: [embed] });
     return true;

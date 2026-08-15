@@ -7,7 +7,7 @@ import {
 import { db, assinaturasTable, notificacaoCanaisTable } from "@workspace/db";
 import { eq, and, ilike } from "drizzle-orm";
 import { getUnifiedById, getUnifiedAnimeById } from "../unified.js";
-import { respondAutocomplete, respondAutocompleteAnime, respondAutocompleteVN18, respondAutocompleteEroge } from "../autocomplete.js";
+import { respondAutocomplete, respondAutocompleteAnime } from "../autocomplete.js";
 
 export const data = new SlashCommandBuilder()
   .setName("assinar18")
@@ -26,8 +26,6 @@ export const data = new SlashCommandBuilder()
             { name: "🎬 Anime +18",    value: "anime"   },
             { name: "🇯🇵 Manga +18",   value: "manga"   },
             { name: "🇰🇷 Manhwa +18",  value: "manhwa"  },
-            { name: "🔞 VN (+18)",     value: "vn"      },
-            { name: "🎮 Eroge",         value: "eroge"   },
           )
       )
       .addStringOption((opt) =>
@@ -58,10 +56,6 @@ export async function autocomplete(interaction: AutocompleteInteraction): Promis
   const focused = interaction.options.getFocused();
   if (tipo === "anime") {
     await respondAutocompleteAnime(interaction, focused);
-  } else if (tipo === "vn") {
-    await respondAutocompleteVN18(interaction, focused);
-  } else if (tipo === "eroge") {
-    await respondAutocompleteEroge(interaction, focused);
   } else {
     await respondAutocomplete(interaction, focused);
   }
@@ -80,7 +74,7 @@ async function handleAdicionar(interaction: ChatInputCommandInteraction) {
     return;
   }
 
-  const tipo   = interaction.options.getString("tipo", true) as "anime" | "manga" | "manhwa" | "vn" | "eroge";
+  const tipo   = interaction.options.getString("tipo", true) as "anime" | "manga" | "manhwa";
   const titulo = interaction.options.getString("titulo", true);
   await interaction.deferReply({ ephemeral: true });
 
@@ -134,8 +128,6 @@ async function handleAdicionar(interaction: ChatInputCommandInteraction) {
     anime:  "🎬 episódios",
     manga:  "🇯🇵 capítulos",
     manhwa: "🇰🇷 capítulos",
-    vn:     "🔞 novas releases",
-    eroge:  "🎮 atualizações",
   };
 
   // Verifica se o servidor tem canal de notificações configurado
@@ -219,7 +211,7 @@ async function handleListar(interaction: ChatInputCommandInteraction) {
     return;
   }
 
-  const tipoIcon: Record<string, string> = { anime: "🎬", manga: "🇯🇵", manhwa: "🇰🇷", vn: "🔞", eroge: "🎮" };
+  const tipoIcon: Record<string, string> = { anime: "🎬", manga: "🇯🇵", manhwa: "🇰🇷" };
   const lines = subs.map((s, i) =>
     `**${i + 1}.** 🔞 ${tipoIcon[s.tipo] ?? "📖"} [${s.title}](${s.siteUrl})`
   );

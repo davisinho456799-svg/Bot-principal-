@@ -3,7 +3,6 @@ import {
   AutocompleteInteraction,
   SlashCommandBuilder,
   EmbedBuilder,
-  TextChannel,
 } from "discord.js";
 import { db, assinaturasTable, notificacaoCanaisTable } from "@workspace/db";
 import { eq, and, ilike } from "drizzle-orm";
@@ -11,9 +10,6 @@ import { getUnifiedById, getUnifiedAnimeById } from "../unified.js";
 import {
   respondAutocomplete,
   respondAutocompleteAnime,
-  respondAutocompleteVN,
-  respondAutocompleteVN18,
-  respondAutocompleteEroge,
 } from "../autocomplete.js";
 import { logger } from "../../lib/logger.js";
 import { recordBotError } from "../error-log.js";
@@ -31,12 +27,9 @@ export const data = new SlashCommandBuilder()
           .setDescription("Tipo do título")
           .setRequired(true)
           .addChoices(
-            { name: "📺 Anime",    value: "anime"   },
-            { name: "🇯🇵 Manga",   value: "manga"   },
-            { name: "🇰🇷 Manhwa",  value: "manhwa"  },
-            { name: "📖 VN",      value: "vn"      },
-            { name: "🔞 VN +18",  value: "vn18"    },
-            { name: "🔞 Eroge",   value: "eroge"   },
+            { name: "📺 Anime",   value: "anime"   },
+            { name: "🇯🇵 Manga",  value: "manga"   },
+            { name: "🇰🇷 Manhwa", value: "manhwa"  },
           )
       )
       .addStringOption((opt) =>
@@ -96,12 +89,6 @@ export async function autocomplete(interaction: AutocompleteInteraction): Promis
   const focused = interaction.options.getFocused();
   if (tipo === "anime") {
     await respondAutocompleteAnime(interaction, focused);
-  } else if (tipo === "vn") {
-    await respondAutocompleteVN(interaction, focused);
-  } else if (tipo === "vn18") {
-    await respondAutocompleteVN18(interaction, focused);
-  } else if (tipo === "eroge") {
-    await respondAutocompleteEroge(interaction, focused);
   } else {
     await respondAutocomplete(interaction, focused);
   }
@@ -125,22 +112,8 @@ async function handleAdicionar(interaction: ChatInputCommandInteraction) {
   // o comando com o cache antigo (sem o campo "tipo"), getString com required=true
   // lança TypeError e o bot mostra a mensagem de erro genérica.
   // Por isso usamos fallback "manhwa" para manter compatibilidade durante a transição.
-  const tipo   = (interaction.options.getString("tipo") ?? "manhwa") as "anime" | "manga" | "manhwa" | "vn" | "vn18" | "eroge";
+  const tipo   = (interaction.options.getString("tipo") ?? "manhwa") as "anime" | "manga" | "manhwa";
   const titulo = interaction.options.getString("titulo", true);
-
-  // Conteúdo adulto só pode ser assinado em canais NSFW
-  const isAdult = tipo === "vn18" || tipo === "eroge";
-  if (isAdult) {
-    const channel = interaction.channel;
-    const isNsfw  = channel && "nsfw" in channel && (channel as TextChannel).nsfw;
-    if (!isNsfw) {
-      await interaction.reply({
-        content: "🔞 Conteúdo adulto só pode ser assinado em canais marcados como **NSFW**.\nAtive o modo NSFW no canal nas configurações do servidor e tente novamente.",
-        ephemeral: true,
-      });
-      return;
-    }
-  }
 
   await interaction.deferReply({ ephemeral: true });
 
@@ -224,8 +197,8 @@ async function handleAdicionar(interaction: ChatInputCommandInteraction) {
       title,
       coverUrl: coverUrl ?? null,
       siteUrl,
-      tipo: isAdult ? "vn" : tipo,   // normaliza vn18/eroge → "vn" no campo tipo (compatibilidade)
-      adult: isAdult,
+      tipo,
+      adult: false,
     });
   } catch (err) {
     logger.error({ err }, "Erro de DB ao inserir assinatura em /assinar adicionar");
@@ -245,9 +218,6 @@ async function handleAdicionar(interaction: ChatInputCommandInteraction) {
     anime:  "📺 episódios",
     manga:  "🇯🇵 capítulos",
     manhwa: "🇰🇷 capítulos",
-    vn:     "📖 novas releases",
-    vn18:   "🔞 novas releases (+18)",
-    eroge:  "🔞 novas releases (+18)",
   };
 
   // Verifica se o servidor tem canal de notificações configurado
@@ -262,7 +232,7 @@ async function handleAdicionar(interaction: ChatInputCommandInteraction) {
 
   const embed = new EmbedBuilder()
     .setTitle("🔔 Assinatura Confirmada!")
-    .setColor(isAdult ? 0xe74c3c : 0x2ecc71)
+    .setColor(0x2ecc71)
     .setDescription(
       `Você será **mencionado** neste servidor quando saírem novos ${tipoLabel[tipo] ?? "capítulos"} de:\n\n` +
       `📖 **[${title}](${siteUrl})**\n\n` +
@@ -378,7 +348,6 @@ async function handleListar(interaction: ChatInputCommandInteraction) {
     anime:  "📺",
     manga:  "🇯🇵",
     manhwa: "🇰🇷",
-    vn:     "📖",
   };
 
   const sfwSubs   = subs.filter((s) => !s.adult);
@@ -388,7 +357,7 @@ async function handleListar(interaction: ChatInputCommandInteraction) {
     `**${i + 1}.** ${tipoIcon[s.tipo] ?? "📖"} [${s.title}](${s.siteUrl})`
   );
   const adultLines = adultSubs.map((s, i) =>
-    `**${i + 1}.** 🔞 [${s.title}](${s.siteUrl})`
+    `**${i + 1}.** 🔞 ${tipoIcon[s.tipo] ?? "📖"} [${s.title}](${s.siteUrl})`
   );
 
   const embed = new EmbedBuilder()
@@ -398,12 +367,32 @@ async function handleListar(interaction: ChatInputCommandInteraction) {
       text: `${subs.length} assinatura(s) • Você será mencionado quando saírem novos conteúdos`,
     });
 
-  if (sfwLines.length) {
-    embed.addFields({ name: "📚 Títulos", value: sfwLines.join("\n").slice(0, 1024), inline: false });
-  }
-  if (adultLines.length) {
-    embed.addFields({ name: "🔞 Conteúdo Adulto", value: adultLines.join("\n").slice(0, 1024), inline: false });
-  }
+  // Divide em múltiplos campos para não truncar listas longas (limite de 1024 chars/campo)
+  const chunkFields = (
+    lines: string[],
+    firstName: string,
+  ): Parameters<typeof embed.addFields>[0][] => {
+    const fields: Parameters<typeof embed.addFields>[0][] = [];
+    let current: string[] = [];
+    let len = 0;
+    for (const line of lines) {
+      const l = line.length + 1;
+      if (len + l > 1024 && current.length) {
+        fields.push({ name: fields.length === 0 ? firstName : "⠀", value: current.join("\n"), inline: false });
+        current = [];
+        len = 0;
+      }
+      current.push(line);
+      len += l;
+    }
+    if (current.length) {
+      fields.push({ name: fields.length === 0 ? firstName : "⠀", value: current.join("\n"), inline: false });
+    }
+    return fields;
+  };
+
+  if (sfwLines.length)   embed.addFields(...chunkFields(sfwLines,   "📚 Títulos"));
+  if (adultLines.length) embed.addFields(...chunkFields(adultLines, "🔞 Conteúdo Adulto"));
 
   await interaction.editReply({ embeds: [embed] });
 }
