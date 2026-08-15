@@ -56,6 +56,7 @@ export const capitulosRastreados = pgTable("capitulos_rastreados", {
   siteUrl: text("site_url").notNull(),
   lastChapters: real("last_chapters"),
   lastChecked: timestamp("last_checked").notNull().defaultNow(),
+  lastNotifiedAt: timestamp("last_notified_at"),
 }, (t) => [unique("capitulos_rastreados_manhwa_id_key").on(t.manhwaId)]);
 
 export type CapituloRastreado = typeof capitulosRastreados.$inferSelect;

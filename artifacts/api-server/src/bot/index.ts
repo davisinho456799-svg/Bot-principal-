@@ -38,7 +38,7 @@ import * as historicoCommand from "./commands/historico.js";
 import * as verificarCommand from "./commands/verificar.js";
 import * as assinarCommand from "./commands/assinar.js";
 import * as assinar18Command from "./commands/assinar18.js";
-import { startNotificacaoService } from "./notificacao-service.js";
+import { startNotificacaoService, startWeeklyService } from "./notificacao-service.js";
 import { cleanupDuplicateAliases } from "./unified.js";
 import { logUsage } from "./usage-logger.js";
 import { getPendingAnime, deletePendingAnime } from "./anime-status-store.js";
@@ -119,6 +119,7 @@ export async function startBot() {
     }
 
     startNotificacaoService(readyClient);
+    startWeeklyService(readyClient);
 
     // Limpeza de aliases duplicados — roda 1h após o boot, depois a cada 24h
     setTimeout(() => {

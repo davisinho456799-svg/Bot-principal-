@@ -1187,6 +1187,78 @@ async function sendMetadataNotification(
   }
 }
 
+/** Detecta se um valor de status indica hiato (pausa temporária). */
+function isHiatusStatus(status: string | null | undefined): boolean {
+  if (!status) return false;
+  const s = status.toLowerCase().trim();
+  return s === "on hiatus" || s === "hiatus" || s === "on_hiatus";
+}
+
+/** Detecta se um valor de status indica publicação ativa. */
+function isPublishingStatus(status: string | null | undefined): boolean {
+  if (!status) return false;
+  const s = status.toLowerCase().trim();
+  return (
+    s === "publishing" ||
+    s === "releasing" ||
+    s === "ongoing" ||
+    s === "currently airing" ||
+    s === "airing"
+  );
+}
+
+async function sendStatusChangeNotification(
+  client: Client,
+  channelId: string,
+  title: string,
+  siteUrl: string,
+  coverUrl: string | null,
+  mentions: string[],
+  kind: "hiatus" | "return",
+): Promise<boolean> {
+  try {
+    const channel = await client.channels.fetch(channelId);
+    if (!channel || !(channel instanceof TextChannel)) return false;
+
+    const hourBrasilia = new Date(
+      new Date().toLocaleString("en-US", { timeZone: "America/Sao_Paulo" })
+    ).getHours();
+    const isSilent = hourBrasilia >= 22 || hourBrasilia < 7;
+
+    const embed =
+      kind === "hiatus"
+        ? new EmbedBuilder()
+            .setTitle(`⏸️ Em hiato: ${title}`.slice(0, 256))
+            .setURL(siteUrl || null)
+            .setColor(0xe67e22)
+            .setDescription(
+              "Este título entrou em **hiato** no MyAnimeList.\n" +
+              "Novas notificações serão enviadas quando a publicação retomar."
+            )
+            .setFooter({ text: "Status atualizado • MyAnimeList" })
+        : new EmbedBuilder()
+            .setTitle(`▶️ De volta: ${title}`.slice(0, 256))
+            .setURL(siteUrl || null)
+            .setColor(0x2ecc71)
+            .setDescription(
+              "Este título **voltou do hiato** e retomou a publicação!\n" +
+              "Você será notificado normalmente quando saírem novos capítulos."
+            )
+            .setFooter({ text: "Status atualizado • MyAnimeList" });
+
+    if (coverUrl) embed.setThumbnail(coverUrl);
+
+    const content =
+      mentions.length > 0 && !isSilent ? mentions.join(" ").slice(0, 2000) : undefined;
+
+    await channel.send({ content, embeds: [embed] });
+    return true;
+  } catch (err) {
+    logger.error({ err, channelId, title, kind }, "Erro ao enviar notificação de status");
+    return false;
+  }
+}
+
 /** Detecta se um valor de status indica obra encerrada (independente da capitalização ou fonte). */
 function isFinishedStatus(status: string | null | undefined): boolean {
   if (!status) return false;
@@ -1344,6 +1416,7 @@ export async function runCheck(
               { title: m.title, previousChapters, newChapters: snapshot.chapters, changedFields },
               "Novo capítulo do MAL detectado",
             );
+            let atLeastOneSentMal = false;
             for (const canal of canais) {
               const subscribers = await db
                 .select({ discordUserId: assinaturasTable.discordUserId })
@@ -1368,7 +1441,13 @@ export async function runCheck(
                 mentions,
                 m.source,
               );
-              if (sent) summary.notificationsSent++;
+              if (sent) { summary.notificationsSent++; atLeastOneSentMal = true; }
+            }
+            if (atLeastOneSentMal) {
+              await db
+                .update(capitulosRastreados)
+                .set({ lastNotifiedAt: new Date() })
+                .where(eq(capitulosRastreados.manhwaId, m.manhwaId));
             }
           }
 
@@ -1393,6 +1472,38 @@ export async function runCheck(
                 },
                 snapshot,
                 metadataChanged,
+              );
+              if (sent) summary.notificationsSent++;
+            }
+          }
+
+          // Aviso de hiato / retorno — enviado no canal principal com @menção aos assinantes
+          const hiatusTransition =
+            changedFields.includes("status") &&
+            isHiatusStatus(snapshot.status) &&
+            !isHiatusStatus(previous?.status);
+
+          const returnTransition =
+            changedFields.includes("status") &&
+            isPublishingStatus(snapshot.status) &&
+            isHiatusStatus(previous?.status);
+
+          for (const kind of (
+            [hiatusTransition && "hiatus", returnTransition && "return"] as const
+          ).filter(Boolean) as ("hiatus" | "return")[]) {
+            logger.info({ title: m.title, kind, newStatus: snapshot.status }, "Transição de status detectada");
+            for (const canal of canais) {
+              const subscribers = await db
+                .select({ discordUserId: assinaturasTable.discordUserId })
+                .from(assinaturasTable)
+                .where(and(
+                  eq(assinaturasTable.manhwaId, m.manhwaId),
+                  eq(assinaturasTable.guildId, canal.guildId),
+                ));
+              if (!subscribers.length) continue;
+              const mentions = subscribers.map((s) => `<@${s.discordUserId}>`);
+              const sent = await sendStatusChangeNotification(
+                client, canal.channelId, m.title, m.siteUrl, m.coverUrl ?? null, mentions, kind,
               );
               if (sent) summary.notificationsSent++;
             }
@@ -1555,7 +1666,11 @@ export async function runCheck(
         if (isProxy || canais.length === 0 || atLeastOneSent) {
           await db
             .update(capitulosRastreados)
-            .set({ lastChapters: newChapters, lastChecked: sql`now()` })
+            .set({
+              lastChapters: newChapters,
+              lastChecked: sql`now()`,
+              ...(atLeastOneSent ? { lastNotifiedAt: new Date() } : {}),
+            })
             .where(eq(capitulosRastreados.manhwaId, m.manhwaId));
         } else {
           logger.warn(
@@ -1593,6 +1708,106 @@ export async function runCheck(
 
   logger.info("Verificação de capítulos concluída.");
   return summary;
+}
+
+export async function runWeeklySummary(client: Client): Promise<void> {
+  logger.info("Gerando resumo semanal de notificações...");
+
+  const canais = await db.select().from(notificacaoCanaisTable);
+  if (!canais.length) return;
+
+  const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+
+  for (const canal of canais) {
+    try {
+      // Títulos com notificação enviada na última semana e que tenham assinantes neste servidor
+      const rows = await db
+        .selectDistinct({
+          title: capitulosRastreados.title,
+          siteUrl: capitulosRastreados.siteUrl,
+          lastChapters: capitulosRastreados.lastChapters,
+          lastNotifiedAt: capitulosRastreados.lastNotifiedAt,
+        })
+        .from(capitulosRastreados)
+        .innerJoin(
+          assinaturasTable,
+          and(
+            eq(assinaturasTable.manhwaId, capitulosRastreados.manhwaId),
+            eq(assinaturasTable.guildId, canal.guildId),
+          ),
+        )
+        .where(sql`${capitulosRastreados.lastNotifiedAt} >= ${since}`)
+        .orderBy(capitulosRastreados.lastNotifiedAt);
+
+      if (!rows.length) continue;
+
+      const lines = rows.map((r) => {
+        const cap = r.lastChapters != null ? ` · Cap. ${String(Math.floor(r.lastChapters)).padStart(3, "0")}` : "";
+        return `• [${r.title}](${r.siteUrl})${cap}`;
+      });
+
+      const channel = await client.channels.fetch(canal.channelId);
+      if (!channel || !(channel instanceof TextChannel)) continue;
+
+      const embed = new EmbedBuilder()
+        .setTitle("📅 Resumo semanal — Atualizações da semana")
+        .setColor(0x5865f2)
+        .setDescription(lines.join("\n").slice(0, 4096))
+        .setFooter({ text: `${rows.length} título(s) atualizados nos últimos 7 dias` })
+        .setTimestamp();
+
+      await channel.send({ embeds: [embed], allowedMentions: { parse: [] } });
+    } catch (err) {
+      logger.error({ err, guildId: canal.guildId }, "Erro ao enviar resumo semanal");
+    }
+  }
+
+  logger.info("Resumo semanal enviado.");
+}
+
+/** Retorna o número de ms até o próximo domingo às 10h horário de Brasília. */
+function msUntilNextSunday10h(): number {
+  const nowBrasilia = new Date(
+    new Date().toLocaleString("en-US", { timeZone: "America/Sao_Paulo" })
+  );
+  const day  = nowBrasilia.getDay();   // 0 = domingo
+  const hour = nowBrasilia.getHours();
+  const min  = nowBrasilia.getMinutes();
+  const sec  = nowBrasilia.getSeconds();
+
+  let daysUntil = (7 - day) % 7;
+  if (daysUntil === 0 && (hour > 10 || (hour === 10 && min > 0))) {
+    daysUntil = 7; // já passou das 10h do domingo, vai para o próximo
+  }
+
+  const msPerDay  = 24 * 60 * 60 * 1000;
+  const msElapsed = ((hour * 60 + min) * 60 + sec) * 1000;
+  const msTo10h   = 10 * 60 * 60 * 1000;
+
+  return daysUntil * msPerDay + (msTo10h - msElapsed);
+}
+
+export function startWeeklyService(client: Client) {
+  const runSafe = async () => {
+    try {
+      await runWeeklySummary(client);
+    } catch (err) {
+      logger.error({ err }, "Erro no resumo semanal");
+    }
+  };
+
+  const firstDelay = msUntilNextSunday10h();
+  const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+
+  setTimeout(() => {
+    void runSafe();
+    setInterval(runSafe, WEEK_MS);
+  }, firstDelay);
+
+  logger.info(
+    { proximoResumoEmHoras: Math.round(firstDelay / 3_600_000) },
+    "Resumo semanal agendado",
+  );
 }
 
 export function startNotificacaoService(client: Client) {

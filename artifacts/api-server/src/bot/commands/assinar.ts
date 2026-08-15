@@ -4,8 +4,8 @@ import {
   SlashCommandBuilder,
   EmbedBuilder,
 } from "discord.js";
-import { db, assinaturasTable, notificacaoCanaisTable } from "@workspace/db";
-import { eq, and, ilike } from "drizzle-orm";
+import { db, assinaturasTable, notificacaoCanaisTable, capitulosRastreados } from "@workspace/db";
+import { eq, and, ilike, inArray } from "drizzle-orm";
 import { getUnifiedById, getUnifiedAnimeById } from "../unified.js";
 import {
   respondAutocomplete,
@@ -353,11 +353,32 @@ async function handleListar(interaction: ChatInputCommandInteraction) {
   const sfwSubs   = subs.filter((s) => !s.adult);
   const adultSubs = subs.filter((s) => s.adult);
 
+  // Busca o capítulo salvo de cada assinatura para mostrar na lista
+  const manhwaIds = subs.map((s) => s.manhwaId);
+  let chapterMap = new Map<string, number | null>();
+  try {
+    if (manhwaIds.length > 0) {
+      const tracked = await db
+        .select({ manhwaId: capitulosRastreados.manhwaId, lastChapters: capitulosRastreados.lastChapters })
+        .from(capitulosRastreados)
+        .where(inArray(capitulosRastreados.manhwaId, manhwaIds));
+      chapterMap = new Map(tracked.map((t) => [t.manhwaId, t.lastChapters ?? null]));
+    }
+  } catch {
+    // Falha silenciosa — lista continua sem o capítulo
+  }
+
+  const fmtCap = (manhwaId: string) => {
+    const cap = chapterMap.get(manhwaId);
+    if (cap == null) return "";
+    return ` · Cap. ${String(Math.floor(cap)).padStart(3, "0")}`;
+  };
+
   const sfwLines   = sfwSubs.map((s, i) =>
-    `**${i + 1}.** ${tipoIcon[s.tipo] ?? "📖"} [${s.title}](${s.siteUrl})`
+    `**${i + 1}.** ${tipoIcon[s.tipo] ?? "📖"} [${s.title}](${s.siteUrl})${fmtCap(s.manhwaId)}`
   );
   const adultLines = adultSubs.map((s, i) =>
-    `**${i + 1}.** 🔞 ${tipoIcon[s.tipo] ?? "📖"} [${s.title}](${s.siteUrl})`
+    `**${i + 1}.** 🔞 ${tipoIcon[s.tipo] ?? "📖"} [${s.title}](${s.siteUrl})${fmtCap(s.manhwaId)}`
   );
 
   const embed = new EmbedBuilder()
