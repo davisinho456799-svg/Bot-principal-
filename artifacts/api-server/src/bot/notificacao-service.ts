@@ -70,7 +70,9 @@ async function fetchMangaDexLatestChapter(uuid: string): Promise<number | null> 
     const json = (await res.json()) as { data: { attributes: { chapter: string | null } }[]; total: number };
     if (!json.data?.length) return null;
     const chap = json.data[0].attributes.chapter;
-    return chap ? parseFloat(chap) : json.total;
+    // Capítulos especiais ("EX", "Oneshot", "SP") produzem NaN com parseFloat;
+    // normalizeChapterValue retorna null nesses casos.
+    return normalizeChapterValue(chap ?? json.total);
   } catch {
     return null;
   }
@@ -111,6 +113,22 @@ interface FetchResult {
    * recuperado via busca. O chamador deve persistir o novo slug nas tabelas.
    */
   newManhwaId?: string;
+}
+
+/**
+ * Normaliza um valor de capítulo vindo de uma API externa.
+ *
+ * Aceita number ou string numérica (incluindo decimais como "150.5").
+ * Rejeita NaN, Infinity, valores negativos e strings não-numéricas
+ * (ex: "EX", "Oneshot", "SP") — retorna null nesses casos.
+ *
+ * Garante que nenhuma fonte injete NaN no banco de dados ou distorça
+ * a seleção de fonte mais atualizada.
+ */
+function normalizeChapterValue(raw: unknown): number | null {
+  const n = typeof raw === "string" ? parseFloat(raw) : typeof raw === "number" ? raw : null;
+  if (n === null || !Number.isFinite(n) || n < 0) return null;
+  return n;
 }
 
 let mangaUpdatesSessionToken: string | null = null;
@@ -398,7 +416,10 @@ async function fetchChapters(
       const json = (await res.json()) as { data: { attributes: { chapter: string | null } }[]; total: number };
       if (!json.data?.length) return fetchError("no_data");
       const chap = json.data[0].attributes.chapter;
-      const value = chap ? parseFloat(chap) : json.total;
+      // Capítulos especiais ("EX", "Oneshot", "SP") não são numéricos;
+      // normalizeChapterValue rejeita-os e devolve null → no_data.
+      const value = normalizeChapterValue(chap ?? json.total);
+      if (value === null) return fetchError("no_data");
       return { value, isProxy: false };
     } catch (err) {
       const kind = classifyException(err);
@@ -1376,6 +1397,17 @@ export async function runCheck(
       }
 
       const lastChapters = existing.lastChapters ?? 0;
+
+      // Guard final: garante que NaN/Infinity nunca seja gravado no banco
+      // independentemente da fonte que produziu o valor.
+      if (!Number.isFinite(newChapters) || newChapters < 0) {
+        logger.warn({ title: m.title, newChapters, source: m.source }, "Valor de capítulo inválido ignorado");
+        await db
+          .update(capitulosRastreados)
+          .set({ lastChecked: sql`now()` })
+          .where(eq(capitulosRastreados.manhwaId, m.manhwaId));
+        continue;
+      }
 
       if (newChapters > lastChapters) {
         logger.info({ title: m.title, lastChapters, newChapters, isProxy }, "Novos conteúdos detectados!");
