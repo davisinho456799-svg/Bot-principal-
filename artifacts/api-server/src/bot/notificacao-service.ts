@@ -106,6 +106,11 @@ interface FetchResult {
   value: number;
   /** true = valor é timestamp/proxy, não um número de capítulos real */
   isProxy: boolean;
+  /**
+   * Preenchido somente quando o slug do Comick mudou (obra renomeada) e foi
+   * recuperado via busca. O chamador deve persistir o novo slug nas tabelas.
+   */
+  newManhwaId?: string;
 }
 
 let mangaUpdatesSessionToken: string | null = null;
@@ -393,9 +398,14 @@ async function fetchChapters(manhwaId: string, source: string): Promise<FetchRes
         // antes de tratar como obra indisponível.
         if (res.status === 404) {
           const recovered = await getComickBySlug(manhwaId);
-          const lastChapter = recovered?.last_chapter ?? null;
+          if (!recovered) return null;
+          const lastChapter = recovered.last_chapter ?? null;
           if (lastChapter == null) return null;
-          return { value: lastChapter, isProxy: false };
+          const newManhwaId =
+            recovered.slug && recovered.slug !== manhwaId
+              ? recovered.slug
+              : undefined;
+          return { value: lastChapter, isProxy: false, newManhwaId };
         }
         recordSourceHttpError(source, manhwaId, res.status);
         return null;
@@ -1194,7 +1204,26 @@ export async function runCheck(
         continue;
       }
 
-      const { value: newChapters, isProxy } = fetched;
+      const { value: newChapters, isProxy, newManhwaId } = fetched;
+
+      // Slug do Comick mudou por renomeação — corrige nas três tabelas antes de
+      // continuar, para que o próximo ciclo não repita a recuperação via busca.
+      if (newManhwaId) {
+        logger.info({ oldSlug: m.manhwaId, newSlug: newManhwaId, title: m.title }, "Slug do Comick atualizado — persistindo novo identificador");
+        await db
+          .update(capitulosRastreados)
+          .set({ manhwaId: newManhwaId })
+          .where(eq(capitulosRastreados.manhwaId, m.manhwaId));
+        await db
+          .update(assinaturasTable)
+          .set({ manhwaId: newManhwaId })
+          .where(eq(assinaturasTable.manhwaId, m.manhwaId));
+        await db
+          .update(favoritosTable)
+          .set({ manhwaId: newManhwaId })
+          .where(eq(favoritosTable.manhwaId, m.manhwaId));
+        m.manhwaId = newManhwaId;
+      }
 
       const [existing] = await db
         .select()
