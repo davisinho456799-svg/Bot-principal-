@@ -1219,7 +1219,8 @@ export async function runCheck(
             }
           }
 
-          await new Promise((r) => setTimeout(r, 500));
+          // Pausa entre obras: evita excesso de requisições às APIs externas.
+          await new Promise((r) => setTimeout(r, 60_000));
           continue;
         }
       }
@@ -1314,7 +1315,8 @@ export async function runCheck(
           .where(eq(capitulosRastreados.manhwaId, m.manhwaId));
       }
 
-      await new Promise((r) => setTimeout(r, 500));
+      // Pausa entre obras: evita excesso de requisições às APIs externas.
+      await new Promise((r) => setTimeout(r, 60_000));
     } catch (err) {
       logger.error({ err, manhwa: m.title }, "Erro ao verificar capítulos");
       void recordBotError({
