@@ -1187,6 +1187,61 @@ async function sendMetadataNotification(
   }
 }
 
+/** Detecta se um valor de status indica obra encerrada (independente da capitalização ou fonte). */
+function isFinishedStatus(status: string | null | undefined): boolean {
+  if (!status) return false;
+  const s = status.toLowerCase().trim();
+  return (
+    s === "finished" ||
+    s === "finished airing" ||
+    s === "finished publishing" ||
+    s === "complete" ||
+    s === "completed" ||
+    s === "cancelled" ||
+    s === "discontinued"
+  );
+}
+
+async function sendFinishedNotification(
+  client: Client,
+  channelId: string,
+  title: string,
+  siteUrl: string,
+  coverUrl: string | null,
+  mentions: string[],
+): Promise<boolean> {
+  try {
+    const channel = await client.channels.fetch(channelId);
+    if (!channel || !(channel instanceof TextChannel)) return false;
+
+    const hourBrasilia = new Date(
+      new Date().toLocaleString("en-US", { timeZone: "America/Sao_Paulo" })
+    ).getHours();
+    const isSilent = hourBrasilia >= 22 || hourBrasilia < 7;
+
+    const embed = new EmbedBuilder()
+      .setTitle(`🏁 Obra finalizada: ${title}`.slice(0, 256))
+      .setURL(siteUrl || null)
+      .setColor(0x9b59b6)
+      .setDescription(
+        "Esta obra foi marcada como **finalizada** no MyAnimeList.\n" +
+        "Todos os capítulos já estão disponíveis!"
+      )
+      .setFooter({ text: "Status atualizado • MyAnimeList" });
+
+    if (coverUrl) embed.setThumbnail(coverUrl);
+
+    const content =
+      mentions.length > 0 && !isSilent ? mentions.join(" ").slice(0, 2000) : undefined;
+
+    await channel.send({ content, embeds: [embed] });
+    return true;
+  } catch (err) {
+    logger.error({ err, channelId, title }, "Erro ao enviar notificação de obra finalizada");
+    return false;
+  }
+}
+
 export async function runCheck(
   client: Client,
   options: { verifyAllSources?: boolean } = {},
@@ -1338,6 +1393,38 @@ export async function runCheck(
                 },
                 snapshot,
                 metadataChanged,
+              );
+              if (sent) summary.notificationsSent++;
+            }
+          }
+
+          // Aviso de obra finalizada — enviado no canal principal com @menção aos assinantes
+          const finishedTransition =
+            changedFields.includes("status") &&
+            isFinishedStatus(snapshot.status) &&
+            !isFinishedStatus(previous?.status);
+
+          if (finishedTransition) {
+            logger.info({ title: m.title, newStatus: snapshot.status }, "Obra marcada como finalizada");
+            for (const canal of canais) {
+              const subscribers = await db
+                .select({ discordUserId: assinaturasTable.discordUserId })
+                .from(assinaturasTable)
+                .where(
+                  and(
+                    eq(assinaturasTable.manhwaId, m.manhwaId),
+                    eq(assinaturasTable.guildId, canal.guildId),
+                  ),
+                );
+              if (!subscribers.length) continue;
+              const mentions = subscribers.map((s) => `<@${s.discordUserId}>`);
+              const sent = await sendFinishedNotification(
+                client,
+                canal.channelId,
+                m.title,
+                m.siteUrl,
+                m.coverUrl ?? null,
+                mentions,
               );
               if (sent) summary.notificationsSent++;
             }
