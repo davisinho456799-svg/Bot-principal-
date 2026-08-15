@@ -18,6 +18,19 @@ import { searchMangaDexAny } from "./mangadex.js";
 import { searchMangaUpdates } from "./mangaupdates.js";
 import { searchJikanAny } from "./jikan.js";
 import { recordBotError } from "./error-log.js";
+import {
+  type FetchResult,
+  type FetchError,
+  fetchError,
+  isFetchError,
+  normalizeChapterValue,
+  classifyHttpStatus,
+  classifyException,
+  normalizeSynopsis,
+  sameNullableNumber,
+  sameNullableText,
+} from "./notificacao-utils.js";
+export type { SourceErrorKind } from "./notificacao-utils.js";
 
 const ANILIST_API = "https://graphql.anilist.co";
 const COMICK_API_BASE = (process.env.COMICK_API_BASE ?? "https://api.comick.dev").replace(/\/+$/, "");
@@ -104,78 +117,11 @@ async function fetchComickLatestChapter(slug: string): Promise<number | null> {
   }
 }
 
-interface FetchResult {
-  value: number;
-  /** true = valor é timestamp/proxy, não um número de capítulos real */
-  isProxy: boolean;
-  /**
-   * Preenchido somente quando o slug do Comick mudou (obra renomeada) e foi
-   * recuperado via busca. O chamador deve persistir o novo slug nas tabelas.
-   */
-  newManhwaId?: string;
-}
-
-/**
- * Normaliza um valor de capítulo vindo de uma API externa.
- *
- * Aceita number ou string numérica (incluindo decimais como "150.5").
- * Rejeita NaN, Infinity, valores negativos e strings não-numéricas
- * (ex: "EX", "Oneshot", "SP") — retorna null nesses casos.
- *
- * Garante que nenhuma fonte injete NaN no banco de dados ou distorça
- * a seleção de fonte mais atualizada.
- */
-function normalizeChapterValue(raw: unknown): number | null {
-  const n = typeof raw === "string" ? parseFloat(raw) : typeof raw === "number" ? raw : null;
-  if (n === null || !Number.isFinite(n) || n < 0) return null;
-  return n;
-}
 
 let mangaUpdatesSessionToken: string | null = null;
 let mangaUpdatesSessionExpiresAt = 0;
 
 // ─── Classificação e registo de erros de fonte ───────────────────────────────
-
-export type SourceErrorKind =
-  | "http_404"
-  | "http_403"
-  | "http_429"
-  | "http_5xx"
-  | "http_other"
-  | "timeout"
-  | "invalid_response"
-  | "no_data";
-
-/** Objeto retornado por fetchChapters quando a falha é identificada. */
-interface FetchError {
-  readonly _err: true;
-  kind: SourceErrorKind;
-  httpStatus?: number;
-}
-
-function fetchError(kind: SourceErrorKind, httpStatus?: number): FetchError {
-  return { _err: true, kind, httpStatus };
-}
-
-function isFetchError(r: FetchResult | FetchError | null): r is FetchError {
-  return r !== null && "_err" in r;
-}
-
-function classifyHttpStatus(status: number): SourceErrorKind {
-  if (status === 404) return "http_404";
-  if (status === 403) return "http_403";
-  if (status === 429) return "http_429";
-  if (status >= 500) return "http_5xx";
-  return "http_other";
-}
-
-function classifyException(err: unknown): SourceErrorKind {
-  if (err instanceof Error) {
-    if (err.name === "TimeoutError" || err.name === "AbortError") return "timeout";
-    if (err instanceof SyntaxError) return "invalid_response";
-  }
-  return "http_other";
-}
 
 function recordSourceError(
   source: string,
@@ -271,17 +217,6 @@ interface MalSnapshot {
 // Mantém o snapshot inicial + até 10 registros posteriores de alteração.
 const MAL_HISTORY_LIMIT = 10;
 
-function normalizeSynopsis(value: string | null): string | null {
-  return value?.replace(/\s+/g, " ").trim() || null;
-}
-
-function sameNullableNumber(a: number | null, b: number | null): boolean {
-  return a === b || (a == null && b == null);
-}
-
-function sameNullableText(a: string | null, b: string | null): boolean {
-  return a === b;
-}
 
 async function recordMalSnapshot(malId: string, title: string, snapshot: MalSnapshot) {
   const [previous] = await db
