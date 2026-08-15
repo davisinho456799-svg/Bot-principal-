@@ -43,7 +43,7 @@ import { cleanupDuplicateAliases } from "./unified.js";
 import { logUsage } from "./usage-logger.js";
 import { getPendingAnime, deletePendingAnime } from "./anime-status-store.js";
 import { db, listaLeituraTable } from "@workspace/db";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { StatusLeitura } from "@workspace/db";
 import { recordBotError } from "./error-log.js";
 
@@ -116,6 +116,14 @@ export async function startBot() {
         error: err,
         context: { clientId },
       });
+    }
+
+    // Migração automática — garante que colunas novas existem no banco de produção
+    try {
+      await db.execute(sql`ALTER TABLE capitulos_rastreados ADD COLUMN IF NOT EXISTS last_notified_at TIMESTAMP`);
+      logger.info("Migração automática: last_notified_at verificada");
+    } catch (err) {
+      logger.error({ err }, "Falha na migração automática — bot continuará normalmente");
     }
 
     startNotificacaoService(readyClient);
