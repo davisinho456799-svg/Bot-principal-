@@ -7,7 +7,7 @@ import {
   assinaturasTable,
   malHistoricoAlteracoesTable,
 } from "@workspace/db";
-import { eq, sql, and, desc, inArray } from "drizzle-orm";
+import { eq, sql, and, desc, inArray, gte, isNotNull } from "drizzle-orm";
 import { logger } from "../lib/logger.js";
 import { getErogamescapeLastUpdated } from "./erogamescape.js";
 import { buildScanLinksExternal } from "./commands/search.js";
@@ -1736,7 +1736,7 @@ export async function runWeeklySummary(client: Client): Promise<void> {
             eq(assinaturasTable.guildId, canal.guildId),
           ),
         )
-        .where(sql`${capitulosRastreados.lastNotifiedAt} >= ${since}`)
+        .where(and(isNotNull(capitulosRastreados.lastNotifiedAt), gte(capitulosRastreados.lastNotifiedAt, since)))
         .orderBy(capitulosRastreados.lastNotifiedAt);
 
       if (!rows.length) continue;
