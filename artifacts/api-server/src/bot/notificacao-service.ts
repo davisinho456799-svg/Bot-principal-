@@ -1294,6 +1294,8 @@ export async function runCheck(
                     eq(assinaturasTable.guildId, canal.guildId),
                   ),
                 );
+              // Não envia embed para guilds sem assinantes deste título
+              if (!subscribers.length) continue;
               const mentions = subscribers.map((s) => `<@${s.discordUserId}>`);
               const sent = await sendNotification(
                 client,
@@ -1415,27 +1417,47 @@ export async function runCheck(
         // isProxy = true significa que estamos rastreando por timestamp (ex: updatedAt do AniList).
         // Não enviamos notificação nesses casos — só atualizamos o DB — para evitar falsos positivos
         // causados por edições de metadados (capa, sinopse, etc.) que também alteram updatedAt.
+        let atLeastOneSent = false;
         if (!isProxy) {
-            for (const canal of canais) {
+          for (const canal of canais) {
             const subscribers = await db
               .select({ discordUserId: assinaturasTable.discordUserId })
               .from(assinaturasTable)
               .where(
                 and(
                   eq(assinaturasTable.manhwaId, m.manhwaId),
-                  eq(assinaturasTable.guildId, canal.guildId)
-                )
+                  eq(assinaturasTable.guildId, canal.guildId),
+                ),
               );
+            // Não envia embed para guilds sem assinantes deste título
+            if (!subscribers.length) continue;
             const mentions = subscribers.map((s) => `<@${s.discordUserId}>`);
-              const sent = await sendNotification(client, canal.channelId, m.title, newChapters, lastChapters, m.siteUrl, m.coverUrl ?? null, mentions, diagnosis.selectedSource ?? m.source, isProxy);
-              if (sent) summary.notificationsSent++;
+            const sent = await sendNotification(client, canal.channelId, m.title, newChapters, lastChapters, m.siteUrl, m.coverUrl ?? null, mentions, diagnosis.selectedSource ?? m.source, isProxy);
+            if (sent) {
+              atLeastOneSent = true;
+              summary.notificationsSent++;
+            }
           }
         }
 
-        await db
-          .update(capitulosRastreados)
-          .set({ lastChapters: newChapters, lastChecked: sql`now()` })
-          .where(eq(capitulosRastreados.manhwaId, m.manhwaId));
+        // Só avança a linha de base se: não há canais configurados (modo rastreamento),
+        // a fonte é proxy (sem notificação real), ou ao menos uma notificação foi enviada.
+        // Isso evita que um canal quebrado ou sem permissão consuma silenciosamente o capítulo.
+        if (isProxy || canais.length === 0 || atLeastOneSent) {
+          await db
+            .update(capitulosRastreados)
+            .set({ lastChapters: newChapters, lastChecked: sql`now()` })
+            .where(eq(capitulosRastreados.manhwaId, m.manhwaId));
+        } else {
+          logger.warn(
+            { title: m.title, newChapters, canaisCount: canais.length },
+            "Capítulo novo detectado mas nenhuma notificação enviada — linha de base não avançada",
+          );
+          await db
+            .update(capitulosRastreados)
+            .set({ lastChecked: sql`now()` })
+            .where(eq(capitulosRastreados.manhwaId, m.manhwaId));
+        }
       } else {
         await db
           .update(capitulosRastreados)
