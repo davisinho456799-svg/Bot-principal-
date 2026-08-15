@@ -214,15 +214,19 @@ async function buildAnimeEmbed(r: UnifiedResult, compatibilityScore?: number): P
   embed.addFields({ name: "Gêneros", value: genres, inline: false });
 
   if (r.coverUrl) embed.setThumbnail(r.coverUrl);
-  if (altTitles) embed.addFields({ name: "Títulos alternativos", value: altTitles.slice(0, 1024), inline: false });
+  if (altTitles) embed.addFields({ name: "Títulos alternativos", value: altTitles, inline: false });
 
   // Links de streaming (AniList externalLinks)
   if (r.streamingLinks && r.streamingLinks.length > 0) {
-    const streamText = r.streamingLinks
-      .map((l) => `[${l.site}](${l.url})`)
-      .join(" • ")
-      .slice(0, 1024);
-    embed.addFields({ name: "▶️ Streaming (global)", value: streamText, inline: false });
+    // Acumula links até 1024 chars sem cortar no meio de um link
+    let streamText = "";
+    for (const l of r.streamingLinks) {
+      const link = `[${l.site}](${l.url})`;
+      const next = streamText ? streamText + " • " + link : link;
+      if (next.length > 1024) break;
+      streamText = next;
+    }
+    if (streamText) embed.addFields({ name: "▶️ Streaming (global)", value: streamText, inline: false });
   }
 
   // Trailer

@@ -134,9 +134,15 @@ async function buildMangaEmbed(r: MangaDexResult): Promise<EmbedBuilder> {
     }
   }
   if (altTitles.length > 0) {
+    const titleLines: string[] = [];
+    for (const t of altTitles.slice(0, 5)) {
+      const next = titleLines.length ? titleLines.join("\n") + "\n" + t : t;
+      if (next.length > 1024) break;
+      titleLines.push(t);
+    }
     embed.addFields({
       name: "Títulos alternativos",
-      value: altTitles.slice(0, 5).join("\n").slice(0, 1024),
+      value: titleLines.join("\n") || altTitles[0].slice(0, 1024),
       inline: false,
     });
   }

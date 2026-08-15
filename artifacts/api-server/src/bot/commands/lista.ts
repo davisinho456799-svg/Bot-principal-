@@ -249,10 +249,18 @@ async function handleVer(interaction: ChatInputCommandInteraction) {
   const fields = statusOrder
     .filter((s) => grouped[s]?.length)
     .map((s) => {
-      const items = grouped[s]!.slice(0, 15);
-      const lines = items.map((r) => `> [${r.title}](${r.siteUrl})`).join("\n");
-      const extra = grouped[s]!.length > 15 ? `\n> *...e mais ${grouped[s]!.length - 15}*` : "";
-      return { name: `${STATUS_LABELS[s]} — ${grouped[s]!.length}`, value: lines + extra, inline: false };
+      const all = grouped[s]!;
+      // Acumula linhas até o limite de 1024 chars sem cortar no meio de um título
+      const included: string[] = [];
+      for (const r of all) {
+        const line = `> [${r.title}](${r.siteUrl})`;
+        const tentative = [...included, line].join("\n");
+        if (tentative.length > 950) break; // reserva espaço para o rodapé "e mais X"
+        included.push(line);
+      }
+      const hidden = all.length - included.length;
+      const extra = hidden > 0 ? `\n> *...e mais ${hidden}*` : "";
+      return { name: `${STATUS_LABELS[s]} — ${all.length}`, value: included.join("\n") + extra, inline: false };
     });
 
   const cor = statusFiltro ? CORES[statusFiltro] : 0x7b68ee;
