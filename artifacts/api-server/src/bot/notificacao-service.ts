@@ -762,28 +762,23 @@ async function fetchWithFallback(
 ): Promise<{ fetched: FetchResult | null; selectedSource: string | null; attempts: SourceAttempt[] }> {
   const attempts: SourceAttempt[] = [];
 
-  // A fonte gravada no banco pode ser antiga (por exemplo, AniList).
-  // Para manga/manhwa, a política atual é sempre tentar o Comick primeiro,
-  // mantendo a fonte gravada e o AniList como fallback compatível.
-  if (isMangaNotificationSource(primarySource) && primarySource !== "comick") {
-    const candidates = await findFallbackCandidates(title, primarySource, includePrimarySource);
-    const directCandidate: FallbackCandidate = {
+  // ── Anime / VN: comportamento sequencial preservado ──────────────────────
+  if (!isMangaNotificationSource(primarySource)) {
+    const primary = await fetchChapters(manhwaId, primarySource);
+    attempts.push({
       source: primarySource,
-      id: manhwaId,
-      title,
-    };
-    const orderedCandidates = [
-      ...candidates,
-      directCandidate,
-    ].filter(
-      (candidate, index, all) =>
-        all.findIndex(
-          (other) => other.source === candidate.source && other.id === candidate.id,
-        ) === index,
-    );
-    const successful: Array<{ source: string; fetched: FetchResult }> = [];
+      status: primary && !primary.isProxy ? "ok" : "sem_dados",
+      value: primary?.value ?? null,
+      selected: false,
+    });
+    if (primary && !primary.isProxy && !verifyAllSources) {
+      attempts[0]!.selected = true;
+      return { fetched: primary, selectedSource: primarySource, attempts };
+    }
 
-    for (const candidate of orderedCandidates) {
+    const candidates = await findFallbackCandidates(title, primarySource);
+    const successful: Array<{ source: string; fetched: FetchResult }> = [];
+    for (const candidate of candidates) {
       const fetched = await fetchChapters(candidate.id, candidate.source);
       attempts.push({
         source: candidate.source,
@@ -791,60 +786,97 @@ async function fetchWithFallback(
         value: fetched?.value ?? null,
         selected: false,
       });
-
       if (fetched && !fetched.isProxy) {
         successful.push({ source: candidate.source, fetched });
         if (!verifyAllSources) break;
       }
     }
 
-    const selected = successful[0] ?? null;
-    if (selected) {
-      const selectedAttempt = attempts.find((attempt) => attempt.source === selected.source);
-      if (selectedAttempt) selectedAttempt.selected = true;
+    const selectedAnime = primary
+      ? (!primary.isProxy ? { source: primarySource, fetched: primary } : successful[0] ?? null)
+      : successful[0] ?? null;
+    if (selectedAnime) {
+      const a = attempts.find((x) => x.source === selectedAnime.source);
+      if (a) a.selected = true;
     }
-
     return {
-      fetched: selected?.fetched ?? null,
-      selectedSource: selected?.source ?? null,
+      fetched: selectedAnime?.fetched ?? null,
+      selectedSource: selectedAnime?.source ?? null,
       attempts,
     };
   }
 
-  const primary = await fetchChapters(manhwaId, primarySource);
-  attempts.push({
-    source: primarySource,
-    status: primary && !primary.isProxy ? "ok" : "sem_dados",
-    value: primary?.value ?? null,
-    selected: false,
-  });
-  if (primary && !primary.isProxy && !verifyAllSources) {
-    attempts[0]!.selected = true;
-    return { fetched: primary, selectedSource: primarySource, attempts };
-  }
+  // ── Manga / manhwa: Comick, MangaDex e MangaUpdates em paralelo ──────────
+  //
+  // Para a fonte primária usa-se o ID já gravado no banco.
+  // Para as demais, pesquisa-se pelo título usando as funções de busca
+  // existentes. Uma fonte que falhe não impede as outras.
 
-  const candidates = await findFallbackCandidates(title, primarySource);
+  const PARALLEL_SOURCES = ["comick", "mangadex", "mangaupdates"] as const;
+
+  const parallelTasks = PARALLEL_SOURCES.map(async (source) => {
+    // Determina o ID a consultar
+    let id: string | null = null;
+
+    if (source === primarySource) {
+      // Usa o ID existente, respeitando includePrimarySource
+      id = includePrimarySource ? manhwaId : null;
+    } else {
+      // Pesquisa pelo título para fontes não-primárias
+      if (source === "comick") {
+        const results = await searchComickAny(title).catch(() => [] as Awaited<ReturnType<typeof searchComickAny>>);
+        const match = results.find(
+          (r) => typeof r.title === "string" && typeof r.slug === "string" && likelySameTitle(r.title, title),
+        );
+        id = match?.slug ?? null;
+      } else if (source === "mangadex") {
+        const results = await searchMangaDexAny(title, 5).catch(() => [] as Awaited<ReturnType<typeof searchMangaDexAny>>);
+        const match = results.find((r) => likelySameTitle(r.mainTitle, title));
+        id = match?.id ?? null;
+      } else if (source === "mangaupdates") {
+        const results = await searchMangaUpdates(title).catch(() => [] as Awaited<ReturnType<typeof searchMangaUpdates>>);
+        const match = results.find((r) => likelySameTitle(r.title, title));
+        id = match?.id ?? null;
+      }
+    }
+
+    if (!id) return { source, fetched: null as FetchResult | null };
+    const fetched = await fetchChapters(id, source);
+    return { source, fetched };
+  });
+
+  const settled = await Promise.allSettled(parallelTasks);
+
   const successful: Array<{ source: string; fetched: FetchResult }> = [];
-  for (const candidate of candidates) {
-    const fetched = await fetchChapters(candidate.id, candidate.source);
+
+  for (const result of settled) {
+    if (result.status === "rejected") {
+      // Exceção inesperada na tarefa — não bloqueia as outras fontes
+      continue;
+    }
+    const { source, fetched } = result.value;
     attempts.push({
-      source: candidate.source,
+      source,
       status: fetched && !fetched.isProxy ? "ok" : "sem_dados",
       value: fetched?.value ?? null,
       selected: false,
     });
     if (fetched && !fetched.isProxy) {
-      successful.push({ source: candidate.source, fetched });
-      if (!verifyAllSources) break;
+      successful.push({ source, fetched });
     }
   }
 
-  const selected = primary
-    ? (!primary.isProxy ? { source: primarySource, fetched: primary } : successful[0] ?? null)
-    : successful[0] ?? null;
+  // Ordena por prioridade: comick > mangadex > mangaupdates
+  successful.sort(
+    (a, b) =>
+      MANGA_NOTIFICATION_SOURCE_ORDER.indexOf(a.source) -
+      MANGA_NOTIFICATION_SOURCE_ORDER.indexOf(b.source),
+  );
+
+  const selected = successful[0] ?? null;
   if (selected) {
-    const selectedAttempt = attempts.find((attempt) => attempt.source === selected.source);
-    if (selectedAttempt) selectedAttempt.selected = true;
+    const s = attempts.find((x) => x.source === selected.source);
+    if (s) s.selected = true;
   }
 
   return {
