@@ -866,12 +866,16 @@ async function fetchWithFallback(
     }
   }
 
-  // Ordena por prioridade: comick > mangadex > mangaupdates
-  successful.sort(
-    (a, b) =>
+  // Escolhe a fonte com o maior número de capítulos válidos.
+  // Em caso de empate, desempata pela prioridade de fonte (comick > mangadex > mangaupdates).
+  successful.sort((a, b) => {
+    const byChapter = b.fetched.value - a.fetched.value;
+    if (byChapter !== 0) return byChapter;
+    return (
       MANGA_NOTIFICATION_SOURCE_ORDER.indexOf(a.source) -
-      MANGA_NOTIFICATION_SOURCE_ORDER.indexOf(b.source),
-  );
+      MANGA_NOTIFICATION_SOURCE_ORDER.indexOf(b.source)
+    );
+  });
 
   const selected = successful[0] ?? null;
   if (selected) {
