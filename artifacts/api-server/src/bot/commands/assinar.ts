@@ -54,8 +54,9 @@ export const data = new SlashCommandBuilder()
       .addStringOption((opt) =>
         opt
           .setName("titulo")
-          .setDescription("Nome ou parte do título da assinatura a cancelar")
+          .setDescription("Digite para filtrar suas assinaturas")
           .setRequired(true)
+          .setAutocomplete(true)
       )
   )
   .addSubcommand((sub) =>
@@ -63,6 +64,34 @@ export const data = new SlashCommandBuilder()
   );
 
 export async function autocomplete(interaction: AutocompleteInteraction): Promise<void> {
+  const sub = interaction.options.getSubcommand(false);
+
+  // Autocomplete do /assinar remover — mostra só as assinaturas do próprio usuário
+  if (sub === "remover") {
+    if (!interaction.guildId) { await interaction.respond([]); return; }
+    const focused  = interaction.options.getFocused();
+    const userId   = interaction.user.id;
+    const guildId  = interaction.guildId;
+    try {
+      const subs = await db
+        .select({ title: assinaturasTable.title, manhwaId: assinaturasTable.manhwaId })
+        .from(assinaturasTable)
+        .where(and(
+          eq(assinaturasTable.discordUserId, userId),
+          eq(assinaturasTable.guildId, guildId),
+          focused ? ilike(assinaturasTable.title, `%${focused}%`) : undefined,
+        ))
+        .limit(25);
+      await interaction.respond(
+        subs.map((s) => ({ name: s.title.slice(0, 100), value: s.manhwaId })),
+      );
+    } catch {
+      await interaction.respond([]);
+    }
+    return;
+  }
+
+  // Autocomplete do /assinar adicionar
   const tipo    = interaction.options.getString("tipo") ?? "manhwa";
   const focused = interaction.options.getFocused();
   if (tipo === "anime") {
@@ -261,16 +290,27 @@ async function handleRemover(interaction: ChatInputCommandInteraction) {
 
   let subs;
   try {
-    // Busca em todas as assinaturas (SFW e adulto) para que o usuário
-    // consiga remover qualquer título independente do tipo
+    // Valor do autocomplete = manhwaId exato; valor digitado livremente = busca por título.
+    // Tenta primeiro correspondência exata pelo manhwaId (autocomplete), depois ilike no título.
     subs = await db
       .select()
       .from(assinaturasTable)
       .where(and(
         eq(assinaturasTable.discordUserId, userId),
         eq(assinaturasTable.guildId, guildId),
-        ilike(assinaturasTable.title, `%${titulo}%`),
+        eq(assinaturasTable.manhwaId, titulo),
       ));
+
+    if (!subs.length) {
+      subs = await db
+        .select()
+        .from(assinaturasTable)
+        .where(and(
+          eq(assinaturasTable.discordUserId, userId),
+          eq(assinaturasTable.guildId, guildId),
+          ilike(assinaturasTable.title, `%${titulo}%`),
+        ));
+    }
   } catch (err) {
     logger.error({ err }, "Erro de DB em /assinar remover");
     void recordBotError({
