@@ -246,6 +246,28 @@ export async function startBot() {
       return;
     }
 
+    if (interaction.isButton()) {
+      if (!interaction.customId.startsWith("cal_")) return;
+
+      try {
+        await calendarioCommand.handleButton(interaction);
+      } catch (err) {
+        logger.error({ err, customId: interaction.customId }, "Erro no handler de botão do calendario");
+        if (interaction.deferred || interaction.replied) {
+          await interaction.editReply({
+            content: "❌ Não foi possível trocar a página. Execute `/calendario` novamente.",
+            components: [],
+          }).catch(() => {});
+        } else {
+          await interaction.reply({
+            content: "❌ Não foi possível trocar a página. Execute `/calendario` novamente.",
+            ephemeral: true,
+          }).catch(() => {});
+        }
+      }
+      return;
+    }
+
     if (!interaction.isChatInputCommand()) return;
 
     const command = commands.get(interaction.commandName);

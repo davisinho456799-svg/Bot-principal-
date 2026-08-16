@@ -5,6 +5,7 @@
 
 import {
   ChatInputCommandInteraction,
+  ButtonInteraction,
   SlashCommandBuilder,
   EmbedBuilder,
   ButtonBuilder,
@@ -20,6 +21,9 @@ import { logger } from "../../lib/logger.js";
 
 const ANILIST_API = "https://graphql.anilist.co";
 const PAGE_SIZE   = 20;
+
+type CalendarButtonHandler = (interaction: ButtonInteraction) => Promise<void>;
+const calendarButtonHandlers = new Map<string, CalendarButtonHandler>();
 
 // ─── Queries ──────────────────────────────────────────────────────────────────
 
@@ -286,6 +290,20 @@ function buildNavRow(page: number, total: number, prefix: string, disabled = fal
   return row.addComponents(btns);
 }
 
+export async function handleButton(interaction: ButtonInteraction): Promise<void> {
+  const handler = calendarButtonHandlers.get(interaction.message.id);
+
+  if (!handler) {
+    await interaction.reply({
+      content: "⏱️ Este calendário expirou. Execute `/calendario` novamente.",
+      ephemeral: true,
+    });
+    return;
+  }
+
+  await handler(interaction);
+}
+
 // ─── Comando ──────────────────────────────────────────────────────────────────
 
 export const data = new SlashCommandBuilder()
@@ -382,14 +400,17 @@ export async function execute(interaction: ChatInputCommandInteraction) {
       components: buildComponents("anime", 0),
     });
 
-    const collector = msg.createMessageComponentCollector({
-      componentType: ComponentType.Button,
-      time: 15 * 60 * 1000,
-    });
-
     let isUpdating = false;
 
-    collector.on("collect", async (btn) => {
+    const handleCalendarButton: CalendarButtonHandler = async (btn) => {
+      if (btn.user.id !== interaction.user.id) {
+        await btn.reply({
+          content: "⚠️ Este calendário foi aberto por outra pessoa.",
+          ephemeral: true,
+        }).catch(() => {});
+        return;
+      }
+
       if (isUpdating) {
         await btn.reply({
           content: "⏳ Aguarde a atualização do calendário terminar.",
@@ -416,7 +437,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 
       isUpdating = true;
       try {
-        // Atualiza e confirma o clique em uma única resposta ao Discord.
+        // A resposta update() confirma e edita a mensagem em uma única operação.
         await btn.update({
           embeds: [buildEmbed(nextTab, nextPage)],
           components: buildComponents(nextTab, nextPage),
@@ -436,13 +457,16 @@ export async function execute(interaction: ChatInputCommandInteraction) {
       } finally {
         isUpdating = false;
       }
-    });
+    };
 
-    collector.on("end", () => {
+    calendarButtonHandlers.set(msg.id, handleCalendarButton);
+
+    setTimeout(() => {
+      calendarButtonHandlers.delete(msg.id);
       interaction
         .editReply({ components: buildComponents(currentTab, pages[currentTab], true) })
         .catch(() => {});
-    });
+    }, 15 * 60 * 1000);
 
     // ── Coletor de assinaturas via Select Menu ───────────────────────────────
     const selectCollector = msg.createMessageComponentCollector({
