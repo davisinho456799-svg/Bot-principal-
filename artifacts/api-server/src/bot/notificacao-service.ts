@@ -21,6 +21,7 @@ import { recordBotError } from "./error-log.js";
 import {
   type FetchResult,
   type FetchError,
+  type SourceErrorKind,
   fetchError,
   isFetchError,
   normalizeChapterValue,
@@ -1811,7 +1812,15 @@ export function startWeeklyService(client: Client) {
 }
 
 export function startNotificacaoService(client: Client) {
+  let running = false;
+
   const runSafe = async () => {
+    if (running) {
+      logger.warn("Ciclo de notificações anterior ainda está executando; ignorando este disparo");
+      return;
+    }
+
+    running = true;
     try {
       await runCheck(client);
     } catch (err) {
@@ -1821,6 +1830,8 @@ export function startNotificacaoService(client: Client) {
         errorCode: "NOTIFICATION_SERVICE_FAILED",
         error: err,
       });
+    } finally {
+      running = false;
     }
   };
 

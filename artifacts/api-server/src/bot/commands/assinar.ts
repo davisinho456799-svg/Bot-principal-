@@ -1,6 +1,7 @@
 import {
   ChatInputCommandInteraction,
   AutocompleteInteraction,
+  APIEmbedField,
   SlashCommandBuilder,
   EmbedBuilder,
 } from "discord.js";
@@ -392,8 +393,8 @@ async function handleListar(interaction: ChatInputCommandInteraction) {
   const chunkFields = (
     lines: string[],
     firstName: string,
-  ): Parameters<typeof embed.addFields>[0][] => {
-    const fields: Parameters<typeof embed.addFields>[0][] = [];
+  ): APIEmbedField[] => {
+    const fields: APIEmbedField[] = [];
     let current: string[] = [];
     let len = 0;
     for (const line of lines) {

@@ -93,10 +93,14 @@ export async function startBot() {
     process.env["Discord_bot_key"] ??
     process.env["Discord_key"];
   if (!token) {
-    logger.error("Token do Discord não configurado. Bot não iniciado.");
-    return;
+    const error = new Error(
+      "Token do Discord não configurado. Use DISCORD_BOT_TOKEN, Discord_bot_key ou Discord_key.",
+    );
+    logger.error({ configuredNames: ["DISCORD_BOT_TOKEN", "Discord_bot_key", "Discord_key"] }, error.message);
+    throw error;
   }
 
+  logger.info("Iniciando conexão do bot com o Discord...");
   const client = new Client({
     intents: [GatewayIntentBits.Guilds],
     rest: { retries: 5 },
@@ -157,6 +161,10 @@ export async function startBot() {
 
   client.on(Events.ShardResume, (shardId, replayedEvents) => {
     logger.info({ shardId, replayedEvents }, "Bot reconectado ao Discord.");
+  });
+
+  client.on("warn", (message) => {
+    logger.warn({ message }, "Aviso recebido do Discord");
   });
 
   client.on("error", (err) => {
@@ -308,5 +316,19 @@ export async function startBot() {
     }
   });
 
-  await client.login(token);
+  try {
+    await Promise.race([
+      client.login(token),
+      new Promise<never>((_, reject) => {
+        setTimeout(
+          () => reject(new Error("Login do Discord não confirmou em 30s")),
+          30_000,
+        );
+      }),
+    ]);
+    logger.info("Login do bot no Discord confirmado; aguardando ClientReady");
+  } catch (err) {
+    logger.error({ err }, "Falha no login do Discord");
+    throw err;
+  }
 }

@@ -175,7 +175,10 @@ router.post("/subscriptions/:id/check", async (req, res): Promise<void> => {
   // Fetch latest data from MAL
   let malData;
   try {
-    malData = await fetchMalItem(sub.malItemId, sub.malItemType as "manga" | "anime");
+    malData = await fetchMalItem(
+      Number(sub.manhwaId),
+      sub.tipo === "anime" ? "anime" : "manga",
+    );
   } catch (err) {
     req.log.error({ err, subscriptionId: sub.id }, "MAL API fetch failed");
     const message =
@@ -183,15 +186,15 @@ router.post("/subscriptions/:id/check", async (req, res): Promise<void> => {
         ? err.message
         : "Erro ao buscar dados no MyAnimeList.";
     const errorLog = await recordError({
-      discordGuildId: sub.discordGuildId,
+      discordGuildId: sub.guildId,
       route: req.path,
       errorCode: "MAL_API_ERROR",
       message,
       httpStatus: 502,
       context: {
         subscriptionId: sub.id,
-        malItemId: sub.malItemId,
-        malItemType: sub.malItemType,
+        malItemId: sub.manhwaId,
+        malItemType: sub.tipo,
       },
     });
     res.locals.errorLogged = true;
@@ -244,9 +247,9 @@ router.post("/subscriptions/:id/check", async (req, res): Promise<void> => {
   res.json({
     changed,
     subscription_id: sub.id,
-    item_name: sub.itemName,
-    mal_item_id: sub.malItemId,
-    mal_item_type: sub.malItemType,
+    item_name: sub.title,
+    mal_item_id: sub.manhwaId,
+    mal_item_type: sub.tipo === "anime" ? "anime" : "manga",
     current: {
       synopsis: malData.synopsis,
       score: malData.score,
