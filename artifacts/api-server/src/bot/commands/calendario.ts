@@ -444,20 +444,28 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 
       isUpdating = true;
       try {
-        // A resposta update() confirma e edita a mensagem em uma única operação.
-        await btn.update({
+        // Confirma o clique imediatamente para não estourar a janela de 3s
+        // do Discord; a edição da mensagem acontece logo depois.
+        const updatePayload = {
           embeds: [buildEmbed(nextTab, nextPage)],
           components: buildComponents(nextTab, nextPage),
-        });
+        };
+        await btn.deferUpdate();
+        await btn.editReply(updatePayload);
 
         // Só salva o novo estado depois que o Discord confirmou a atualização.
         currentTab = nextTab;
         pages[nextTab] = nextPage;
       } catch (err) {
         logger.error({ err, customId: btn.customId }, "Erro ao processar botão do calendario");
-        if (!btn.replied && !btn.deferred) {
+        if (btn.deferred || btn.replied) {
+          await btn.followUp({
+            content: "❌ Não foi possível trocar a página. Tente clicar novamente.",
+            ephemeral: true,
+          }).catch(() => {});
+        } else {
           await btn.reply({
-            content: "❌ Não foi possível trocar a página. Tente executar `/calendario` novamente.",
+            content: "❌ Não foi possível trocar a página. Tente clicar novamente.",
             ephemeral: true,
           }).catch(() => {});
         }
