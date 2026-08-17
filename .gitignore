@@ -47,3 +47,10 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+
+# Uploaded screenshots and photos
+attached_assets/*.jpg
+attached_assets/*.jpeg
+attached_assets/*.png
+attached_assets/*.webp
+attached_assets/*.gif
