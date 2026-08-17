@@ -59,6 +59,11 @@ const DISCORD_TOKEN_VARIABLES = [
   "Discord_key",
 ] as const;
 const DEFAULT_LOGIN_TIMEOUT_MS = 120_000;
+const INITIAL_RETRY_DELAY_MS = 5_000;
+const MAX_RETRY_DELAY_MS = 60_000;
+
+let botSupervisorStarted = false;
+let retryTimer: NodeJS.Timeout | undefined;
 
 function getDiscordToken(): { token: string; variable: string } | null {
   for (const variable of DISCORD_TOKEN_VARIABLES) {
@@ -82,6 +87,18 @@ function getLoginTimeoutMs(): number {
   }
 
   return DEFAULT_LOGIN_TIMEOUT_MS;
+}
+
+function isLikelyInvalidTokenError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /invalid token|token_invalid|401\b/i.test(message);
+}
+
+function getRetryDelayMs(attempt: number): number {
+  return Math.min(
+    INITIAL_RETRY_DELAY_MS * 2 ** Math.min(attempt, 4),
+    MAX_RETRY_DELAY_MS,
+  );
 }
 
 const commands = new Map<string, Command>([
@@ -118,7 +135,7 @@ const commands = new Map<string, Command>([
   [assinar18Command.data.name, assinar18Command],
 ]);
 
-export async function startBot() {
+async function connectBot() {
   const tokenConfig = getDiscordToken();
   if (!tokenConfig) {
     const error = new Error(
@@ -385,13 +402,58 @@ export async function startBot() {
     logger.info("Login do bot no Discord confirmado; aguardando ClientReady");
   } catch (err) {
     logger.error(
-      { err, loginTimeoutMs },
+      {
+        err,
+        loginTimeoutMs,
+        reason: isLikelyInvalidTokenError(err)
+          ? "invalid_token_or_token_rejected"
+          : "gateway_connection_failed_or_timed_out",
+      },
       "Falha no login do Discord",
     );
+    client.destroy();
     throw err;
   } finally {
     if (loginTimeout) {
       clearTimeout(loginTimeout);
     }
   }
+}
+
+async function superviseBotConnection(attempt: number): Promise<void> {
+  try {
+    await connectBot();
+    logger.info("Supervisor do bot concluído; o Discord está conectado.");
+  } catch (err) {
+    const retryDelayMs = isLikelyInvalidTokenError(err)
+      ? MAX_RETRY_DELAY_MS
+      : getRetryDelayMs(attempt);
+
+    logger.error(
+      {
+        err,
+        attempt: attempt + 1,
+        retryDelayMs,
+        reason: isLikelyInvalidTokenError(err)
+          ? "verifique_DISCORD_BOT_TOKEN_no_ambiente"
+          : "nova_tentativa_automatica",
+      },
+      "Bot do Discord indisponível; a aplicação continuará ativa",
+    );
+
+    retryTimer = setTimeout(() => {
+      retryTimer = undefined;
+      void superviseBotConnection(attempt + 1);
+    }, retryDelayMs);
+  }
+}
+
+export function startBot(): void {
+  if (botSupervisorStarted) {
+    logger.warn("A inicialização do bot do Discord já está em andamento");
+    return;
+  }
+
+  botSupervisorStarted = true;
+  void superviseBotConnection(0);
 }

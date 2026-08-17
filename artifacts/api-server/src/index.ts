@@ -54,7 +54,7 @@ async function startApplication() {
 
   if (!rawPort) {
     logger.info("PORT não definido; iniciando como worker do Discord");
-    await startBot();
+    startBot();
     return;
   }
 
@@ -72,10 +72,7 @@ async function startApplication() {
 
     logger.info({ port }, "Server listening");
 
-    void startBot().catch((err) => {
-      logger.error({ err }, "Falha ao iniciar o bot do Discord");
-      process.exit(1);
-    });
+    startBot();
   });
 }
 
