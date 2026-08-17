@@ -59,6 +59,7 @@ const DISCORD_TOKEN_VARIABLES = [
   "Discord_key",
 ] as const;
 const DEFAULT_LOGIN_TIMEOUT_MS = 120_000;
+const DISCORD_REST_TIMEOUT_MS = 15_000;
 const INITIAL_RETRY_DELAY_MS = 5_000;
 const MAX_RETRY_DELAY_MS = 60_000;
 
@@ -106,6 +107,54 @@ function getRetryDelayMs(attempt: number): number {
   );
 }
 
+async function validateDiscordToken(token: string): Promise<{
+  id: string;
+  username: string;
+}> {
+  const controller = new AbortController();
+  const timeout = setTimeout(
+    () => controller.abort(),
+    DISCORD_REST_TIMEOUT_MS,
+  );
+
+  try {
+    const response = await fetch("https://discord.com/api/v10/users/@me", {
+      headers: { Authorization: `Bot ${token}` },
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(
+        `Validação REST do Discord falhou com HTTP ${response.status}`,
+      );
+    }
+
+    const profile = (await response.json()) as {
+      id?: unknown;
+      username?: unknown;
+    };
+
+    if (typeof profile.id !== "string") {
+      throw new Error("Discord retornou um perfil de bot inválido");
+    }
+
+    return {
+      id: profile.id,
+      username:
+        typeof profile.username === "string" ? profile.username : "desconhecido",
+    };
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error(
+        `Validação REST do Discord excedeu ${DISCORD_REST_TIMEOUT_MS}ms`,
+      );
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 const commands = new Map<string, Command>([
   [searchCommand.data.name, searchCommand],
   [topCommand.data.name, topCommand],
@@ -151,6 +200,15 @@ async function connectBot() {
   const { token, variable: tokenVariable } = tokenConfig;
 
   const loginTimeoutMs = getLoginTimeoutMs();
+  logger.info({ tokenVariable }, "Validando token do Discord...");
+  const discordProfile = await validateDiscordToken(token);
+  logger.info(
+    {
+      discordUserId: discordProfile.id,
+      discordUsername: discordProfile.username,
+    },
+    "Token do Discord validado; iniciando Gateway...",
+  );
   logger.info(
     { tokenVariable, loginTimeoutMs },
     "Iniciando conexão do bot com o Discord...",
@@ -443,9 +501,9 @@ async function superviseBotConnection(attempt: number): Promise<void> {
     } else {
       logger.error(
         {
-          err,
           attempt: attempt + 1,
           retryDelayMs,
+          errorMessage: err instanceof Error ? err.message : String(err),
           reason: invalidToken
             ? "verifique_DISCORD_BOT_TOKEN_no_ambiente"
             : "nova_tentativa_automatica",
