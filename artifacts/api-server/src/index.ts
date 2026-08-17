@@ -32,11 +32,11 @@ async function startApplication() {
     {
       hasPort: Boolean(rawPort),
       hasDatabaseUrl: Boolean(process.env.NEON_DATABASE_URL ?? process.env.DATABASE_URL),
-      hasDiscordToken: Boolean(
-        process.env.DISCORD_BOT_TOKEN ??
-          process.env.Discord_bot_key ??
-          process.env.Discord_key,
-      ),
+      hasDiscordToken: [
+        process.env.DISCORD_BOT_TOKEN,
+        process.env.Discord_bot_key,
+        process.env.Discord_key,
+      ].some((value) => Boolean(value?.trim())),
     },
     "Iniciando aplicação",
   );

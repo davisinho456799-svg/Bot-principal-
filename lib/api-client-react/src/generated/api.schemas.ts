@@ -337,7 +337,6 @@ language?: string;
  */
 limit?: number;
 };
-
 export type ListMangaChaptersParams = {
 comickSlug?: string;
 mangadexId?: string;

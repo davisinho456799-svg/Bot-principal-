@@ -53,6 +53,37 @@ type Command = {
   autocomplete?: (interaction: AutocompleteInteraction) => Promise<void>;
 };
 
+const DISCORD_TOKEN_VARIABLES = [
+  "DISCORD_BOT_TOKEN",
+  "Discord_bot_key",
+  "Discord_key",
+] as const;
+const DEFAULT_LOGIN_TIMEOUT_MS = 120_000;
+
+function getDiscordToken(): { token: string; variable: string } | null {
+  for (const variable of DISCORD_TOKEN_VARIABLES) {
+    const token = process.env[variable]?.trim();
+    if (token) {
+      return { token, variable };
+    }
+  }
+
+  return null;
+}
+
+function getLoginTimeoutMs(): number {
+  const configured = Number.parseInt(
+    process.env["DISCORD_LOGIN_TIMEOUT_MS"] ?? "",
+    10,
+  );
+
+  if (Number.isFinite(configured) && configured >= 30_000) {
+    return configured;
+  }
+
+  return DEFAULT_LOGIN_TIMEOUT_MS;
+}
+
 const commands = new Map<string, Command>([
   [searchCommand.data.name, searchCommand],
   [topCommand.data.name, topCommand],
@@ -88,19 +119,24 @@ const commands = new Map<string, Command>([
 ]);
 
 export async function startBot() {
-  const token =
-    process.env["DISCORD_BOT_TOKEN"] ??
-    process.env["Discord_bot_key"] ??
-    process.env["Discord_key"];
-  if (!token) {
+  const tokenConfig = getDiscordToken();
+  if (!tokenConfig) {
     const error = new Error(
       "Token do Discord não configurado. Use DISCORD_BOT_TOKEN, Discord_bot_key ou Discord_key.",
     );
-    logger.error({ configuredNames: ["DISCORD_BOT_TOKEN", "Discord_bot_key", "Discord_key"] }, error.message);
+    logger.error(
+      { configuredNames: DISCORD_TOKEN_VARIABLES },
+      error.message,
+    );
     throw error;
   }
+  const { token, variable: tokenVariable } = tokenConfig;
 
-  logger.info("Iniciando conexão do bot com o Discord...");
+  const loginTimeoutMs = getLoginTimeoutMs();
+  logger.info(
+    { tokenVariable, loginTimeoutMs },
+    "Iniciando conexão do bot com o Discord...",
+  );
   const client = new Client({
     intents: [GatewayIntentBits.Guilds],
     rest: { retries: 5 },
@@ -161,6 +197,19 @@ export async function startBot() {
 
   client.on(Events.ShardResume, (shardId, replayedEvents) => {
     logger.info({ shardId, replayedEvents }, "Bot reconectado ao Discord.");
+  });
+
+  client.on(Events.ShardError, (err, shardId) => {
+    logger.error(
+      { err, shardId },
+      "Erro na conexão websocket do Discord",
+    );
+  });
+
+  client.on(Events.Invalidated, () => {
+    logger.error(
+      "A sessão do bot foi invalidada pelo Discord; será necessário autenticar novamente",
+    );
   });
 
   client.on("warn", (message) => {
@@ -316,19 +365,33 @@ export async function startBot() {
     }
   });
 
+  let loginTimeout: NodeJS.Timeout | undefined;
   try {
     await Promise.race([
       client.login(token),
       new Promise<never>((_, reject) => {
-        setTimeout(
-          () => reject(new Error("Login do Discord não confirmou em 30s")),
-          30_000,
+        loginTimeout = setTimeout(
+          () =>
+            reject(
+              new Error(
+                `Login do Discord não confirmou em ${Math.round(loginTimeoutMs / 1000)}s. ` +
+                  "Verifique o token, a conectividade de saída e o Gateway Intents no Discord Developer Portal.",
+              ),
+            ),
+          loginTimeoutMs,
         );
       }),
     ]);
     logger.info("Login do bot no Discord confirmado; aguardando ClientReady");
   } catch (err) {
-    logger.error({ err }, "Falha no login do Discord");
+    logger.error(
+      { err, loginTimeoutMs },
+      "Falha no login do Discord",
+    );
     throw err;
+  } finally {
+    if (loginTimeout) {
+      clearTimeout(loginTimeout);
+    }
   }
 }

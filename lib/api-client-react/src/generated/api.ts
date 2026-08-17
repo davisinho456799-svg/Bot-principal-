@@ -1279,4 +1279,3 @@ export const useCreateErrorLog = <TError = ErrorType<ErrorResponse>,
       > => {
       return useMutation(getCreateErrorLogMutationOptions(options));
     }
-

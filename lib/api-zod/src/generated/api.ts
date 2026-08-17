@@ -327,7 +327,6 @@ export const CreateSubscriptionResponse = zod.object({
   "created_at": zod.coerce.date()
 })
 
-
 /**
  * Removes a subscription by ID
  * @summary Remove a subscription
