@@ -368,14 +368,21 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     const slice = entries.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
     if (!slice.length) return null;
 
-    const options = (slice as (AiringEntry | MangaEntry)[]).slice(0, 25).map((e) => {
-      if ("airingAt" in e) {
-        const ae = e as AiringEntry;
-        return { label: (ae.media.title.english ?? ae.media.title.romaji).slice(0, 100) || "?", value: `anilist-anime:${ae.media.id}` };
-      }
-      const me = e as MangaEntry;
-      return { label: (me.title.english ?? me.title.romaji).slice(0, 100) || "?", value: `anilist:${me.id}` };
-    });
+    const seenValues = new Set<string>();
+    const options = (slice as (AiringEntry | MangaEntry)[]).slice(0, 25)
+      .map((e) => {
+        if ("airingAt" in e) {
+          const ae = e as AiringEntry;
+          return { label: (ae.media.title.english ?? ae.media.title.romaji).slice(0, 100) || "?", value: `anilist-anime:${ae.media.id}` };
+        }
+        const me = e as MangaEntry;
+        return { label: (me.title.english ?? me.title.romaji).slice(0, 100) || "?", value: `anilist:${me.id}` };
+      })
+      .filter((option) => {
+        if (seenValues.has(option.value)) return false;
+        seenValues.add(option.value);
+        return true;
+      });
 
     return new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
       new StringSelectMenuBuilder()
