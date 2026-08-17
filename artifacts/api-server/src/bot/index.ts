@@ -94,6 +94,11 @@ function isLikelyInvalidTokenError(error: unknown): boolean {
   return /invalid token|token_invalid|401\b/i.test(message);
 }
 
+function isMissingTokenError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /token do discord não configurado/i.test(message);
+}
+
 function getRetryDelayMs(attempt: number): number {
   return Math.min(
     INITIAL_RETRY_DELAY_MS * 2 ** Math.min(attempt, 4),
@@ -140,10 +145,6 @@ async function connectBot() {
   if (!tokenConfig) {
     const error = new Error(
       "Token do Discord não configurado. Use DISCORD_BOT_TOKEN, Discord_bot_key ou Discord_key.",
-    );
-    logger.error(
-      { configuredNames: DISCORD_TOKEN_VARIABLES },
-      error.message,
     );
     throw error;
   }
@@ -425,21 +426,33 @@ async function superviseBotConnection(attempt: number): Promise<void> {
     await connectBot();
     logger.info("Supervisor do bot concluído; o Discord está conectado.");
   } catch (err) {
-    const retryDelayMs = isLikelyInvalidTokenError(err)
+    const missingToken = isMissingTokenError(err);
+    const invalidToken = isLikelyInvalidTokenError(err);
+    const retryDelayMs = missingToken || invalidToken
       ? MAX_RETRY_DELAY_MS
       : getRetryDelayMs(attempt);
 
-    logger.error(
-      {
-        err,
-        attempt: attempt + 1,
-        retryDelayMs,
-        reason: isLikelyInvalidTokenError(err)
-          ? "verifique_DISCORD_BOT_TOKEN_no_ambiente"
-          : "nova_tentativa_automatica",
-      },
-      "Bot do Discord indisponível; a aplicação continuará ativa",
-    );
+    if (missingToken) {
+      logger.error(
+        {
+          configuredNames: DISCORD_TOKEN_VARIABLES,
+          retryDelayMs,
+        },
+        "Bot do Discord aguardando token; configure DISCORD_BOT_TOKEN no ambiente",
+      );
+    } else {
+      logger.error(
+        {
+          err,
+          attempt: attempt + 1,
+          retryDelayMs,
+          reason: invalidToken
+            ? "verifique_DISCORD_BOT_TOKEN_no_ambiente"
+            : "nova_tentativa_automatica",
+        },
+        "Bot do Discord indisponível; a aplicação continuará ativa",
+      );
+    }
 
     retryTimer = setTimeout(() => {
       retryTimer = undefined;
