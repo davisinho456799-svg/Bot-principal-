@@ -8,3 +8,4 @@
 - [Bot principal e linha main](bot-branch-source.md) — o `/calendario` real vive na linha do bot principal; `main` é uma versão diferente e não deve ser usada para esse comando.
 - [Anexos e Git](attachments-git.md) — arquivos enviados em `attached_assets` podem virar commits; revisar imagens antes de qualquer push.
 - [Discord login startup](discord-login-startup.md) — resolva tokens não vazios e use timeout configurável para o handshake do Gateway em deploys lentos.
+- [Notification baseline retry](notification-baseline-retry.md) — só avance o capítulo rastreado depois do envio; histórico do MAL não substitui a linha de base da notificação.
