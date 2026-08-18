@@ -1056,7 +1056,22 @@ async function sendNotification(
 ): Promise<boolean> {
   try {
     const channel = await client.channels.fetch(channelId);
-    if (!channel || !(channel instanceof TextChannel)) return false;
+    if (!channel) {
+      logger.warn({ channelId, title }, "Canal de notificação não encontrado");
+      return false;
+    }
+    if (!(channel instanceof TextChannel)) {
+      logger.warn(
+        {
+          channelId,
+          title,
+          channelType: "type" in channel ? channel.type : undefined,
+          channelClass: channel.constructor?.name,
+        },
+        "Canal de notificação não é um canal de texto",
+      );
+      return false;
+    }
 
     const isAnime = source === "anilist-anime";
     const unidade = isAnime ? "episódio(s)" : "capítulo(s)";
@@ -1323,6 +1338,13 @@ export async function runCheck(
 
   const canais = await db.select().from(notificacaoCanaisTable);
   const manhwas = await getTrackedManhwas();
+  logger.info(
+    { canaisConfigurados: canais.length, titulosRastreados: manhwas.length },
+    "Estado do serviço de notificações carregado",
+  );
+  if (!canais.length) {
+    logger.warn("Nenhum canal de notificação está configurado no banco");
+  }
   const summary: NotificationCheckSummary = {
     titlesChecked: manhwas.length,
     successfulSources: 0,
@@ -1381,6 +1403,19 @@ export async function runCheck(
           .where(eq(capitulosRastreados.manhwaId, m.manhwaId));
           const { previous, changedFields } = await recordMalSnapshot(m.manhwaId, m.title, snapshot);
 
+          // Após a implantação do histórico, use o rastreador existente como
+          // baseline até que a primeira linha histórica esteja disponível.
+          // O rastreador é a linha de base da notificação e deve ter prioridade
+          // sobre o histórico: o histórico pode conter o capítulo atual mesmo
+          // quando o envio ao Discord falhou no ciclo anterior.
+          const previousChapters = tracked?.lastChapters ?? previous?.chapters ?? null;
+          const chapterIncreased =
+            previousChapters != null &&
+            snapshot.chapters != null &&
+            snapshot.chapters > previousChapters;
+
+          // Não avance a linha de base antes do envio. Se o canal estiver
+          // quebrado, o próximo ciclo precisa tentar a mesma atualização.
           if (!tracked) {
             await db.insert(capitulosRastreados).values({
               manhwaId: m.manhwaId,
@@ -1388,14 +1423,16 @@ export async function runCheck(
               title: m.title,
               coverUrl: m.coverUrl,
               siteUrl: m.siteUrl,
-              lastChapters: snapshot.chapters,
+              lastChapters: chapterIncreased && previousChapters != null
+                ? previousChapters
+                : snapshot.chapters,
             });
           } else {
             const update: {
               lastChecked: ReturnType<typeof sql>;
               lastChapters?: number;
             } = { lastChecked: sql`now()` };
-            if (snapshot.chapters != null && Number.isFinite(snapshot.chapters)) {
+            if (!chapterIncreased && snapshot.chapters != null && Number.isFinite(snapshot.chapters)) {
               update.lastChapters = snapshot.chapters;
             }
             await db
@@ -1403,14 +1440,6 @@ export async function runCheck(
               .set(update)
               .where(eq(capitulosRastreados.manhwaId, m.manhwaId));
           }
-
-          // Após a implantação do histórico, use o rastreador existente como
-          // baseline até que a primeira linha histórica esteja disponível.
-          const previousChapters = previous?.chapters ?? tracked?.lastChapters ?? null;
-          const chapterIncreased =
-            previousChapters != null &&
-            snapshot.chapters != null &&
-            snapshot.chapters > previousChapters;
 
           if (chapterIncreased && snapshot.chapters != null && previousChapters != null) {
             logger.info(
@@ -1429,7 +1458,13 @@ export async function runCheck(
                   ),
                 );
               // Não envia embed para guilds sem assinantes deste título
-              if (!subscribers.length) continue;
+              if (!subscribers.length) {
+                logger.warn(
+                  { title: m.title, manhwaId: m.manhwaId, guildId: canal.guildId, channelId: canal.channelId },
+                  "Capítulo detectado, mas não há assinantes neste servidor",
+                );
+                continue;
+              }
               const mentions = subscribers.map((s) => `<@${s.discordUserId}>`);
               const sent = await sendNotification(
                 client,
