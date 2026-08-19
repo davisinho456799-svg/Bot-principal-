@@ -45,6 +45,25 @@ const COMICK_HEADERS = {
   Origin: "https://comick.io",
 };
 const CHECK_INTERVAL_MS = 2 * 60 * 60 * 1000; // 2 horas
+// A pausa deve proteger a fonte que impõe limite, não parar a fila inteira por
+// um minuto. O scanner continua sequencial; esta margem evita rajadas no
+// Comick sem deixar dezenas de títulos esperando desnecessariamente.
+const BETWEEN_TITLES_DELAY_MS = 10_000;
+const COMICK_COOLDOWN_MS = 5 * 60 * 1000;
+let comickBlockedUntil = 0;
+let verificationInProgress = false;
+
+function isComickBlocked(): boolean {
+  return Date.now() < comickBlockedUntil;
+}
+
+function blockComick(title: string, status: number): void {
+  comickBlockedUntil = Date.now() + COMICK_COOLDOWN_MS;
+  logger.warn(
+    { title, status, cooldownMinutes: COMICK_COOLDOWN_MS / 60_000 },
+    "Comick ativou proteção — pausando consultas ao Comick",
+  );
+}
 
 /**
  * Discord pode devolver canais de anúncio, threads ou canais vindos de uma
@@ -451,6 +470,10 @@ async function fetchChapters(
 
   if (source === "comick") {
     try {
+      if (isComickBlocked()) {
+        logger.debug({ manhwaId }, "Consulta ao Comick ignorada durante cooldown");
+        return fetchError("http_429", 429);
+      }
       const res = await fetch(`${COMICK_API_BASE}/comic/${encodeURIComponent(manhwaId)}`, {
         headers: COMICK_HEADERS,
         signal: AbortSignal.timeout(8000),
@@ -472,9 +495,15 @@ async function fetchChapters(
               : undefined;
           return { value: lastChapter, isProxy: false, newManhwaId };
         }
-        // Para 403/429/5xx: tenta o endpoint de busca como fallback interno do
-        // Comick antes de desistir. O endpoint /v1.0/search tem proteção CF mais
-        // leve que /comic/{slug} e já inclui last_chapter na resposta.
+        if (res.status === 403 || res.status === 429) {
+          blockComick(manhwaId, res.status);
+          const kind = classifyHttpStatus(res.status);
+          recordSourceError(source, manhwaId, kind, res.status);
+          return fetchError(kind, res.status);
+        }
+        // Para outros erros HTTP (como 5xx), tenta o endpoint de busca como
+        // fallback interno do Comick antes de desistir. 403/429 entram em
+        // cooldown acima para não insistir enquanto a proteção está ativa.
         logger.debug({ manhwaId, httpStatus: res.status }, "Comick /comic/{slug} bloqueado — tentando /v1.0/search");
         try {
           const searchRes = await fetch(
@@ -955,13 +984,12 @@ async function fetchWithFallback(
     };
   }
 
-  // ── Manga / manhwa: Comick, MangaDex e MangaUpdates em paralelo ──────────
+  // ── Manga / manhwa: fontes auxiliares em paralelo ─────────────────────────
   //
-  // Para a fonte primária usa-se o ID já gravado no banco.
-  // Para as demais, pesquisa-se pelo título usando as funções de busca
-  // existentes. Uma fonte que falhe não impede as outras.
+  // O Comick fica fora deste grupo: busca e consulta precisam ser sequenciais,
+  // porque o Cloudflare pode bloquear uma rajada de requisições.
 
-  const PARALLEL_SOURCES = ["comick", "mangadex", "mangaupdates"] as const;
+  const PARALLEL_SOURCES = ["mangadex", "mangaupdates"] as const;
 
   const parallelTasks = PARALLEL_SOURCES.map(async (source) => {
     // Determina o ID a consultar
@@ -972,13 +1000,7 @@ async function fetchWithFallback(
       id = includePrimarySource ? manhwaId : null;
     } else {
       // Pesquisa pelo título para fontes não-primárias
-      if (source === "comick") {
-        const results = await searchComickAny(title).catch(() => [] as Awaited<ReturnType<typeof searchComickAny>>);
-        const match = results.find(
-          (r) => typeof r.title === "string" && typeof r.slug === "string" && likelySameTitle(r.title, title),
-        );
-        id = match?.slug ?? null;
-      } else if (source === "mangadex") {
+      if (source === "mangadex") {
         const results = await searchMangaDexAny(title, 5).catch(() => [] as Awaited<ReturnType<typeof searchMangaDexAny>>);
         const match = results.find((r) => likelySameTitle(r.mainTitle, title));
         id = match?.id ?? null;
@@ -1000,7 +1022,42 @@ async function fetchWithFallback(
     };
   });
 
-  const settled = await Promise.allSettled(parallelTasks);
+  const comickTask = (async () => {
+    let id: string | null = null;
+    if (primarySource === "comick") {
+      id = includePrimarySource ? manhwaId : null;
+    } else if (!isComickBlocked()) {
+      const results = await searchComickAny(title).catch(
+        () => [] as Awaited<ReturnType<typeof searchComickAny>>,
+      );
+      const match = results.find(
+        (r) =>
+          typeof r.title === "string" &&
+          typeof r.slug === "string" &&
+          likelySameTitle(r.title, title),
+      );
+      id = match?.slug ?? null;
+    }
+
+    if (!id) {
+      return {
+        source: "comick" as const,
+        fetched: null as FetchResult | null,
+        errorKind: isComickBlocked() ? ("http_429" as const) : undefined,
+        httpStatus: isComickBlocked() ? 429 : undefined,
+      };
+    }
+    const raw = await fetchChapters(id, "comick");
+    const fetched = isFetchError(raw) ? null : raw;
+    return {
+      source: "comick" as const,
+      fetched,
+      errorKind: isFetchError(raw) ? raw.kind : undefined,
+      httpStatus: isFetchError(raw) ? raw.httpStatus : undefined,
+    };
+  })();
+
+  const settled = await Promise.allSettled([comickTask, ...parallelTasks]);
 
   const successful: Array<{ source: string; fetched: FetchResult }> = [];
 
@@ -1597,8 +1654,9 @@ export async function runCheck(
             }
           }
 
-          // Pausa entre obras: evita excesso de requisições às APIs externas.
-          await new Promise((r) => setTimeout(r, 60_000));
+          // Pequena pausa entre títulos. O limite específico do Comick fica
+          // no ramo da fonte, para não bloquear a fila inteira por 1 minuto.
+          await new Promise((r) => setTimeout(r, BETWEEN_TITLES_DELAY_MS));
           continue;
         }
       }
@@ -1745,8 +1803,9 @@ export async function runCheck(
           .where(eq(capitulosRastreados.manhwaId, m.manhwaId));
       }
 
-      // Pausa entre obras: evita excesso de requisições às APIs externas.
-      await new Promise((r) => setTimeout(r, 60_000));
+      // Pequena pausa entre títulos. Timeout e cooldown das fontes impedem
+      // que uma API lenta ou protegida prenda a execução inteira.
+      await new Promise((r) => setTimeout(r, BETWEEN_TITLES_DELAY_MS));
     } catch (err) {
       logger.error({ err, manhwa: m.title }, "Erro ao verificar capítulos");
       void recordBotError({
@@ -1871,6 +1930,11 @@ export function startWeeklyService(client: Client) {
 
 export function startNotificacaoService(client: Client) {
   const runSafe = async () => {
+    if (verificationInProgress) {
+      logger.warn("Verificação anterior ainda está em andamento — pulando esta rodada");
+      return;
+    }
+    verificationInProgress = true;
     try {
       await runCheck(client);
     } catch (err) {
@@ -1880,6 +1944,8 @@ export function startNotificacaoService(client: Client) {
         errorCode: "NOTIFICATION_SERVICE_FAILED",
         error: err,
       });
+    } finally {
+      verificationInProgress = false;
     }
   };
 
