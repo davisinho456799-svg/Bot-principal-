@@ -992,6 +992,7 @@ async function fetchWithFallback(
   const PARALLEL_SOURCES = ["mangadex", "mangaupdates"] as const;
 
   const parallelTasks = PARALLEL_SOURCES.map(async (source) => {
+    logger.debug({ title, source }, "Consultando fonte alternativa");
     // Determina o ID a consultar
     let id: string | null = null;
 
@@ -1011,9 +1012,21 @@ async function fetchWithFallback(
       }
     }
 
-    if (!id) return { source, fetched: null as FetchResult | null, errorKind: undefined as SourceErrorKind | undefined, httpStatus: undefined as number | undefined };
+    if (!id) {
+      logger.debug({ title, source }, "Fonte alternativa não encontrou correspondência");
+      return {
+        source,
+        fetched: null as FetchResult | null,
+        errorKind: undefined as SourceErrorKind | undefined,
+        httpStatus: undefined as number | undefined,
+      };
+    }
     const raw = await fetchChapters(id, source);
     const fetched = isFetchError(raw) ? null : raw;
+    logger.debug(
+      { title, source, id, value: fetched?.value ?? null, errorKind: isFetchError(raw) ? raw.kind : undefined },
+      "Fonte alternativa finalizada",
+    );
     return {
       source,
       fetched,
@@ -1023,6 +1036,10 @@ async function fetchWithFallback(
   });
 
   const comickTask = (async () => {
+    logger.debug(
+      { title, blocked: isComickBlocked() },
+      "Consultando Comick em tarefa isolada",
+    );
     let id: string | null = null;
     if (primarySource === "comick") {
       id = includePrimarySource ? manhwaId : null;
@@ -1040,6 +1057,10 @@ async function fetchWithFallback(
     }
 
     if (!id) {
+      logger.debug(
+        { title, blocked: isComickBlocked() },
+        "Comick indisponível nesta rodada — mantendo fontes alternativas",
+      );
       return {
         source: "comick" as const,
         fetched: null as FetchResult | null,
@@ -1049,6 +1070,10 @@ async function fetchWithFallback(
     }
     const raw = await fetchChapters(id, "comick");
     const fetched = isFetchError(raw) ? null : raw;
+    logger.debug(
+      { title, id, value: fetched?.value ?? null, errorKind: isFetchError(raw) ? raw.kind : undefined },
+      "Comick finalizado",
+    );
     return {
       source: "comick" as const,
       fetched,
@@ -1673,7 +1698,20 @@ export async function runCheck(
 
       const fetched = diagnosis.fetched;
       if (fetched === null) {
-        logger.debug({ title: m.title, source: m.source, manhwaId: m.manhwaId }, "API retornou null — pulando título");
+        logger.warn(
+          {
+            title: m.title,
+            source: m.source,
+            manhwaId: m.manhwaId,
+            attempts: diagnosis.attempts.map((attempt) => ({
+              source: attempt.source,
+              status: attempt.status,
+              errorKind: attempt.errorKind,
+              httpStatus: attempt.httpStatus,
+            })),
+          },
+          "Nenhuma fonte retornou dados — seguindo para o próximo título",
+        );
         continue;
       }
 
@@ -1821,7 +1859,16 @@ export async function runCheck(
     }
   }
 
-  logger.info("Verificação de capítulos concluída.");
+  logger.info(
+    {
+      titlesChecked: summary.titlesChecked,
+      successfulSources: summary.successfulSources,
+      sourcesWithoutData: summary.sourcesWithoutData,
+      fallbackUsed: summary.fallbackUsed,
+      notificationsSent: summary.notificationsSent,
+    },
+    "Verificação de capítulos concluída — fila inteira percorrida",
+  );
   return summary;
 }
 
