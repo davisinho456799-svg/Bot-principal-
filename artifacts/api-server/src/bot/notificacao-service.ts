@@ -49,8 +49,13 @@ const CHECK_INTERVAL_MS = 2 * 60 * 60 * 1000; // 2 horas
 // um minuto. O scanner continua sequencial; esta margem evita rajadas no
 // Comick sem deixar dezenas de títulos esperando desnecessariamente.
 const BETWEEN_TITLES_DELAY_MS = 10_000;
-const COMICK_COOLDOWN_MS = 5 * 60 * 1000;
+const COMICK_COOLDOWN_STEPS_MS = [
+  30 * 60 * 1000, // primeiro bloqueio: 30 min
+  2 * 60 * 60 * 1000, // segundo bloqueio: 2 h
+  6 * 60 * 60 * 1000, // bloqueios seguintes: 6 h
+] as const;
 let comickBlockedUntil = 0;
+let comickBlockCount = 0;
 let verificationInProgress = false;
 
 function isComickBlocked(): boolean {
@@ -58,9 +63,19 @@ function isComickBlocked(): boolean {
 }
 
 function blockComick(title: string, status: number): void {
-  comickBlockedUntil = Date.now() + COMICK_COOLDOWN_MS;
+  const cooldownMs =
+    COMICK_COOLDOWN_STEPS_MS[
+      Math.min(comickBlockCount, COMICK_COOLDOWN_STEPS_MS.length - 1)
+    ];
+  comickBlockCount++;
+  comickBlockedUntil = Date.now() + cooldownMs;
   logger.warn(
-    { title, status, cooldownMinutes: COMICK_COOLDOWN_MS / 60_000 },
+    {
+      title,
+      status,
+      blockCount: comickBlockCount,
+      cooldownMinutes: cooldownMs / 60_000,
+    },
     "Comick ativou proteção — pausando consultas ao Comick",
   );
 }
@@ -528,6 +543,8 @@ async function fetchChapters(
       const json = (await res.json()) as { comic?: { last_chapter?: number | null }; last_chapter?: number | null };
       const lastChapter = json.comic?.last_chapter ?? (json as { last_chapter?: number | null }).last_chapter ?? null;
       if (lastChapter == null) return fetchError("no_data");
+      // Uma resposta bem-sucedida encerra a sequência de bloqueios.
+      comickBlockCount = 0;
       return { value: lastChapter, isProxy: false };
     } catch (err) {
       const kind = classifyException(err);
@@ -1043,17 +1060,14 @@ async function fetchWithFallback(
     let id: string | null = null;
     if (primarySource === "comick") {
       id = includePrimarySource ? manhwaId : null;
-    } else if (!isComickBlocked()) {
-      const results = await searchComickAny(title).catch(
-        () => [] as Awaited<ReturnType<typeof searchComickAny>>,
+    } else {
+      // Não pesquisa o Comick durante cada fallback. A busca por título é
+      // feita somente ao assinar a obra; depois disso, o slug salvo é usado
+      // diretamente para evitar várias requisições desnecessárias.
+      logger.debug(
+        { title, primarySource },
+        "Comick não é fallback desta obra — usando somente a fonte cadastrada",
       );
-      const match = results.find(
-        (r) =>
-          typeof r.title === "string" &&
-          typeof r.slug === "string" &&
-          likelySameTitle(r.title, title),
-      );
-      id = match?.slug ?? null;
     }
 
     if (!id) {
