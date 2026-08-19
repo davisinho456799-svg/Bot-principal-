@@ -1,0 +1,36 @@
+name: Deploy to Fly.io
+
+on:
+  push:
+    branches:
+      - bot
+
+jobs:
+  deploy:
+    name: Deploy bot
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Criar app no Fly.io
+        run: flyctl apps create bot-principal-manhwa --org personal || true
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      - name: Configurar variáveis de ambiente no Fly.io
+        run: |
+          flyctl secrets set \
+            DISCORD_BOT_TOKEN="${{ secrets.DISCORD_BOT_TOKEN }}" \
+            DATABASE_URL="${{ secrets.DATABASE_URL }}" \
+            SESSION_SECRET="${{ secrets.SESSION_SECRET }}" \
+            --app bot-principal-manhwa --stage
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      - name: Deploy to Fly.io
+        run: flyctl deploy --remote-only --app bot-principal-manhwa
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

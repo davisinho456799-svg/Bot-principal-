@@ -29,6 +29,17 @@ async function buildAll() {
     // - use path traversal to read files (e.g. @google-cloud/secret-manager loads sibling .proto files)
     external: [
       "*.node",
+      // @discordjs/voice — dependências opcionais de áudio/opus/ffmpeg
+      "@snazzah/davey",
+      "@snazzah/davey-wasm32-wasi",
+      "@napi-rs/wasm-runtime",
+      "@emnapi/core",
+      "@emnapi/runtime",
+      "play-opus",
+      // "opusscript" removido dos externals — precisa ser bundlado (encoder Opus JS puro)
+      "@discordjs/opus",
+      "ffmpeg-static",
+      "sodium-native",
       "sharp",
       "better-sqlite3",
       "sqlite3",

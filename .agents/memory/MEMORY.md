@@ -1,0 +1,8 @@
+- [Railway + pino Dockerfile path](railway-pino-dockerfile.md) — pino embeds absolute build-time path for thread-stream-worker; final image must preserve /app/artifacts/api-server/dist/ structure.
+- [MangaUpdates releases](mangaupdates-api.md) — authenticated series details provide the usable latest-chapter/status data; public RSS is global and must not be treated as per-series.
+- [Notification source fallback](notification-source-fallback.md) — saved sources stay primary; alternatives use title matching and one selected real count.
+- [Discord Render worker](render-discord-worker.md) — Discord workers need DATABASE_URL and must not require PORT; use a long-running worker service.
+- [Discord component interactions](discord-component-interactions.md) — acknowledge button clicks atomically and log collector failures without exposing secrets.
+- [MAL history rollout](mal-history-rollout.md) — keep the initial snapshot plus 10 changes; apply Neon schema before activation and ask before commit/push.
+- [Notification channel schema](notification-channel-schema.md) — extend the legacy channel table additively; Drizzle push may require interactive conflict resolution.
+- [Notification HTTP status logging](notification-http-status-logging.md) — classify source failures through the existing error history without interrupting Render worker fallback.

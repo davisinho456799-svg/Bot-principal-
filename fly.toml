@@ -1,0 +1,15 @@
+# Fly.io config para o bot Discord
+# Região gru = São Paulo (mais próximo do Brasil)
+app = "bot-principal-manhwa"
+primary_region = "gru"
+
+[build]
+  dockerfile = "Dockerfile"
+
+# Sem [http_service] = roda como worker puro (sem porta HTTP)
+# O bot Discord não precisa de porta exposta
+
+[[vm]]
+  memory = "512mb"
+  cpu_kind = "shared"
+  cpus = 1
