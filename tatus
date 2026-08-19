@@ -1,0 +1,22 @@
+*   [33m1be3208[m[33m ([m[1;32mreplit-agent[m[33m)[m Add screenshot to assets
+[31m|[m[32m\[m  
+[31m|[m * [33m167d376[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mbot[m[33m, [m[1;31mgitsafe-backup/main[m[33m)[m Add screenshot to assets
+* [32m|[m [33m789789b[m Update API server implementation and regenerate client schemas
+[32m|[m[32m/[m  
+* [33m9079037[m[33m ([m[1;32mmain[m[33m)[m Update API server implementation and regenerate client schemas
+* [33m8e0fa4b[m Initial commit
+* [33mfab52fd[m[33m ([m[1;31morigin/bot-atualizacao[m[33m)[m Update memory documentation and add notification baseline retry file.
+* [33m310ef9b[m fix: retry failed chapter notifications
+* [33me340823[m Update discord login startup memory file
+* [33m3ff6174[m fix: diagnose Discord gateway startup
+* [33m9d261ef[m fix: simplify missing Discord token logs
+* [33m499ebe4[m fix: keep service alive during Discord login failures
+* [33m1e3bc5a[m fix: prevent Discord login timeout on startup
+* [33m640320f[m fix: fail fast when bot dependencies are unavailable
+* [33m270e5ca[m Update calendar command and refine discord interaction documentation
+* [33m913bd7a[m Update memory documentation and add git attachment reference
+* [33m24ecb6e[m chore: remover imagens enviadas
+* [33m28f5ebb[m Add screenshot asset for documentation
+* [33m44fe727[m Update calendar command logic
+* [33md76b2b3[m Add screenshot of Replit interface
+* [33m4c589c6[m Implement calendar command logic and update bot entry point
