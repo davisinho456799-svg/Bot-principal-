@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build as esbuild } from "esbuild";
 import esbuildPluginPino from "esbuild-plugin-pino";
-import { rm } from "node:fs/promises";
+import { cp, rm } from "node:fs/promises";
 
 // Plugins (e.g. 'esbuild-plugin-pino') may use `require` to resolve dependencies
 globalThis.require = createRequire(import.meta.url);
@@ -129,6 +129,21 @@ globalThis.__dirname = __bannerPath.dirname(globalThis.__filename);
     `,
     },
   });
+
+  // got-scraping bundles header-generator, but header-generator reads these
+  // runtime data files relative to the compiled application directory.
+  // Without copying them, Railway crashes at startup with:
+  // ENOENT .../dist/data_files/headers-order.json
+  const gotScrapingDir = path.dirname(globalThis.require.resolve("got-scraping"));
+  const headerGeneratorEntry = globalThis.require.resolve("header-generator", {
+    paths: [gotScrapingDir],
+  });
+  const headerGeneratorDir = path.dirname(headerGeneratorEntry);
+  await cp(
+    path.join(headerGeneratorDir, "data_files"),
+    path.join(distDir, "data_files"),
+    { recursive: true },
+  );
 }
 
 buildAll().catch((err) => {
