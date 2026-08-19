@@ -1,3 +1,5 @@
+import { fetchComick, parseComickJson } from "./comick-http.js";
+
 const BASE = (process.env.COMICK_API_BASE ?? "https://api.comick.dev").replace(/\/+$/, "");
 const COVER_BASE = "https://meo.comick.pictures";
 
@@ -58,12 +60,6 @@ export function comickStatus(status: number | null): string | null {
 export function comickCountry(country: string | null): string | null {
   return country ? (COUNTRY_MAP[country] ?? null) : null;
 }
-
-const BROWSER_HEADERS = {
-  Accept: "application/json",
-  "User-Agent":
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-};
 
 // ─── Helpers de comparação para recuperação de 404 ───────────────────────────
 
@@ -129,17 +125,16 @@ function scoreCandidate(candidate: ComickResult, originalSlug: string): number {
 async function fetchComicDetail(
   identifier: string,
 ): Promise<ComickResult | null> {
-  const res = await fetch(`${BASE}/comic/${encodeURIComponent(identifier)}`, {
-    headers: BROWSER_HEADERS,
-    signal: AbortSignal.timeout(8000),
-  });
-  if (!res.ok) return null;
+  const response = await fetchComick(
+    `${BASE}/comic/${encodeURIComponent(identifier)}`,
+  );
+  if (response.status < 200 || response.status >= 300) return null;
 
-  const json = (await res.json()) as {
+  const json = parseComickJson<{
     comic?: ComickResult;
     genres?: ComickGenre[];
     md_covers?: ComickCover[];
-  } | ComickResult;
+  } | ComickResult>(response);
 
   // API retorna { comic: {...}, genres: [...], md_covers: [...] } no endpoint de detalhes
   const comic = (json as { comic?: ComickResult }).comic ?? (json as ComickResult);
@@ -160,38 +155,31 @@ async function fetchComicDetail(
 
 export async function searchComick(query: string): Promise<ComickResult[]> {
   const params = new URLSearchParams({ q: query, limit: "8", country: "ko" });
-  const res = await fetch(`${BASE}/v1.0/search?${params}`, {
-    headers: BROWSER_HEADERS,
-    signal: AbortSignal.timeout(8000),
-    redirect: "follow",
-  });
-  if (!res.ok) throw new Error(`Comick search error: ${res.status}`);
-  const json = (await res.json()) as ComickResult[];
+  const response = await fetchComick(`${BASE}/v1.0/search?${params}`);
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(`Comick search error: ${response.status}`);
+  }
+  const json = parseComickJson<ComickResult[]>(response);
   return Array.isArray(json) ? json : [];
 }
 
 export async function searchComickAny(query: string): Promise<ComickResult[]> {
   const params = new URLSearchParams({ q: query, limit: "8" });
-  const res = await fetch(`${BASE}/v1.0/search?${params}`, {
-    headers: BROWSER_HEADERS,
-    signal: AbortSignal.timeout(8000),
-    redirect: "follow",
-  });
-  if (!res.ok) return [];
-  const json = (await res.json()) as ComickResult[];
+  const response = await fetchComick(`${BASE}/v1.0/search?${params}`);
+  if (response.status < 200 || response.status >= 300) return [];
+  const json = parseComickJson<ComickResult[]>(response);
   return Array.isArray(json) ? json : [];
 }
 
 export async function getComickBySlug(slug: string): Promise<ComickResult | null> {
   try {
-    const res = await fetch(`${BASE}/comic/${encodeURIComponent(slug)}`, {
-      headers: BROWSER_HEADERS,
-      signal: AbortSignal.timeout(8000),
-    });
+    const response = await fetchComick(
+      `${BASE}/comic/${encodeURIComponent(slug)}`,
+    );
 
     // Recuperação após 404: o slug pode ter mudado por renomeação da obra.
     // Tenta localizar a obra via busca e confirma o resultado pelo título/slug.
-    if (res.status === 404) {
+    if (response.status === 404) {
       const query = slugToQuery(slug);
       const candidates = await searchComickAny(query);
 
@@ -213,13 +201,13 @@ export async function getComickBySlug(slug: string): Promise<ComickResult | null
       return await fetchComicDetail(bestCandidate.hid ?? bestCandidate.slug);
     }
 
-    if (!res.ok) return null;
+    if (response.status < 200 || response.status >= 300) return null;
 
-    const json = (await res.json()) as {
+    const json = parseComickJson<{
       comic?: ComickResult;
       genres?: ComickGenre[];
       md_covers?: ComickCover[];
-    } | ComickResult;
+    } | ComickResult>(response);
 
     // API retorna { comic: {...}, genres: [...], md_covers: [...] } no endpoint de detalhes
     const comic = (json as { comic?: ComickResult }).comic ?? (json as ComickResult);

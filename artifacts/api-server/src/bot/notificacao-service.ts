@@ -31,19 +31,11 @@ import {
   sameNullableNumber,
   sameNullableText,
 } from "./notificacao-utils.js";
+import { fetchComick, parseComickJson } from "./comick-http.js";
 export type { SourceErrorKind } from "./notificacao-utils.js";
 
 const ANILIST_API = "https://graphql.anilist.co";
 const COMICK_API_BASE = (process.env.COMICK_API_BASE ?? "https://api.comick.dev").replace(/\/+$/, "");
-// O Cloudflare da Comick bloqueia bots com User-Agent customizado (403 challenge).
-// Usar headers idênticos ao navegador para passar pela proteção.
-const COMICK_HEADERS = {
-  Accept: "application/json",
-  "User-Agent":
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-  Referer: "https://comick.io/",
-  Origin: "https://comick.io",
-};
 const CHECK_INTERVAL_MS = 2 * 60 * 60 * 1000; // 2 horas
 // A pausa deve proteger a fonte que impõe limite, não parar a fila inteira por
 // um minuto. O scanner continua sequencial; esta margem evita rajadas no
@@ -176,17 +168,18 @@ function extractComickSlug(url: string): string | null {
 /** Consulta o capítulo mais recente no Comick dado o slug da obra */
 async function fetchComickLatestChapter(slug: string): Promise<number | null> {
   try {
-    const res = await fetch(`${COMICK_API_BASE}/comic/${encodeURIComponent(slug)}`, {
-      headers: COMICK_HEADERS,
-      signal: AbortSignal.timeout(8000),
-    });
+    const res = await fetchComick(
+      `${COMICK_API_BASE}/comic/${encodeURIComponent(slug)}`,
+    );
     // 404 pode indicar slug renomeado; tenta recuperar via busca antes de desistir
     if (res.status === 404) {
       const recovered = await getComickBySlug(slug);
       return recovered?.last_chapter ?? null;
     }
     if (!res.ok) return null;
-    const json = (await res.json()) as { comic?: { last_chapter?: number | null } };
+    const json = parseComickJson<{
+      comic?: { last_chapter?: number | null };
+    }>(res);
     return json.comic?.last_chapter ?? null;
   } catch {
     return null;
@@ -489,10 +482,9 @@ async function fetchChapters(
         logger.debug({ manhwaId }, "Consulta ao Comick ignorada durante cooldown");
         return fetchError("http_429", 429);
       }
-      const res = await fetch(`${COMICK_API_BASE}/comic/${encodeURIComponent(manhwaId)}`, {
-        headers: COMICK_HEADERS,
-        signal: AbortSignal.timeout(8000),
-      });
+      const res = await fetchComick(
+        `${COMICK_API_BASE}/comic/${encodeURIComponent(manhwaId)}`,
+      );
       if (!res.ok) {
         // 404 pode indicar que o slug foi renomeado; tenta recuperar via busca
         // antes de tratar como obra indisponível.
@@ -521,12 +513,13 @@ async function fetchChapters(
         // cooldown acima para não insistir enquanto a proteção está ativa.
         logger.debug({ manhwaId, httpStatus: res.status }, "Comick /comic/{slug} bloqueado — tentando /v1.0/search");
         try {
-          const searchRes = await fetch(
+          const searchRes = await fetchComick(
             `${COMICK_API_BASE}/v1.0/search?${new URLSearchParams({ q: manhwaId, limit: "10" })}`,
-            { headers: COMICK_HEADERS, signal: AbortSignal.timeout(8000) },
           );
           if (searchRes.ok) {
-            const items = (await searchRes.json()) as Array<{ slug?: string; last_chapter?: number | null }>;
+            const items = parseComickJson<
+              Array<{ slug?: string; last_chapter?: number | null }>
+            >(searchRes);
             const match = items.find((item) => item.slug === manhwaId);
             if (match && match.last_chapter != null) {
               logger.debug({ manhwaId, last_chapter: match.last_chapter }, "Comick search fallback bem-sucedido");
