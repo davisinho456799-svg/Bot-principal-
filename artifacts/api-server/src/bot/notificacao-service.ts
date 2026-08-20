@@ -490,17 +490,36 @@ async function fetchChapters(
         // antes de tratar como obra indisponível.
         if (res.status === 404) {
           const recovered = await getComickBySlug(manhwaId);
-          if (!recovered) {
-            recordSourceError(source, manhwaId, "http_404", 404);
-            return fetchError("http_404", 404);
+          if (recovered) {
+            const lastChapter = recovered.last_chapter ?? null;
+            if (lastChapter == null) return fetchError("no_data");
+            const newManhwaId =
+              recovered.slug && recovered.slug !== manhwaId
+                ? recovered.slug
+                : undefined;
+            return { value: lastChapter, isProxy: false, newManhwaId };
           }
-          const lastChapter = recovered.last_chapter ?? null;
-          if (lastChapter == null) return fetchError("no_data");
-          const newManhwaId =
-            recovered.slug && recovered.slug !== manhwaId
-              ? recovered.slug
-              : undefined;
-          return { value: lastChapter, isProxy: false, newManhwaId };
+
+          // Algumas obras aparecem na busca com `last_chapter`, mas o
+          // endpoint de detalhe responde 404. Nesse caso a busca já contém
+          // informação suficiente para o rastreamento.
+          const searchResults = await searchComickAny(
+            manhwaId.replace(/[-_]+/g, " "),
+          ).catch(() => []);
+          const match = searchResults.find((item) =>
+            [item.title, ...(item.md_titles ?? []).map((entry) => entry.title)]
+              .some((name) => name && likelySameTitle(name, manhwaId)),
+          );
+          if (match?.last_chapter != null) {
+            return {
+              value: match.last_chapter,
+              isProxy: false,
+              newManhwaId: match.slug && match.slug !== manhwaId ? match.slug : undefined,
+            };
+          }
+
+          recordSourceError(source, manhwaId, "http_404", 404);
+          return fetchError("http_404", 404);
         }
         if (res.status === 403 || res.status === 429) {
           blockComick(manhwaId, res.status);
