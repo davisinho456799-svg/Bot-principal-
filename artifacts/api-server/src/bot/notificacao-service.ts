@@ -1053,6 +1053,19 @@ async function fetchWithFallback(
     let id: string | null = null;
     if (primarySource === "comick") {
       id = includePrimarySource ? manhwaId : null;
+    } else if (verifyAllSources) {
+      // O diagnóstico administrativo deve validar o Comick mesmo quando a
+      // fonte principal da assinatura é outra. O ciclo automático não faz
+      // esta busca extra, para não transformar cada rodada em uma rajada de
+      // consultas à API protegida.
+      const results = await searchComickAny(title).catch(
+        () => [] as Awaited<ReturnType<typeof searchComickAny>>,
+      );
+      const match = results.find((item) =>
+        [item.title, ...(item.md_titles ?? []).map((entry) => entry.title)]
+          .some((name) => name && likelySameTitle(name, title)),
+      );
+      id = match?.slug ?? match?.hid ?? null;
     } else {
       // Não pesquisa o Comick durante cada fallback. A busca por título é
       // feita somente ao assinar a obra; depois disso, o slug salvo é usado
