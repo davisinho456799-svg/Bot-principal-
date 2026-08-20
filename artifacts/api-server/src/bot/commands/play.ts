@@ -1,5 +1,6 @@
 import { ChatInputCommandInteraction, SlashCommandBuilder } from "discord.js";
 import { getLavalink } from "../lavalink.js";
+import { logger } from "../../lib/logger.js";
 
 export const data = new SlashCommandBuilder()
   .setName("play")
@@ -38,6 +39,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     if (!player.playing && !player.paused) await player.play();
     await interaction.editReply(tracks.length > 1 ? "✅ " + tracks.length + " músicas adicionadas à fila." : "✅ Adicionada: **" + tracks[0].info.title + "**");
   } catch (error) {
+    logger.error({ error, guildId: interaction.guildId, query }, "Erro ao carregar música via Lavalink");
     await interaction.editReply("❌ Não consegui carregar essa música. Verifique a busca e o Lavalink.");
   }
 }
