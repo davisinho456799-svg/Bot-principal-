@@ -533,7 +533,10 @@ async function fetchChapters(
         recordSourceError(source, manhwaId, kind, res.status);
         return fetchError(kind, res.status);
       }
-      const json = (await res.json()) as { comic?: { last_chapter?: number | null }; last_chapter?: number | null };
+      const json = parseComickJson<{
+        comic?: { last_chapter?: number | null };
+        last_chapter?: number | null;
+      }>(res);
       const lastChapter = json.comic?.last_chapter ?? (json as { last_chapter?: number | null }).last_chapter ?? null;
       if (lastChapter == null) return fetchError("no_data");
       // Uma resposta bem-sucedida encerra a sequência de bloqueios.
