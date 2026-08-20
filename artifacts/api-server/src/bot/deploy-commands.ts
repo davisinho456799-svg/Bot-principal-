@@ -29,6 +29,12 @@ import { data as assinarData } from "./commands/assinar.js";
 import { data as assinar18Data } from "./commands/assinar18.js";
 import { data as adminData } from "./commands/admin.js";
 import { data as playData } from "./commands/play.js";
+import { data as lplayData } from "./commands/lplay.js";
+import { data as lpauseData } from "./commands/lpause.js";
+import { data as lresumeData } from "./commands/lresume.js";
+import { data as lskipData } from "./commands/lskip.js";
+import { data as lstopData } from "./commands/lstop.js";
+import { data as lqueueData } from "./commands/lqueue.js";
 import { data as pauseData } from "./commands/pause.js";
 import { data as pularData } from "./commands/pular.js";
 import { data as cancelarData } from "./commands/cancelar.js";
@@ -37,6 +43,12 @@ import { logger } from "../lib/logger.js";
 export async function deployCommands(clientId: string, token: string) {
   const commands = [
     playData.toJSON(),
+    lplayData.toJSON(),
+    lpauseData.toJSON(),
+    lresumeData.toJSON(),
+    lskipData.toJSON(),
+    lstopData.toJSON(),
+    lqueueData.toJSON(),
     pauseData.toJSON(),
     pularData.toJSON(),
     cancelarData.toJSON(),
