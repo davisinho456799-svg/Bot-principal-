@@ -1099,6 +1099,10 @@ async function fetchWithFallback(
       continue;
     }
     const { source, fetched, errorKind, httpStatus } = result.value;
+    // Uma fonte sem ID aplicável à obra não foi consultada. Não a exiba como
+    // falha no diagnóstico: o comando administrativo usa ❌ para tentativas
+    // reais sem dados, e não para fontes deliberadamente ignoradas.
+    if (!fetched && !errorKind && httpStatus == null) continue;
     attempts.push({
       source,
       status: fetched && !fetched.isProxy ? "ok" : "sem_dados",
