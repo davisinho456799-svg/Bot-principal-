@@ -12,7 +12,7 @@ async function startApplication() {
   } catch (err) {
     logger.error(
       { err },
-      "Não foi possível conectar ao PostgreSQL. Configure NEON_DATABASE_URL no Render.",
+      "Não foi possível conectar ao PostgreSQL. No Railway, configure DATABASE_URL ou NEON_DATABASE_URL com a URL do PostgreSQL.",
     );
     process.exitCode = 1;
     return;
