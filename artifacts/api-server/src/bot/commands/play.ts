@@ -26,7 +26,10 @@ export async function execute(interaction: ChatInputCommandInteraction) {
   const query = interaction.options.getString("musica", true).trim();
   try {
     const player = manager.createConnection({ guildId: interaction.guildId, voiceChannel: voiceChannel.id, textChannel: interaction.channelId, deaf: true });
-    const result = await manager.resolve({ query, requester: { id: interaction.user.id, username: interaction.user.username } });
+    const result = await Promise.race([
+      manager.resolve({ query, requester: { id: interaction.user.id, username: interaction.user.username } }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("Lavalink não respondeu em 15 segundos")), 15000)),
+    ]);
     if (!result?.tracks?.length || !["search", "track", "playlist"].includes(result.loadType)) {
       await interaction.editReply("❌ Nenhuma música encontrada para essa busca.");
       return;
