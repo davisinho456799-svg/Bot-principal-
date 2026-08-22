@@ -4,7 +4,8 @@
  * Docs: https://docs.api.jikan.moe/
  */
 
-const BASE = "https://api.jikan.moe/v4";
+const BASE = "https://api.tenrai.org/v1";
+const FALLBACK_BASE = "https://api.jikan.moe/v4";
 
 interface JikanTitle {
   type: string; // "Default" | "Synonym" | "Japanese" | "English" | "Korean"
@@ -144,27 +145,29 @@ function sleep(ms: number): Promise<void> {
 
 async function fetchJikanJson<T>(path: string): Promise<T> {
   let lastError: unknown;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      await throttle();
-      const res = await fetch(`${BASE}${path}`, {
-        headers: { Accept: "application/json" },
-        signal: AbortSignal.timeout(10000),
-      });
-      if (res.ok) return (await res.json()) as T;
-      const retryAfter = Number(res.headers.get("retry-after"));
-      if (!JIKAN_RETRYABLE.has(res.status) || attempt === 2) {
-        throw new Error(`Jikan API error: ${res.status}`);
+  // Tenrai usa dados do MAL e é a fonte principal; Jikan fica como fallback.
+  for (const base of [BASE, FALLBACK_BASE]) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await throttle();
+        const res = await fetch(`${base}${path}`, {
+          headers: { Accept: "application/json" },
+          signal: AbortSignal.timeout(10000),
+        });
+        if (res.ok) return (await res.json()) as T;
+        const retryAfter = Number(res.headers.get("retry-after"));
+        lastError = new Error(`${base} respondeu ${res.status}`);
+        if (!JIKAN_RETRYABLE.has(res.status) || attempt === 2) break;
+        await sleep(Number.isFinite(retryAfter) && retryAfter > 0
+          ? Math.min(retryAfter * 1000, 5000) : 500 * 2 ** attempt);
+      } catch (err) {
+        lastError = err;
+        if (attempt === 2) break;
+        await sleep(500 * 2 ** attempt);
       }
-      await sleep(Number.isFinite(retryAfter) && retryAfter > 0
-        ? Math.min(retryAfter * 1000, 5000) : 500 * 2 ** attempt);
-    } catch (err) {
-      lastError = err;
-      if (attempt === 2) throw err;
-      await sleep(500 * 2 ** attempt);
     }
   }
-  throw lastError instanceof Error ? lastError : new Error("Falha ao consultar o Jikan");
+  throw lastError instanceof Error ? lastError : new Error("Falha ao consultar APIs do MAL");
 }
 
 /**
