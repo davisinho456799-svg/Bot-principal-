@@ -359,13 +359,7 @@ export async function searchJikanAnimeAny(query: string): Promise<JikanAnimeResu
  */
 export async function getJikanAnimeById(malId: number): Promise<JikanAnimeResult | null> {
   try {
-    await throttle();
-    const res = await fetch(`${BASE}/anime/${malId}`, {
-      headers: { Accept: "application/json" },
-      signal: AbortSignal.timeout(8000),
-    });
-    if (!res.ok) return null;
-    const json = (await res.json()) as { data: JikanAnime | null };
+    const json = await fetchJikanJson<{ data: JikanAnime | null }>(`/anime/${malId}`);
     if (!json.data?.mal_id) return null;
     return toJikanAnimeResult(json.data);
   } catch {
