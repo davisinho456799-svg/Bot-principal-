@@ -127,12 +127,44 @@ function toJikanResult(manga: JikanManga): JikanResult {
   };
 }
 
-// Rate limit simples: mínimo 350ms entre chamadas ao Jikan
+// O MAL/Jikan aplica rate limit e pode responder 429 durante buscas paralelas.
 let lastJikanCall = 0;
 async function throttle(): Promise<void> {
   const wait = 350 - (Date.now() - lastJikanCall);
   if (wait > 0) await new Promise((r) => setTimeout(r, wait));
   lastJikanCall = Date.now();
+}
+
+const JIKAN_RETRYABLE = new Set([408, 425, 429, 500, 502, 503, 504]);
+const jikanAnimeCache = new Map<string, { expiresAt: number; results: JikanAnimeResult[] }>();
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchJikanJson<T>(path: string): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await throttle();
+      const res = await fetch(`${BASE}${path}`, {
+        headers: { Accept: "application/json" },
+        signal: AbortSignal.timeout(10000),
+      });
+      if (res.ok) return (await res.json()) as T;
+      const retryAfter = Number(res.headers.get("retry-after"));
+      if (!JIKAN_RETRYABLE.has(res.status) || attempt === 2) {
+        throw new Error(`Jikan API error: ${res.status}`);
+      }
+      await sleep(Number.isFinite(retryAfter) && retryAfter > 0
+        ? Math.min(retryAfter * 1000, 5000) : 500 * 2 ** attempt);
+    } catch (err) {
+      lastError = err;
+      if (attempt === 2) throw err;
+      await sleep(500 * 2 ** attempt);
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("Falha ao consultar o Jikan");
 }
 
 /**
@@ -299,20 +331,16 @@ export async function searchJikanAnime(
   query: string,
   type?: "tv" | "movie" | "ova" | "ona" | "special"
 ): Promise<JikanAnimeResult[]> {
-  await throttle();
+  const cacheKey = `${query.trim().toLowerCase()}|${type ?? "all"}`;
+  const cached = jikanAnimeCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.results;
 
-  const params = new URLSearchParams({ q: query, limit: "10", order_by: "relevance" });
+  const params = new URLSearchParams({ q: query.trim(), limit: "25", order_by: "relevance" });
   if (type) params.set("type", type);
-
-  const res = await fetch(`${BASE}/anime?${params}`, {
-    headers: { Accept: "application/json" },
-    signal: AbortSignal.timeout(8000),
-  });
-
-  if (!res.ok) throw new Error(`Jikan anime error: ${res.status}`);
-
-  const json = (await res.json()) as JikanAnimeSearchResponse;
-  return (json.data ?? []).map(toJikanAnimeResult);
+  const json = await fetchJikanJson<JikanAnimeSearchResponse>(`/anime?${params}`);
+  const results = (json.data ?? []).map(toJikanAnimeResult);
+  jikanAnimeCache.set(cacheKey, { expiresAt: Date.now() + 60_000, results });
+  return results;
 }
 
 /**
