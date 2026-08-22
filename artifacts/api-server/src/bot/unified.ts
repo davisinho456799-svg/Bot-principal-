@@ -651,7 +651,8 @@ function partialQueries(query: string): string[] {
 // ─── Otimização 1: Timeout individual por fonte ────────────────────────────────
 
 /** Tempo máximo que qualquer fonte externa pode demorar antes de ser descartada. */
-const SOURCE_TIMEOUT_MS = 3500;
+// Tenrai/Jikan podem precisar de retry; não cortar a fonte em 3,5s.
+const SOURCE_TIMEOUT_MS = 15000;
 
 /**
  * Corre a promise contra um timer. Se o timer vencer, retorna `fallback` silenciosamente.
