@@ -37,6 +37,7 @@ import * as mangaCommand from "./commands/manga.js";
 import * as calendarioCommand from "./commands/calendario.js";
 import * as calendario18Command from "./commands/calendario18.js";
 import * as temporadaCommand from "./commands/temporada.js";
+import { configurarCommand, atualizarCommand, statusCommand } from "./season-management.js";
 import * as statusCommand from "./commands/status.js";
 import * as historicoCommand from "./commands/historico.js";
 import * as verificarCommand from "./commands/verificar.js";
@@ -88,6 +89,9 @@ const commands = new Map<string, Command>([
   [calendarioCommand.data.name, calendarioCommand],
   [calendario18Command.data.name, calendario18Command],
   [temporadaCommand.data.name, temporadaCommand],
+  [configurarCommand.data.name, configurarCommand],
+  [atualizarCommand.data.name, atualizarCommand],
+  [statusCommand.data.name, statusCommand],
   [statusCommand.data.name, statusCommand],
   [historicoCommand.data.name, historicoCommand],
   [verificarCommand.data.name, verificarCommand],
