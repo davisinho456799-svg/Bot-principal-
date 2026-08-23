@@ -22,10 +22,11 @@ export const statusData = new SlashCommandBuilder()
 export const configurarCommand = {
   data: configurarData,
   async execute(interaction: ChatInputCommandInteraction) {
+    await interaction.deferReply({ ephemeral: true });
     const channel = interaction.options.getChannel("canal", true);
     const current = await config();
     await db.update(botConfigTable).set({ guildId: interaction.guildId, channelId: channel.id, enabled: true }).where(eq(botConfigTable.id, current.id));
-    await interaction.reply({ content: "A lista será atualizada em <#" + channel.id + ">. Sincronizando a primeira versão agora.", ephemeral: true });
+    await interaction.editReply("A lista será atualizada em <#" + channel.id + ">. Sincronizando a primeira versão agora.");
     await syncConfiguredChannel();
   },
 };
@@ -42,7 +43,8 @@ export const atualizarCommand = {
 export const statusCommand = {
   data: statusData,
   async execute(interaction: ChatInputCommandInteraction) {
+    await interaction.deferReply({ ephemeral: true });
     const current = await config();
-    await interaction.reply({ content: current.channelId ? "Lista ativa em <#" + current.channelId + ">. Próxima atualização conforme o intervalo configurado (" + current.intervalMinutes + " min)." : "Nenhum canal foi configurado. Use /temporada-configurar e escolha um canal.", ephemeral: true });
+    await interaction.editReply(current.channelId ? "Lista ativa em <#" + current.channelId + ">. Próxima atualização conforme o intervalo configurado (" + current.intervalMinutes + " min)." : "Nenhum canal foi configurado. Use /temporada-configurar e escolha um canal.");
   },
 };
