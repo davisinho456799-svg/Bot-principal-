@@ -31,6 +31,7 @@ import {
 import { cleanDescription, translateToPtBr, statusLabel, searchAnime } from "../anilist.js";
 import { searchKitsu } from "../kitsu.js";
 import { searchAniSearch } from "../anisearch.js";
+import { searchJikanAnimeAny } from "../jikan.js";
 import { logger } from "../../lib/logger.js";
 
 export const data = new SlashCommandBuilder()
@@ -70,10 +71,11 @@ export async function autocomplete(interaction: AutocompleteInteraction): Promis
   }
 
   try {
-    const [anilistResults, kitsuResults, anisearchResults] = await Promise.allSettled([
+    const [anilistResults, kitsuResults, anisearchResults, malResults] = await Promise.allSettled([
       searchAnime(focused),
       searchKitsu(focused),
       searchAniSearch(focused),
+      searchJikanAnimeAny(focused),
     ]);
 
     const seen = new Set<string>();
@@ -98,6 +100,17 @@ export async function autocomplete(interaction: AutocompleteInteraction): Promis
         }
       }
     }
+    // MAL/Tenrai: value = "jikan:<malId>"
+    if (malResults.status === "fulfilled") {
+      for (const r of malResults.value) {
+        const t = r.mainTitle;
+        if (t && !seen.has(t.toLowerCase())) {
+          seen.add(t.toLowerCase());
+          options.push({ name: t.slice(0, 100), value: `jikan:${r.malId}` });
+        }
+      }
+    }
+
     // AniSearch: value = "anisearch:<id>"
     if (anisearchResults.status === "fulfilled") {
       for (const r of anisearchResults.value) {
