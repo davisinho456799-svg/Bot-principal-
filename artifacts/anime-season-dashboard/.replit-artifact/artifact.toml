@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "Anime Season Board"
+description = "Painel para configurar um bot do Discord que publica e mantém atualizada uma tabela com animes e mangás da temporada atual, incluindo títulos recém-anunciados."
+version = "1.0.0"
+id = "artifacts/anime-season-dashboard"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 25024
+
+[services.development]
+run = "pnpm --filter @workspace/anime-season-dashboard run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/anime-season-dashboard", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/anime-season-dashboard/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "25024"
+BASE_PATH = "/"

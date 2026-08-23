@@ -18,419 +18,131 @@ export const HealthCheckResponse = zod.object({
 
 
 /**
- * @summary Search manga using the primary chapter aggregator
+ * @summary Get current anime and manga season
  */
-export const searchMangaAggregateQueryQueryMin = 2;
-
-
-
-export const SearchMangaAggregateQueryParams = zod.object({
-  "query": zod.coerce.string().min(searchMangaAggregateQueryQueryMin)
-})
-
-export const SearchMangaAggregateResponse = zod.object({
-  "query": zod.string(),
-  "primarySource": zod.enum(['comick']),
-  "results": zod.array(zod.object({
-  "source": zod.enum(['comick', 'mangaupdates', 'mangadex', 'jikan', 'anilist']),
-  "id": zod.string(),
-  "title": zod.string(),
-  "alternativeTitles": zod.array(zod.string()),
-  "description": zod.string().nullable(),
-  "coverUrl": zod.string().nullable(),
-  "score": zod.number().nullable(),
-  "genres": zod.array(zod.string()),
-  "status": zod.string().nullable(),
-  "chapters": zod.number().nullable(),
-  "year": zod.number().nullable(),
-  "country": zod.string().nullable(),
-  "url": zod.string()
-})),
-  "sources": zod.array(zod.object({
-  "source": zod.enum(['comick', 'mangaupdates', 'mangadex', 'jikan', 'anilist']),
-  "status": zod.enum(['ok', 'empty', 'error']),
-  "count": zod.number(),
-  "error": zod.string().optional()
-}))
-})
-
-
-/**
- * @summary List chapters from Comick
- */
-export const listComickChaptersQueryLanguageDefault = `en`;
-export const listComickChaptersQueryLimitDefault = 100;
-export const listComickChaptersQueryLimitMax = 500;
-
-
-
-export const ListComickChaptersQueryParams = zod.object({
-  "slug": zod.coerce.string(),
-  "language": zod.coerce.string().default(listComickChaptersQueryLanguageDefault),
-  "limit": zod.coerce.number().min(1).max(listComickChaptersQueryLimitMax).default(listComickChaptersQueryLimitDefault)
-})
-
-export const ListComickChaptersResponse = zod.object({
-  "source": zod.enum(['comick', 'mangadex']),
-  "mangaId": zod.string(),
-  "chapters": zod.array(zod.object({
-  "id": zod.string(),
-  "chapter": zod.string(),
-  "volume": zod.string().nullable(),
-  "title": zod.string().nullable(),
-  "language": zod.string().nullable(),
-  "publishedAt": zod.string().nullable(),
-  "url": zod.string().nullable(),
-  "group": zod.string().nullable(),
-  "source": zod.enum(['comick', 'mangadex'])
-}))
-})
-
-
-/**
- * @summary List chapters using Comick first and MangaDex as fallback
- */
-export const listMangaChaptersQueryLanguageDefault = `en`;
-export const listMangaChaptersQueryLimitDefault = 100;
-export const listMangaChaptersQueryLimitMax = 500;
-
-
-
-export const ListMangaChaptersQueryParams = zod.object({
-  "comickSlug": zod.coerce.string().optional(),
-  "mangadexId": zod.coerce.string().optional(),
-  "language": zod.coerce.string().default(listMangaChaptersQueryLanguageDefault),
-  "limit": zod.coerce.number().min(1).max(listMangaChaptersQueryLimitMax).default(listMangaChaptersQueryLimitDefault)
-})
-
-export const ListMangaChaptersResponse = zod.object({
-  "source": zod.enum(['comick', 'mangadex']),
-  "mangaId": zod.string(),
-  "chapters": zod.array(zod.object({
-  "id": zod.string(),
-  "chapter": zod.string(),
-  "volume": zod.string().nullable(),
-  "title": zod.string().nullable(),
-  "language": zod.string().nullable(),
-  "publishedAt": zod.string().nullable(),
-  "url": zod.string().nullable(),
-  "group": zod.string().nullable(),
-  "source": zod.enum(['comick', 'mangadex'])
-}))
-})
-
-
-/**
- * @summary List fallback chapters from MangaDex
- */
-export const listMangaDexChaptersQueryLanguageDefault = `en`;
-export const listMangaDexChaptersQueryLimitDefault = 100;
-export const listMangaDexChaptersQueryLimitMax = 500;
-
-
-
-export const ListMangaDexChaptersQueryParams = zod.object({
-  "id": zod.coerce.string(),
-  "language": zod.coerce.string().default(listMangaDexChaptersQueryLanguageDefault),
-  "limit": zod.coerce.number().min(1).max(listMangaDexChaptersQueryLimitMax).default(listMangaDexChaptersQueryLimitDefault)
-})
-
-export const ListMangaDexChaptersResponse = zod.object({
-  "source": zod.enum(['comick', 'mangadex']),
-  "mangaId": zod.string(),
-  "chapters": zod.array(zod.object({
-  "id": zod.string(),
-  "chapter": zod.string(),
-  "volume": zod.string().nullable(),
-  "title": zod.string().nullable(),
-  "language": zod.string().nullable(),
-  "publishedAt": zod.string().nullable(),
-  "url": zod.string().nullable(),
-  "group": zod.string().nullable(),
-  "source": zod.enum(['comick', 'mangadex'])
-}))
-})
-
-
-/**
- * @summary Search MangaUpdates metadata
- */
-export const searchMangaUpdatesQueryQueryMin = 2;
-
-
-
-export const SearchMangaUpdatesQueryParams = zod.object({
-  "query": zod.coerce.string().min(searchMangaUpdatesQueryQueryMin)
-})
-
-export const SearchMangaUpdatesResponse = zod.object({
-  "source": zod.enum(['mangaupdates']),
-  "results": zod.array(zod.object({
-  "source": zod.enum(['comick', 'mangaupdates', 'mangadex', 'jikan', 'anilist']),
-  "id": zod.string(),
-  "title": zod.string(),
-  "alternativeTitles": zod.array(zod.string()),
-  "description": zod.string().nullable(),
-  "coverUrl": zod.string().nullable(),
-  "score": zod.number().nullable(),
-  "genres": zod.array(zod.string()),
-  "status": zod.string().nullable(),
-  "chapters": zod.number().nullable(),
-  "year": zod.number().nullable(),
-  "country": zod.string().nullable(),
-  "url": zod.string()
-}).and(zod.object({
-  "sourceRole": zod.enum(['metadata-and-releases']),
-  "latestChapter": zod.number().nullable(),
-  "statusText": zod.string().nullable(),
-  "groups": zod.array(zod.object({
-  "id": zod.string().nullable(),
-  "name": zod.string(),
-  "url": zod.string().nullable()
-})),
-  "lastUpdated": zod.string().nullable()
-})))
-})
-
-
-/**
- * @summary Get MangaUpdates series metadata
- */
-export const GetMangaUpdatesSeriesQueryParams = zod.object({
-  "id": zod.coerce.string()
-})
-
-export const GetMangaUpdatesSeriesResponse = zod.object({
-  "source": zod.enum(['comick', 'mangaupdates', 'mangadex', 'jikan', 'anilist']),
-  "id": zod.string(),
-  "title": zod.string(),
-  "alternativeTitles": zod.array(zod.string()),
-  "description": zod.string().nullable(),
-  "coverUrl": zod.string().nullable(),
-  "score": zod.number().nullable(),
-  "genres": zod.array(zod.string()),
-  "status": zod.string().nullable(),
-  "chapters": zod.number().nullable(),
-  "year": zod.number().nullable(),
-  "country": zod.string().nullable(),
-  "url": zod.string()
-}).and(zod.object({
-  "sourceRole": zod.enum(['metadata-and-releases']),
-  "latestChapter": zod.number().nullable(),
-  "statusText": zod.string().nullable(),
-  "groups": zod.array(zod.object({
-  "id": zod.string().nullable(),
-  "name": zod.string(),
-  "url": zod.string().nullable()
-})),
-  "lastUpdated": zod.string().nullable()
-}))
-
-
-/**
- * @summary Search MangaUpdates releases
- */
-export const searchMangaUpdatesReleasesQueryQueryMin = 2;
-
-export const searchMangaUpdatesReleasesQueryLimitDefault = 20;
-export const searchMangaUpdatesReleasesQueryLimitMax = 100;
-
-
-
-export const SearchMangaUpdatesReleasesQueryParams = zod.object({
-  "query": zod.coerce.string().min(searchMangaUpdatesReleasesQueryQueryMin),
-  "limit": zod.coerce.number().min(1).max(searchMangaUpdatesReleasesQueryLimitMax).default(searchMangaUpdatesReleasesQueryLimitDefault)
-})
-
-export const SearchMangaUpdatesReleasesResponse = zod.object({
-  "source": zod.enum(['mangaupdates']),
-  "query": zod.string(),
-  "releases": zod.array(zod.object({
-  "id": zod.string(),
-  "title": zod.string(),
-  "volume": zod.string().nullable(),
-  "chapter": zod.string(),
-  "groups": zod.array(zod.object({
-  "id": zod.string().nullable(),
-  "name": zod.string(),
-  "url": zod.string().nullable()
-})),
-  "releaseDate": zod.string().nullable(),
-  "addedAt": zod.string().nullable(),
-  "url": zod.string()
-}))
-})
-
-
-/**
- * @summary Get MangaUpdates tracking snapshot
- */
-export const GetMangaUpdatesTrackingQueryParams = zod.object({
-  "id": zod.coerce.string()
-})
-
-export const GetMangaUpdatesTrackingResponse = zod.object({
-  "source": zod.enum(['mangaupdates']),
-  "seriesId": zod.string(),
-  "title": zod.string(),
-  "latestChapter": zod.number().nullable(),
-  "status": zod.string().nullable(),
-  "statusText": zod.string().nullable(),
-  "lastUpdated": zod.string().nullable(),
-  "checkedAt": zod.string(),
-  "chaptersAreOfficialSource": zod.literal(false)
-})
-
-
-/**
- * Returns all active MAL subscriptions, optionally filtered by guild
- * @summary List all subscriptions
- */
-export const ListSubscriptionsQueryParams = zod.object({
-  "guild_id": zod.coerce.string().optional().describe('Filter by Discord guild ID')
-})
-
-export const ListSubscriptionsResponseItem = zod.object({
+export const GetCurrentSeasonResponse = zod.object({
+  "season": zod.string(),
+  "year": zod.number(),
+  "anime": zod.array(zod.object({
   "id": zod.number(),
-  "discord_user_id": zod.string(),
-  "discord_channel_id": zod.string(),
-  "discord_guild_id": zod.string(),
-  "mal_item_id": zod.number(),
-  "mal_item_type": zod.enum(['manga', 'anime']),
-  "item_name": zod.string(),
-  "created_at": zod.coerce.date()
-})
-export const ListSubscriptionsResponse = zod.array(ListSubscriptionsResponseItem)
-
-
-/**
- * Subscribes a Discord user to receive notifications for a MAL manga/anime
- * @summary Subscribe to a MAL item
- */
-export const CreateSubscriptionBody = zod.object({
-  "discord_user_id": zod.string(),
-  "discord_channel_id": zod.string(),
-  "discord_guild_id": zod.string(),
-  "mal_item_id": zod.number(),
-  "mal_item_type": zod.enum(['manga', 'anime']),
-  "item_name": zod.string()
-})
-
-export const CreateSubscriptionResponse = zod.object({
+  "title": zod.string(),
+  "kind": zod.enum(['anime', 'manga']),
+  "status": zod.enum(['airing', 'upcoming', 'publishing']),
+  "imageUrl": zod.string(),
+  "url": zod.string(),
+  "score": zod.number().nullish(),
+  "episodes": zod.number().nullish(),
+  "volumes": zod.number().nullish(),
+  "synopsis": zod.string().nullish(),
+  "genres": zod.array(zod.string()).optional()
+})),
+  "manga": zod.array(zod.object({
   "id": zod.number(),
-  "discord_user_id": zod.string(),
-  "discord_channel_id": zod.string(),
-  "discord_guild_id": zod.string(),
-  "mal_item_id": zod.number(),
-  "mal_item_type": zod.enum(['manga', 'anime']),
-  "item_name": zod.string(),
-  "created_at": zod.coerce.date()
+  "title": zod.string(),
+  "kind": zod.enum(['anime', 'manga']),
+  "status": zod.enum(['airing', 'upcoming', 'publishing']),
+  "imageUrl": zod.string(),
+  "url": zod.string(),
+  "score": zod.number().nullish(),
+  "episodes": zod.number().nullish(),
+  "volumes": zod.number().nullish(),
+  "synopsis": zod.string().nullish(),
+  "genres": zod.array(zod.string()).optional()
+})),
+  "updatedAt": zod.coerce.date()
 })
 
 
 /**
- * Removes a subscription by ID
- * @summary Remove a subscription
+ * @summary List servers available to the bot
  */
-export const DeleteSubscriptionParams = zod.object({
-  "id": zod.coerce.number()
+export const ListDiscordGuildsResponseItem = zod.object({
+  "id": zod.string(),
+  "name": zod.string(),
+  "iconUrl": zod.string().nullish()
 })
-
-export const DeleteSubscriptionResponse = zod.void()
+export const ListDiscordGuildsResponse = zod.array(ListDiscordGuildsResponseItem)
 
 
 /**
- * Fetches the latest data from MAL for this subscription, stores a snapshot (synopsis, score, status, chapters), and returns whether chapters changed. Keeps only the 2 most recent snapshots — oldest is deleted automatically. Only returns changed=true when the chapter count increases.
- * @summary Check for updates on a subscription
+ * @summary List text channels in a server
  */
-export const CheckSubscriptionParams = zod.object({
-  "id": zod.coerce.number()
+export const ListDiscordChannelsParams = zod.object({
+  "guildId": zod.coerce.string()
 })
 
-export const CheckSubscriptionResponse = zod.object({
-  "changed": zod.boolean().describe('True only when chapter\/episode count increased'),
-  "subscription_id": zod.number(),
-  "item_name": zod.string(),
-  "mal_item_id": zod.number(),
-  "mal_item_type": zod.string(),
-  "current": zod.object({
-  "synopsis": zod.string().nullable(),
-  "score": zod.number().nullable(),
-  "status": zod.string().nullable(),
-  "chapters": zod.number().nullable(),
-  "checked_at": zod.coerce.date()
-}),
-  "previous": zod.union([zod.object({
-  "synopsis": zod.string().nullable(),
-  "score": zod.number().nullable(),
-  "status": zod.string().nullable(),
-  "chapters": zod.number().nullable(),
-  "checked_at": zod.coerce.date()
-}),zod.null()]).optional()
+export const ListDiscordChannelsResponseItem = zod.object({
+  "id": zod.string(),
+  "name": zod.string(),
+  "type": zod.string()
+})
+export const ListDiscordChannelsResponse = zod.array(ListDiscordChannelsResponseItem)
+
+
+/**
+ * @summary Get saved bot configuration
+ */
+export const GetDiscordConfigResponse = zod.object({
+  "guildId": zod.string().nullable(),
+  "channelId": zod.string().nullable(),
+  "intervalMinutes": zod.number(),
+  "includeAnime": zod.boolean(),
+  "includeManga": zod.boolean(),
+  "enabled": zod.boolean(),
+  "lastSyncedAt": zod.coerce.date().nullish(),
+  "messageId": zod.string().nullish()
 })
 
 
 /**
- * Returns recent errors, optionally filtered by Discord guild.
- * @summary List bot errors
+ * @summary Save bot channel and update settings
  */
-export const listErrorLogsQueryLimitDefault = 25;
-export const listErrorLogsQueryLimitMax = 100;
+
+
+export const saveDiscordConfigBodyIntervalMinutesMin = 15;
+export const saveDiscordConfigBodyIntervalMinutesMax = 10080;
 
 
 
-export const ListErrorLogsQueryParams = zod.object({
-  "guild_id": zod.coerce.string().optional(),
-  "limit": zod.coerce.number().min(1).max(listErrorLogsQueryLimitMax).default(listErrorLogsQueryLimitDefault)
+export const SaveDiscordConfigBody = zod.object({
+  "guildId": zod.string().min(1),
+  "channelId": zod.string().min(1),
+  "intervalMinutes": zod.number().min(saveDiscordConfigBodyIntervalMinutesMin).max(saveDiscordConfigBodyIntervalMinutesMax),
+  "includeAnime": zod.boolean(),
+  "includeManga": zod.boolean(),
+  "enabled": zod.boolean()
 })
 
-export const ListErrorLogsResponseItem = zod.object({
-  "id": zod.number(),
-  "discord_guild_id": zod.string().nullish(),
-  "discord_user_id": zod.string().nullish(),
-  "command": zod.string().nullish(),
-  "route": zod.string().nullish(),
-  "error_code": zod.string(),
+export const SaveDiscordConfigResponse = zod.object({
+  "guildId": zod.string().nullable(),
+  "channelId": zod.string().nullable(),
+  "intervalMinutes": zod.number(),
+  "includeAnime": zod.boolean(),
+  "includeManga": zod.boolean(),
+  "enabled": zod.boolean(),
+  "lastSyncedAt": zod.coerce.date().nullish(),
+  "messageId": zod.string().nullish()
+})
+
+
+/**
+ * @summary Sync the current catalog to Discord now
+ */
+export const SyncDiscordTableResponse = zod.object({
+  "success": zod.boolean(),
   "message": zod.string(),
-  "http_status": zod.number().nullish(),
-  "context": zod.record(zod.string(), zod.unknown()).nullish(),
-  "created_at": zod.coerce.date()
+  "updatedAt": zod.coerce.date()
 })
-export const ListErrorLogsResponse = zod.array(ListErrorLogsResponseItem)
 
 
 /**
- * Stores an error reported by the Discord bot in Neon for later inspection.
- * @summary Record a bot error
+ * @summary Get bot synchronization status
  */
-export const createErrorLogBodyErrorCodeMax = 100;
-
-export const createErrorLogBodyMessageMax = 2000;
-
-
-
-export const CreateErrorLogBody = zod.object({
-  "discord_guild_id": zod.string().optional(),
-  "discord_user_id": zod.string().optional(),
-  "command": zod.string().optional(),
-  "route": zod.string().optional(),
-  "error_code": zod.string().min(1).max(createErrorLogBodyErrorCodeMax),
-  "message": zod.string().min(1).max(createErrorLogBodyMessageMax),
-  "http_status": zod.number().optional(),
-  "context": zod.record(zod.string(), zod.unknown()).optional()
-})
-
-export const CreateErrorLogResponse = zod.object({
-  "id": zod.number(),
-  "discord_guild_id": zod.string().nullish(),
-  "discord_user_id": zod.string().nullish(),
-  "command": zod.string().nullish(),
-  "route": zod.string().nullish(),
-  "error_code": zod.string(),
-  "message": zod.string(),
-  "http_status": zod.number().nullish(),
-  "context": zod.record(zod.string(), zod.unknown()).nullish(),
-  "created_at": zod.coerce.date()
+export const GetDiscordStatusResponse = zod.object({
+  "configured": zod.boolean(),
+  "connected": zod.boolean(),
+  "enabled": zod.boolean(),
+  "lastSyncedAt": zod.coerce.date().nullable()
 })
 
 

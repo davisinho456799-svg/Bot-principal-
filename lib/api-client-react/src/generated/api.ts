@@ -20,29 +20,14 @@ import type {
 } from '@tanstack/react-query';
 
 import type {
-  ChapterList,
-  CheckResult,
-  ErrorLog,
-  ErrorLogInput,
-  ErrorResponse,
-  GetMangaUpdatesSeriesParams,
-  GetMangaUpdatesTrackingParams,
+  DiscordChannel,
+  DiscordConfig,
+  DiscordConfigInput,
+  DiscordGuild,
+  DiscordStatus,
   HealthStatus,
-  ListComickChaptersParams,
-  ListErrorLogsParams,
-  ListMangaChaptersParams,
-  ListMangaDexChaptersParams,
-  ListSubscriptionsParams,
-  MangaAggregate,
-  MangaUpdatesReleaseResponse,
-  MangaUpdatesSearchResponse,
-  MangaUpdatesSeries,
-  MangaUpdatesTrackingSnapshot,
-  SearchMangaAggregateParams,
-  SearchMangaUpdatesParams,
-  SearchMangaUpdatesReleasesParams,
-  Subscription,
-  SubscriptionInput
+  SeasonCatalog,
+  SyncResult
 } from './api.schemas';
 
 import { customFetch } from '../custom-fetch';
@@ -150,27 +135,20 @@ export function useHealthCheck<TData = Awaited<ReturnType<typeof healthCheck>>, 
 
 
 
-export const getSearchMangaAggregateUrl = (params: SearchMangaAggregateParams,) => {
-  const normalizedParams = new URLSearchParams();
+export const getGetCurrentSeasonUrl = () => {
 
-  Object.entries(params || {}).forEach(([key, value]) => {
 
-    if (value !== undefined) {
-      normalizedParams.append(key, value === null ? 'null' : String(value))
-    }
-  });
 
-  const stringifiedParams = normalizedParams.toString();
 
-  return stringifiedParams.length > 0 ? `/api/manga/aggregate?${stringifiedParams}` : `/api/manga/aggregate`
+  return `/api/season/current`
 }
 
 /**
- * @summary Search manga using the primary chapter aggregator
+ * @summary Get current anime and manga season
  */
-export const searchMangaAggregate = async (params: SearchMangaAggregateParams, options?: Parameters<typeof customFetch>[1]): Promise<MangaAggregate> => {
+export const getCurrentSeason = async ( options?: Parameters<typeof customFetch>[1]): Promise<SeasonCatalog> => {
 
-  return customFetch<MangaAggregate>(getSearchMangaAggregateUrl(params),
+  return customFetch<SeasonCatalog>(getGetCurrentSeasonUrl(),
   {
     ...options,
     method: 'GET'
@@ -183,45 +161,45 @@ export const searchMangaAggregate = async (params: SearchMangaAggregateParams, o
 
 
 
-export const getSearchMangaAggregateQueryKey = (params?: SearchMangaAggregateParams,) => {
+export const getGetCurrentSeasonQueryKey = () => {
     return [
-    `/api/manga/aggregate`, ...(params ? [params] : [])
+    `/api/season/current`
     ] as const;
     }
 
 
-export const getSearchMangaAggregateQueryOptions = <TData = Awaited<ReturnType<typeof searchMangaAggregate>>, TError = ErrorType<void>>(params: SearchMangaAggregateParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof searchMangaAggregate>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+export const getGetCurrentSeasonQueryOptions = <TData = Awaited<ReturnType<typeof getCurrentSeason>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getCurrentSeason>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 ) => {
 
 const {query: queryOptions, request: requestOptions} = options ?? {};
 
-  const queryKey =  queryOptions?.queryKey ?? getSearchMangaAggregateQueryKey(params);
+  const queryKey =  queryOptions?.queryKey ?? getGetCurrentSeasonQueryKey();
 
 
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof searchMangaAggregate>>> = ({ signal }) => searchMangaAggregate(params, { signal, ...requestOptions });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getCurrentSeason>>> = ({ signal }) => getCurrentSeason({ signal, ...requestOptions });
 
 
 
 
 
-   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof searchMangaAggregate>>, TError, TData> & { queryKey: QueryKey }
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getCurrentSeason>>, TError, TData> & { queryKey: QueryKey }
 }
 
-export type SearchMangaAggregateQueryResult = NonNullable<Awaited<ReturnType<typeof searchMangaAggregate>>>
-export type SearchMangaAggregateQueryError = ErrorType<void>
+export type GetCurrentSeasonQueryResult = NonNullable<Awaited<ReturnType<typeof getCurrentSeason>>>
+export type GetCurrentSeasonQueryError = ErrorType<unknown>
 
 
 /**
- * @summary Search manga using the primary chapter aggregator
+ * @summary Get current anime and manga season
  */
 
-export function useSearchMangaAggregate<TData = Awaited<ReturnType<typeof searchMangaAggregate>>, TError = ErrorType<void>>(
- params: SearchMangaAggregateParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof searchMangaAggregate>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+export function useGetCurrentSeason<TData = Awaited<ReturnType<typeof getCurrentSeason>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getCurrentSeason>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
 
-  const queryOptions = getSearchMangaAggregateQueryOptions(params,options)
+  const queryOptions = getGetCurrentSeasonQueryOptions(options)
 
   const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
 
@@ -234,27 +212,20 @@ export function useSearchMangaAggregate<TData = Awaited<ReturnType<typeof search
 
 
 
-export const getListComickChaptersUrl = (params: ListComickChaptersParams,) => {
-  const normalizedParams = new URLSearchParams();
+export const getListDiscordGuildsUrl = () => {
 
-  Object.entries(params || {}).forEach(([key, value]) => {
 
-    if (value !== undefined) {
-      normalizedParams.append(key, value === null ? 'null' : String(value))
-    }
-  });
 
-  const stringifiedParams = normalizedParams.toString();
 
-  return stringifiedParams.length > 0 ? `/api/manga/comick/chapters?${stringifiedParams}` : `/api/manga/comick/chapters`
+  return `/api/discord/guilds`
 }
 
 /**
- * @summary List chapters from Comick
+ * @summary List servers available to the bot
  */
-export const listComickChapters = async (params: ListComickChaptersParams, options?: Parameters<typeof customFetch>[1]): Promise<ChapterList> => {
+export const listDiscordGuilds = async ( options?: Parameters<typeof customFetch>[1]): Promise<DiscordGuild[]> => {
 
-  return customFetch<ChapterList>(getListComickChaptersUrl(params),
+  return customFetch<DiscordGuild[]>(getListDiscordGuildsUrl(),
   {
     ...options,
     method: 'GET'
@@ -267,45 +238,45 @@ export const listComickChapters = async (params: ListComickChaptersParams, optio
 
 
 
-export const getListComickChaptersQueryKey = (params?: ListComickChaptersParams,) => {
+export const getListDiscordGuildsQueryKey = () => {
     return [
-    `/api/manga/comick/chapters`, ...(params ? [params] : [])
+    `/api/discord/guilds`
     ] as const;
     }
 
 
-export const getListComickChaptersQueryOptions = <TData = Awaited<ReturnType<typeof listComickChapters>>, TError = ErrorType<void>>(params: ListComickChaptersParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listComickChapters>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+export const getListDiscordGuildsQueryOptions = <TData = Awaited<ReturnType<typeof listDiscordGuilds>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listDiscordGuilds>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 ) => {
 
 const {query: queryOptions, request: requestOptions} = options ?? {};
 
-  const queryKey =  queryOptions?.queryKey ?? getListComickChaptersQueryKey(params);
+  const queryKey =  queryOptions?.queryKey ?? getListDiscordGuildsQueryKey();
 
 
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof listComickChapters>>> = ({ signal }) => listComickChapters(params, { signal, ...requestOptions });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listDiscordGuilds>>> = ({ signal }) => listDiscordGuilds({ signal, ...requestOptions });
 
 
 
 
 
-   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listComickChapters>>, TError, TData> & { queryKey: QueryKey }
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listDiscordGuilds>>, TError, TData> & { queryKey: QueryKey }
 }
 
-export type ListComickChaptersQueryResult = NonNullable<Awaited<ReturnType<typeof listComickChapters>>>
-export type ListComickChaptersQueryError = ErrorType<void>
+export type ListDiscordGuildsQueryResult = NonNullable<Awaited<ReturnType<typeof listDiscordGuilds>>>
+export type ListDiscordGuildsQueryError = ErrorType<unknown>
 
 
 /**
- * @summary List chapters from Comick
+ * @summary List servers available to the bot
  */
 
-export function useListComickChapters<TData = Awaited<ReturnType<typeof listComickChapters>>, TError = ErrorType<void>>(
- params: ListComickChaptersParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listComickChapters>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+export function useListDiscordGuilds<TData = Awaited<ReturnType<typeof listDiscordGuilds>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listDiscordGuilds>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
 
-  const queryOptions = getListComickChaptersQueryOptions(params,options)
+  const queryOptions = getListDiscordGuildsQueryOptions(options)
 
   const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
 
@@ -318,27 +289,20 @@ export function useListComickChapters<TData = Awaited<ReturnType<typeof listComi
 
 
 
-export const getListMangaChaptersUrl = (params?: ListMangaChaptersParams,) => {
-  const normalizedParams = new URLSearchParams();
+export const getListDiscordChannelsUrl = (guildId: string,) => {
 
-  Object.entries(params || {}).forEach(([key, value]) => {
 
-    if (value !== undefined) {
-      normalizedParams.append(key, value === null ? 'null' : String(value))
-    }
-  });
 
-  const stringifiedParams = normalizedParams.toString();
 
-  return stringifiedParams.length > 0 ? `/api/manga/chapters?${stringifiedParams}` : `/api/manga/chapters`
+  return `/api/discord/guilds/${guildId}/channels`
 }
 
 /**
- * @summary List chapters using Comick first and MangaDex as fallback
+ * @summary List text channels in a server
  */
-export const listMangaChapters = async (params?: ListMangaChaptersParams, options?: Parameters<typeof customFetch>[1]): Promise<ChapterList> => {
+export const listDiscordChannels = async (guildId: string, options?: Parameters<typeof customFetch>[1]): Promise<DiscordChannel[]> => {
 
-  return customFetch<ChapterList>(getListMangaChaptersUrl(params),
+  return customFetch<DiscordChannel[]>(getListDiscordChannelsUrl(guildId),
   {
     ...options,
     method: 'GET'
@@ -351,45 +315,45 @@ export const listMangaChapters = async (params?: ListMangaChaptersParams, option
 
 
 
-export const getListMangaChaptersQueryKey = (params?: ListMangaChaptersParams,) => {
+export const getListDiscordChannelsQueryKey = (guildId: string,) => {
     return [
-    `/api/manga/chapters`, ...(params ? [params] : [])
+    `/api/discord/guilds/${guildId}/channels`
     ] as const;
     }
 
 
-export const getListMangaChaptersQueryOptions = <TData = Awaited<ReturnType<typeof listMangaChapters>>, TError = ErrorType<void>>(params?: ListMangaChaptersParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listMangaChapters>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+export const getListDiscordChannelsQueryOptions = <TData = Awaited<ReturnType<typeof listDiscordChannels>>, TError = ErrorType<unknown>>(guildId: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listDiscordChannels>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 ) => {
 
 const {query: queryOptions, request: requestOptions} = options ?? {};
 
-  const queryKey =  queryOptions?.queryKey ?? getListMangaChaptersQueryKey(params);
+  const queryKey =  queryOptions?.queryKey ?? getListDiscordChannelsQueryKey(guildId);
 
 
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof listMangaChapters>>> = ({ signal }) => listMangaChapters(params, { signal, ...requestOptions });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listDiscordChannels>>> = ({ signal }) => listDiscordChannels(guildId, { signal, ...requestOptions });
 
 
 
 
 
-   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listMangaChapters>>, TError, TData> & { queryKey: QueryKey }
+   return  { queryKey, queryFn, enabled: guildId !== null && guildId !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listDiscordChannels>>, TError, TData> & { queryKey: QueryKey }
 }
 
-export type ListMangaChaptersQueryResult = NonNullable<Awaited<ReturnType<typeof listMangaChapters>>>
-export type ListMangaChaptersQueryError = ErrorType<void>
+export type ListDiscordChannelsQueryResult = NonNullable<Awaited<ReturnType<typeof listDiscordChannels>>>
+export type ListDiscordChannelsQueryError = ErrorType<unknown>
 
 
 /**
- * @summary List chapters using Comick first and MangaDex as fallback
+ * @summary List text channels in a server
  */
 
-export function useListMangaChapters<TData = Awaited<ReturnType<typeof listMangaChapters>>, TError = ErrorType<void>>(
- params?: ListMangaChaptersParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listMangaChapters>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+export function useListDiscordChannels<TData = Awaited<ReturnType<typeof listDiscordChannels>>, TError = ErrorType<unknown>>(
+ guildId: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listDiscordChannels>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
 
-  const queryOptions = getListMangaChaptersQueryOptions(params,options)
+  const queryOptions = getListDiscordChannelsQueryOptions(guildId,options)
 
   const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
 
@@ -402,27 +366,20 @@ export function useListMangaChapters<TData = Awaited<ReturnType<typeof listManga
 
 
 
-export const getListMangaDexChaptersUrl = (params: ListMangaDexChaptersParams,) => {
-  const normalizedParams = new URLSearchParams();
+export const getGetDiscordConfigUrl = () => {
 
-  Object.entries(params || {}).forEach(([key, value]) => {
 
-    if (value !== undefined) {
-      normalizedParams.append(key, value === null ? 'null' : String(value))
-    }
-  });
 
-  const stringifiedParams = normalizedParams.toString();
 
-  return stringifiedParams.length > 0 ? `/api/manga/mangadex/chapters?${stringifiedParams}` : `/api/manga/mangadex/chapters`
+  return `/api/discord/config`
 }
 
 /**
- * @summary List fallback chapters from MangaDex
+ * @summary Get saved bot configuration
  */
-export const listMangaDexChapters = async (params: ListMangaDexChaptersParams, options?: Parameters<typeof customFetch>[1]): Promise<ChapterList> => {
+export const getDiscordConfig = async ( options?: Parameters<typeof customFetch>[1]): Promise<DiscordConfig> => {
 
-  return customFetch<ChapterList>(getListMangaDexChaptersUrl(params),
+  return customFetch<DiscordConfig>(getGetDiscordConfigUrl(),
   {
     ...options,
     method: 'GET'
@@ -435,45 +392,45 @@ export const listMangaDexChapters = async (params: ListMangaDexChaptersParams, o
 
 
 
-export const getListMangaDexChaptersQueryKey = (params?: ListMangaDexChaptersParams,) => {
+export const getGetDiscordConfigQueryKey = () => {
     return [
-    `/api/manga/mangadex/chapters`, ...(params ? [params] : [])
+    `/api/discord/config`
     ] as const;
     }
 
 
-export const getListMangaDexChaptersQueryOptions = <TData = Awaited<ReturnType<typeof listMangaDexChapters>>, TError = ErrorType<void>>(params: ListMangaDexChaptersParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listMangaDexChapters>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+export const getGetDiscordConfigQueryOptions = <TData = Awaited<ReturnType<typeof getDiscordConfig>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getDiscordConfig>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 ) => {
 
 const {query: queryOptions, request: requestOptions} = options ?? {};
 
-  const queryKey =  queryOptions?.queryKey ?? getListMangaDexChaptersQueryKey(params);
+  const queryKey =  queryOptions?.queryKey ?? getGetDiscordConfigQueryKey();
 
 
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof listMangaDexChapters>>> = ({ signal }) => listMangaDexChapters(params, { signal, ...requestOptions });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getDiscordConfig>>> = ({ signal }) => getDiscordConfig({ signal, ...requestOptions });
 
 
 
 
 
-   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listMangaDexChapters>>, TError, TData> & { queryKey: QueryKey }
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getDiscordConfig>>, TError, TData> & { queryKey: QueryKey }
 }
 
-export type ListMangaDexChaptersQueryResult = NonNullable<Awaited<ReturnType<typeof listMangaDexChapters>>>
-export type ListMangaDexChaptersQueryError = ErrorType<void>
+export type GetDiscordConfigQueryResult = NonNullable<Awaited<ReturnType<typeof getDiscordConfig>>>
+export type GetDiscordConfigQueryError = ErrorType<unknown>
 
 
 /**
- * @summary List fallback chapters from MangaDex
+ * @summary Get saved bot configuration
  */
 
-export function useListMangaDexChapters<TData = Awaited<ReturnType<typeof listMangaDexChapters>>, TError = ErrorType<void>>(
- params: ListMangaDexChaptersParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listMangaDexChapters>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+export function useGetDiscordConfig<TData = Awaited<ReturnType<typeof getDiscordConfig>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getDiscordConfig>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
 
-  const queryOptions = getListMangaDexChaptersQueryOptions(params,options)
+  const queryOptions = getGetDiscordConfigQueryOptions(options)
 
   const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
 
@@ -486,447 +443,25 @@ export function useListMangaDexChapters<TData = Awaited<ReturnType<typeof listMa
 
 
 
-export const getSearchMangaUpdatesUrl = (params: SearchMangaUpdatesParams,) => {
-  const normalizedParams = new URLSearchParams();
+export const getSaveDiscordConfigUrl = () => {
 
-  Object.entries(params || {}).forEach(([key, value]) => {
 
-    if (value !== undefined) {
-      normalizedParams.append(key, value === null ? 'null' : String(value))
-    }
-  });
 
-  const stringifiedParams = normalizedParams.toString();
 
-  return stringifiedParams.length > 0 ? `/api/manga/mangaupdates/search?${stringifiedParams}` : `/api/manga/mangaupdates/search`
+  return `/api/discord/config`
 }
 
 /**
- * @summary Search MangaUpdates metadata
+ * @summary Save bot channel and update settings
  */
-export const searchMangaUpdates = async (params: SearchMangaUpdatesParams, options?: Parameters<typeof customFetch>[1]): Promise<MangaUpdatesSearchResponse> => {
+export const saveDiscordConfig = async (discordConfigInput: DiscordConfigInput, options?: Parameters<typeof customFetch>[1]): Promise<DiscordConfig> => {
 
-  return customFetch<MangaUpdatesSearchResponse>(getSearchMangaUpdatesUrl(params),
+  return customFetch<DiscordConfig>(getSaveDiscordConfigUrl(),
   {
     ...options,
-    method: 'GET'
-
-
-  }
-);}
-
-
-
-
-
-export const getSearchMangaUpdatesQueryKey = (params?: SearchMangaUpdatesParams,) => {
-    return [
-    `/api/manga/mangaupdates/search`, ...(params ? [params] : [])
-    ] as const;
-    }
-
-
-export const getSearchMangaUpdatesQueryOptions = <TData = Awaited<ReturnType<typeof searchMangaUpdates>>, TError = ErrorType<void>>(params: SearchMangaUpdatesParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof searchMangaUpdates>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
-) => {
-
-const {query: queryOptions, request: requestOptions} = options ?? {};
-
-  const queryKey =  queryOptions?.queryKey ?? getSearchMangaUpdatesQueryKey(params);
-
-
-
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof searchMangaUpdates>>> = ({ signal }) => searchMangaUpdates(params, { signal, ...requestOptions });
-
-
-
-
-
-   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof searchMangaUpdates>>, TError, TData> & { queryKey: QueryKey }
-}
-
-export type SearchMangaUpdatesQueryResult = NonNullable<Awaited<ReturnType<typeof searchMangaUpdates>>>
-export type SearchMangaUpdatesQueryError = ErrorType<void>
-
-
-/**
- * @summary Search MangaUpdates metadata
- */
-
-export function useSearchMangaUpdates<TData = Awaited<ReturnType<typeof searchMangaUpdates>>, TError = ErrorType<void>>(
- params: SearchMangaUpdatesParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof searchMangaUpdates>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
-
- ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
-
-  const queryOptions = getSearchMangaUpdatesQueryOptions(params,options)
-
-  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
-
-  return withQueryKey(query, queryOptions.queryKey);
-}
-
-
-
-
-
-
-
-export const getGetMangaUpdatesSeriesUrl = (params: GetMangaUpdatesSeriesParams,) => {
-  const normalizedParams = new URLSearchParams();
-
-  Object.entries(params || {}).forEach(([key, value]) => {
-
-    if (value !== undefined) {
-      normalizedParams.append(key, value === null ? 'null' : String(value))
-    }
-  });
-
-  const stringifiedParams = normalizedParams.toString();
-
-  return stringifiedParams.length > 0 ? `/api/manga/mangaupdates/series?${stringifiedParams}` : `/api/manga/mangaupdates/series`
-}
-
-/**
- * @summary Get MangaUpdates series metadata
- */
-export const getMangaUpdatesSeries = async (params: GetMangaUpdatesSeriesParams, options?: Parameters<typeof customFetch>[1]): Promise<MangaUpdatesSeries> => {
-
-  return customFetch<MangaUpdatesSeries>(getGetMangaUpdatesSeriesUrl(params),
-  {
-    ...options,
-    method: 'GET'
-
-
-  }
-);}
-
-
-
-
-
-export const getGetMangaUpdatesSeriesQueryKey = (params?: GetMangaUpdatesSeriesParams,) => {
-    return [
-    `/api/manga/mangaupdates/series`, ...(params ? [params] : [])
-    ] as const;
-    }
-
-
-export const getGetMangaUpdatesSeriesQueryOptions = <TData = Awaited<ReturnType<typeof getMangaUpdatesSeries>>, TError = ErrorType<void>>(params: GetMangaUpdatesSeriesParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getMangaUpdatesSeries>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
-) => {
-
-const {query: queryOptions, request: requestOptions} = options ?? {};
-
-  const queryKey =  queryOptions?.queryKey ?? getGetMangaUpdatesSeriesQueryKey(params);
-
-
-
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof getMangaUpdatesSeries>>> = ({ signal }) => getMangaUpdatesSeries(params, { signal, ...requestOptions });
-
-
-
-
-
-   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getMangaUpdatesSeries>>, TError, TData> & { queryKey: QueryKey }
-}
-
-export type GetMangaUpdatesSeriesQueryResult = NonNullable<Awaited<ReturnType<typeof getMangaUpdatesSeries>>>
-export type GetMangaUpdatesSeriesQueryError = ErrorType<void>
-
-
-/**
- * @summary Get MangaUpdates series metadata
- */
-
-export function useGetMangaUpdatesSeries<TData = Awaited<ReturnType<typeof getMangaUpdatesSeries>>, TError = ErrorType<void>>(
- params: GetMangaUpdatesSeriesParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getMangaUpdatesSeries>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
-
- ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
-
-  const queryOptions = getGetMangaUpdatesSeriesQueryOptions(params,options)
-
-  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
-
-  return withQueryKey(query, queryOptions.queryKey);
-}
-
-
-
-
-
-
-
-export const getSearchMangaUpdatesReleasesUrl = (params: SearchMangaUpdatesReleasesParams,) => {
-  const normalizedParams = new URLSearchParams();
-
-  Object.entries(params || {}).forEach(([key, value]) => {
-
-    if (value !== undefined) {
-      normalizedParams.append(key, value === null ? 'null' : String(value))
-    }
-  });
-
-  const stringifiedParams = normalizedParams.toString();
-
-  return stringifiedParams.length > 0 ? `/api/manga/mangaupdates/releases?${stringifiedParams}` : `/api/manga/mangaupdates/releases`
-}
-
-/**
- * @summary Search MangaUpdates releases
- */
-export const searchMangaUpdatesReleases = async (params: SearchMangaUpdatesReleasesParams, options?: Parameters<typeof customFetch>[1]): Promise<MangaUpdatesReleaseResponse> => {
-
-  return customFetch<MangaUpdatesReleaseResponse>(getSearchMangaUpdatesReleasesUrl(params),
-  {
-    ...options,
-    method: 'GET'
-
-
-  }
-);}
-
-
-
-
-
-export const getSearchMangaUpdatesReleasesQueryKey = (params?: SearchMangaUpdatesReleasesParams,) => {
-    return [
-    `/api/manga/mangaupdates/releases`, ...(params ? [params] : [])
-    ] as const;
-    }
-
-
-export const getSearchMangaUpdatesReleasesQueryOptions = <TData = Awaited<ReturnType<typeof searchMangaUpdatesReleases>>, TError = ErrorType<void>>(params: SearchMangaUpdatesReleasesParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof searchMangaUpdatesReleases>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
-) => {
-
-const {query: queryOptions, request: requestOptions} = options ?? {};
-
-  const queryKey =  queryOptions?.queryKey ?? getSearchMangaUpdatesReleasesQueryKey(params);
-
-
-
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof searchMangaUpdatesReleases>>> = ({ signal }) => searchMangaUpdatesReleases(params, { signal, ...requestOptions });
-
-
-
-
-
-   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof searchMangaUpdatesReleases>>, TError, TData> & { queryKey: QueryKey }
-}
-
-export type SearchMangaUpdatesReleasesQueryResult = NonNullable<Awaited<ReturnType<typeof searchMangaUpdatesReleases>>>
-export type SearchMangaUpdatesReleasesQueryError = ErrorType<void>
-
-
-/**
- * @summary Search MangaUpdates releases
- */
-
-export function useSearchMangaUpdatesReleases<TData = Awaited<ReturnType<typeof searchMangaUpdatesReleases>>, TError = ErrorType<void>>(
- params: SearchMangaUpdatesReleasesParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof searchMangaUpdatesReleases>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
-
- ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
-
-  const queryOptions = getSearchMangaUpdatesReleasesQueryOptions(params,options)
-
-  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
-
-  return withQueryKey(query, queryOptions.queryKey);
-}
-
-
-
-
-
-
-
-export const getGetMangaUpdatesTrackingUrl = (params: GetMangaUpdatesTrackingParams,) => {
-  const normalizedParams = new URLSearchParams();
-
-  Object.entries(params || {}).forEach(([key, value]) => {
-
-    if (value !== undefined) {
-      normalizedParams.append(key, value === null ? 'null' : String(value))
-    }
-  });
-
-  const stringifiedParams = normalizedParams.toString();
-
-  return stringifiedParams.length > 0 ? `/api/manga/mangaupdates/tracking?${stringifiedParams}` : `/api/manga/mangaupdates/tracking`
-}
-
-/**
- * @summary Get MangaUpdates tracking snapshot
- */
-export const getMangaUpdatesTracking = async (params: GetMangaUpdatesTrackingParams, options?: Parameters<typeof customFetch>[1]): Promise<MangaUpdatesTrackingSnapshot> => {
-
-  return customFetch<MangaUpdatesTrackingSnapshot>(getGetMangaUpdatesTrackingUrl(params),
-  {
-    ...options,
-    method: 'GET'
-
-
-  }
-);}
-
-
-
-
-
-export const getGetMangaUpdatesTrackingQueryKey = (params?: GetMangaUpdatesTrackingParams,) => {
-    return [
-    `/api/manga/mangaupdates/tracking`, ...(params ? [params] : [])
-    ] as const;
-    }
-
-
-export const getGetMangaUpdatesTrackingQueryOptions = <TData = Awaited<ReturnType<typeof getMangaUpdatesTracking>>, TError = ErrorType<void>>(params: GetMangaUpdatesTrackingParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getMangaUpdatesTracking>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
-) => {
-
-const {query: queryOptions, request: requestOptions} = options ?? {};
-
-  const queryKey =  queryOptions?.queryKey ?? getGetMangaUpdatesTrackingQueryKey(params);
-
-
-
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof getMangaUpdatesTracking>>> = ({ signal }) => getMangaUpdatesTracking(params, { signal, ...requestOptions });
-
-
-
-
-
-   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getMangaUpdatesTracking>>, TError, TData> & { queryKey: QueryKey }
-}
-
-export type GetMangaUpdatesTrackingQueryResult = NonNullable<Awaited<ReturnType<typeof getMangaUpdatesTracking>>>
-export type GetMangaUpdatesTrackingQueryError = ErrorType<void>
-
-
-/**
- * @summary Get MangaUpdates tracking snapshot
- */
-
-export function useGetMangaUpdatesTracking<TData = Awaited<ReturnType<typeof getMangaUpdatesTracking>>, TError = ErrorType<void>>(
- params: GetMangaUpdatesTrackingParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getMangaUpdatesTracking>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
-
- ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
-
-  const queryOptions = getGetMangaUpdatesTrackingQueryOptions(params,options)
-
-  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
-
-  return withQueryKey(query, queryOptions.queryKey);
-}
-
-
-
-
-
-
-
-export const getListSubscriptionsUrl = (params?: ListSubscriptionsParams,) => {
-  const normalizedParams = new URLSearchParams();
-
-  Object.entries(params || {}).forEach(([key, value]) => {
-
-    if (value !== undefined) {
-      normalizedParams.append(key, value === null ? 'null' : String(value))
-    }
-  });
-
-  const stringifiedParams = normalizedParams.toString();
-
-  return stringifiedParams.length > 0 ? `/api/subscriptions?${stringifiedParams}` : `/api/subscriptions`
-}
-
-/**
- * Returns all active MAL subscriptions, optionally filtered by guild
- * @summary List all subscriptions
- */
-export const listSubscriptions = async (params?: ListSubscriptionsParams, options?: Parameters<typeof customFetch>[1]): Promise<Subscription[]> => {
-
-  return customFetch<Subscription[]>(getListSubscriptionsUrl(params),
-  {
-    ...options,
-    method: 'GET'
-
-
-  }
-);}
-
-
-
-
-
-export const getListSubscriptionsQueryKey = (params?: ListSubscriptionsParams,) => {
-    return [
-    `/api/subscriptions`, ...(params ? [params] : [])
-    ] as const;
-    }
-
-
-export const getListSubscriptionsQueryOptions = <TData = Awaited<ReturnType<typeof listSubscriptions>>, TError = ErrorType<unknown>>(params?: ListSubscriptionsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listSubscriptions>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
-) => {
-
-const {query: queryOptions, request: requestOptions} = options ?? {};
-
-  const queryKey =  queryOptions?.queryKey ?? getListSubscriptionsQueryKey(params);
-
-
-
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof listSubscriptions>>> = ({ signal }) => listSubscriptions(params, { signal, ...requestOptions });
-
-
-
-
-
-   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listSubscriptions>>, TError, TData> & { queryKey: QueryKey }
-}
-
-export type ListSubscriptionsQueryResult = NonNullable<Awaited<ReturnType<typeof listSubscriptions>>>
-export type ListSubscriptionsQueryError = ErrorType<unknown>
-
-
-/**
- * @summary List all subscriptions
- */
-
-export function useListSubscriptions<TData = Awaited<ReturnType<typeof listSubscriptions>>, TError = ErrorType<unknown>>(
- params?: ListSubscriptionsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listSubscriptions>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
-
- ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
-
-  const queryOptions = getListSubscriptionsQueryOptions(params,options)
-
-  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
-
-  return withQueryKey(query, queryOptions.queryKey);
-}
-
-
-
-
-
-
-
-export const getCreateSubscriptionUrl = () => {
-
-
-
-
-  return `/api/subscriptions`
-}
-
-/**
- * Subscribes a Discord user to receive notifications for a MAL manga/anime
- * @summary Subscribe to a MAL item
- */
-export const createSubscription = async (subscriptionInput: SubscriptionInput, options?: Parameters<typeof customFetch>[1]): Promise<Subscription> => {
-
-  return customFetch<Subscription>(getCreateSubscriptionUrl(),
-  {
-    ...options,
-    method: 'POST',
+    method: 'PUT',
     headers: { 'Content-Type': 'application/json', ...options?.headers },
-    body: JSON.stringify(subscriptionInput)
+    body: JSON.stringify(discordConfigInput)
   }
 );}
 
@@ -934,11 +469,11 @@ export const createSubscription = async (subscriptionInput: SubscriptionInput, o
 
 
 
-export const getCreateSubscriptionMutationOptions = <TError = ErrorType<ErrorResponse>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createSubscription>>, TError,{data: BodyType<SubscriptionInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
-): UseMutationOptions<Awaited<ReturnType<typeof createSubscription>>, TError,{data: BodyType<SubscriptionInput>}, TContext> => {
+export const getSaveDiscordConfigMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof saveDiscordConfig>>, TError,{data: BodyType<DiscordConfigInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof saveDiscordConfig>>, TError,{data: BodyType<DiscordConfigInput>}, TContext> => {
 
-const mutationKey = ['createSubscription'];
+const mutationKey = ['saveDiscordConfig'];
 const {mutation: mutationOptions, request: requestOptions} = options ?
       options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
       options
@@ -948,10 +483,10 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
 
 
-      const mutationFn: MutationFunction<Awaited<ReturnType<typeof createSubscription>>, {data: BodyType<SubscriptionInput>}> = (props) => {
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof saveDiscordConfig>>, {data: BodyType<DiscordConfigInput>}> = (props) => {
           const {data} = props ?? {};
 
-          return  createSubscription(data,requestOptions)
+          return  saveDiscordConfig(data,requestOptions)
         }
 
 
@@ -961,111 +496,38 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
   return  { mutationFn, ...mutationOptions }}
 
-    export type CreateSubscriptionMutationResult = NonNullable<Awaited<ReturnType<typeof createSubscription>>>
-    export type CreateSubscriptionMutationBody = BodyType<SubscriptionInput>
-    export type CreateSubscriptionMutationError = ErrorType<ErrorResponse>
+    export type SaveDiscordConfigMutationResult = NonNullable<Awaited<ReturnType<typeof saveDiscordConfig>>>
+    export type SaveDiscordConfigMutationBody = BodyType<DiscordConfigInput>
+    export type SaveDiscordConfigMutationError = ErrorType<unknown>
 
     /**
- * @summary Subscribe to a MAL item
+ * @summary Save bot channel and update settings
  */
-export const useCreateSubscription = <TError = ErrorType<ErrorResponse>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createSubscription>>, TError,{data: BodyType<SubscriptionInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+export const useSaveDiscordConfig = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof saveDiscordConfig>>, TError,{data: BodyType<DiscordConfigInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
-        Awaited<ReturnType<typeof createSubscription>>,
+        Awaited<ReturnType<typeof saveDiscordConfig>>,
         TError,
-        {data: BodyType<SubscriptionInput>},
+        {data: BodyType<DiscordConfigInput>},
         TContext
       > => {
-      return useMutation(getCreateSubscriptionMutationOptions(options));
+      return useMutation(getSaveDiscordConfigMutationOptions(options));
     }
 
-export const getDeleteSubscriptionUrl = (id: number,) => {
+export const getSyncDiscordTableUrl = () => {
 
 
 
 
-  return `/api/subscriptions/${id}`
+  return `/api/discord/sync`
 }
 
 /**
- * Removes a subscription by ID
- * @summary Remove a subscription
+ * @summary Sync the current catalog to Discord now
  */
-export const deleteSubscription = async (id: number, options?: Parameters<typeof customFetch>[1]): Promise<void> => {
+export const syncDiscordTable = async ( options?: Parameters<typeof customFetch>[1]): Promise<SyncResult> => {
 
-  return customFetch<void>(getDeleteSubscriptionUrl(id),
-  {
-    ...options,
-    method: 'DELETE'
-
-
-  }
-);}
-
-
-
-
-
-export const getDeleteSubscriptionMutationOptions = <TError = ErrorType<ErrorResponse>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteSubscription>>, TError,{id: number}, TContext>, request?: SecondParameter<typeof customFetch>}
-): UseMutationOptions<Awaited<ReturnType<typeof deleteSubscription>>, TError,{id: number}, TContext> => {
-
-const mutationKey = ['deleteSubscription'];
-const {mutation: mutationOptions, request: requestOptions} = options ?
-      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
-      options
-      : {...options, mutation: {...options.mutation, mutationKey}}
-      : {mutation: { mutationKey, }, request: undefined};
-
-
-
-
-      const mutationFn: MutationFunction<Awaited<ReturnType<typeof deleteSubscription>>, {id: number}> = (props) => {
-          const {id} = props ?? {};
-
-          return  deleteSubscription(id,requestOptions)
-        }
-
-
-
-
-
-
-  return  { mutationFn, ...mutationOptions }}
-
-    export type DeleteSubscriptionMutationResult = NonNullable<Awaited<ReturnType<typeof deleteSubscription>>>
-
-    export type DeleteSubscriptionMutationError = ErrorType<ErrorResponse>
-
-    /**
- * @summary Remove a subscription
- */
-export const useDeleteSubscription = <TError = ErrorType<ErrorResponse>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteSubscription>>, TError,{id: number}, TContext>, request?: SecondParameter<typeof customFetch>}
- ): UseMutationResult<
-        Awaited<ReturnType<typeof deleteSubscription>>,
-        TError,
-        {id: number},
-        TContext
-      > => {
-      return useMutation(getDeleteSubscriptionMutationOptions(options));
-    }
-
-export const getCheckSubscriptionUrl = (id: number,) => {
-
-
-
-
-  return `/api/subscriptions/${id}/check`
-}
-
-/**
- * Fetches the latest data from MAL for this subscription, stores a snapshot (synopsis, score, status, chapters), and returns whether chapters changed. Keeps only the 2 most recent snapshots — oldest is deleted automatically. Only returns changed=true when the chapter count increases.
- * @summary Check for updates on a subscription
- */
-export const checkSubscription = async (id: number, options?: Parameters<typeof customFetch>[1]): Promise<CheckResult> => {
-
-  return customFetch<CheckResult>(getCheckSubscriptionUrl(id),
+  return customFetch<SyncResult>(getSyncDiscordTableUrl(),
   {
     ...options,
     method: 'POST'
@@ -1078,11 +540,11 @@ export const checkSubscription = async (id: number, options?: Parameters<typeof 
 
 
 
-export const getCheckSubscriptionMutationOptions = <TError = ErrorType<ErrorResponse>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof checkSubscription>>, TError,{id: number}, TContext>, request?: SecondParameter<typeof customFetch>}
-): UseMutationOptions<Awaited<ReturnType<typeof checkSubscription>>, TError,{id: number}, TContext> => {
+export const getSyncDiscordTableMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof syncDiscordTable>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof syncDiscordTable>>, TError,void, TContext> => {
 
-const mutationKey = ['checkSubscription'];
+const mutationKey = ['syncDiscordTable'];
 const {mutation: mutationOptions, request: requestOptions} = options ?
       options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
       options
@@ -1092,10 +554,10 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
 
 
-      const mutationFn: MutationFunction<Awaited<ReturnType<typeof checkSubscription>>, {id: number}> = (props) => {
-          const {id} = props ?? {};
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof syncDiscordTable>>, void> = () => {
 
-          return  checkSubscription(id,requestOptions)
+
+          return  syncDiscordTable(requestOptions)
         }
 
 
@@ -1105,46 +567,38 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
   return  { mutationFn, ...mutationOptions }}
 
-    export type CheckSubscriptionMutationResult = NonNullable<Awaited<ReturnType<typeof checkSubscription>>>
+    export type SyncDiscordTableMutationResult = NonNullable<Awaited<ReturnType<typeof syncDiscordTable>>>
 
-    export type CheckSubscriptionMutationError = ErrorType<ErrorResponse>
+    export type SyncDiscordTableMutationError = ErrorType<unknown>
 
     /**
- * @summary Check for updates on a subscription
+ * @summary Sync the current catalog to Discord now
  */
-export const useCheckSubscription = <TError = ErrorType<ErrorResponse>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof checkSubscription>>, TError,{id: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+export const useSyncDiscordTable = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof syncDiscordTable>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
-        Awaited<ReturnType<typeof checkSubscription>>,
+        Awaited<ReturnType<typeof syncDiscordTable>>,
         TError,
-        {id: number},
+        void,
         TContext
       > => {
-      return useMutation(getCheckSubscriptionMutationOptions(options));
+      return useMutation(getSyncDiscordTableMutationOptions(options));
     }
 
-export const getListErrorLogsUrl = (params?: ListErrorLogsParams,) => {
-  const normalizedParams = new URLSearchParams();
+export const getGetDiscordStatusUrl = () => {
 
-  Object.entries(params || {}).forEach(([key, value]) => {
 
-    if (value !== undefined) {
-      normalizedParams.append(key, value === null ? 'null' : String(value))
-    }
-  });
 
-  const stringifiedParams = normalizedParams.toString();
 
-  return stringifiedParams.length > 0 ? `/api/errors?${stringifiedParams}` : `/api/errors`
+  return `/api/discord/status`
 }
 
 /**
- * Returns recent errors, optionally filtered by Discord guild.
- * @summary List bot errors
+ * @summary Get bot synchronization status
  */
-export const listErrorLogs = async (params?: ListErrorLogsParams, options?: Parameters<typeof customFetch>[1]): Promise<ErrorLog[]> => {
+export const getDiscordStatus = async ( options?: Parameters<typeof customFetch>[1]): Promise<DiscordStatus> => {
 
-  return customFetch<ErrorLog[]>(getListErrorLogsUrl(params),
+  return customFetch<DiscordStatus>(getGetDiscordStatusUrl(),
   {
     ...options,
     method: 'GET'
@@ -1157,45 +611,45 @@ export const listErrorLogs = async (params?: ListErrorLogsParams, options?: Para
 
 
 
-export const getListErrorLogsQueryKey = (params?: ListErrorLogsParams,) => {
+export const getGetDiscordStatusQueryKey = () => {
     return [
-    `/api/errors`, ...(params ? [params] : [])
+    `/api/discord/status`
     ] as const;
     }
 
 
-export const getListErrorLogsQueryOptions = <TData = Awaited<ReturnType<typeof listErrorLogs>>, TError = ErrorType<unknown>>(params?: ListErrorLogsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listErrorLogs>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+export const getGetDiscordStatusQueryOptions = <TData = Awaited<ReturnType<typeof getDiscordStatus>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getDiscordStatus>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 ) => {
 
 const {query: queryOptions, request: requestOptions} = options ?? {};
 
-  const queryKey =  queryOptions?.queryKey ?? getListErrorLogsQueryKey(params);
+  const queryKey =  queryOptions?.queryKey ?? getGetDiscordStatusQueryKey();
 
 
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof listErrorLogs>>> = ({ signal }) => listErrorLogs(params, { signal, ...requestOptions });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getDiscordStatus>>> = ({ signal }) => getDiscordStatus({ signal, ...requestOptions });
 
 
 
 
 
-   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listErrorLogs>>, TError, TData> & { queryKey: QueryKey }
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getDiscordStatus>>, TError, TData> & { queryKey: QueryKey }
 }
 
-export type ListErrorLogsQueryResult = NonNullable<Awaited<ReturnType<typeof listErrorLogs>>>
-export type ListErrorLogsQueryError = ErrorType<unknown>
+export type GetDiscordStatusQueryResult = NonNullable<Awaited<ReturnType<typeof getDiscordStatus>>>
+export type GetDiscordStatusQueryError = ErrorType<unknown>
 
 
 /**
- * @summary List bot errors
+ * @summary Get bot synchronization status
  */
 
-export function useListErrorLogs<TData = Awaited<ReturnType<typeof listErrorLogs>>, TError = ErrorType<unknown>>(
- params?: ListErrorLogsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listErrorLogs>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+export function useGetDiscordStatus<TData = Awaited<ReturnType<typeof getDiscordStatus>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getDiscordStatus>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
 
-  const queryOptions = getListErrorLogsQueryOptions(params,options)
+  const queryOptions = getGetDiscordStatusQueryOptions(options)
 
   const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
 
@@ -1207,76 +661,4 @@ export function useListErrorLogs<TData = Awaited<ReturnType<typeof listErrorLogs
 
 
 
-
-export const getCreateErrorLogUrl = () => {
-
-
-
-
-  return `/api/errors`
-}
-
-/**
- * Stores an error reported by the Discord bot in Neon for later inspection.
- * @summary Record a bot error
- */
-export const createErrorLog = async (errorLogInput: ErrorLogInput, options?: Parameters<typeof customFetch>[1]): Promise<ErrorLog> => {
-
-  return customFetch<ErrorLog>(getCreateErrorLogUrl(),
-  {
-    ...options,
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...options?.headers },
-    body: JSON.stringify(errorLogInput)
-  }
-);}
-
-
-
-
-
-export const getCreateErrorLogMutationOptions = <TError = ErrorType<ErrorResponse>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createErrorLog>>, TError,{data: BodyType<ErrorLogInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
-): UseMutationOptions<Awaited<ReturnType<typeof createErrorLog>>, TError,{data: BodyType<ErrorLogInput>}, TContext> => {
-
-const mutationKey = ['createErrorLog'];
-const {mutation: mutationOptions, request: requestOptions} = options ?
-      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
-      options
-      : {...options, mutation: {...options.mutation, mutationKey}}
-      : {mutation: { mutationKey, }, request: undefined};
-
-
-
-
-      const mutationFn: MutationFunction<Awaited<ReturnType<typeof createErrorLog>>, {data: BodyType<ErrorLogInput>}> = (props) => {
-          const {data} = props ?? {};
-
-          return  createErrorLog(data,requestOptions)
-        }
-
-
-
-
-
-
-  return  { mutationFn, ...mutationOptions }}
-
-    export type CreateErrorLogMutationResult = NonNullable<Awaited<ReturnType<typeof createErrorLog>>>
-    export type CreateErrorLogMutationBody = BodyType<ErrorLogInput>
-    export type CreateErrorLogMutationError = ErrorType<ErrorResponse>
-
-    /**
- * @summary Record a bot error
- */
-export const useCreateErrorLog = <TError = ErrorType<ErrorResponse>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createErrorLog>>, TError,{data: BodyType<ErrorLogInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
- ): UseMutationResult<
-        Awaited<ReturnType<typeof createErrorLog>>,
-        TError,
-        {data: BodyType<ErrorLogInput>},
-        TContext
-      > => {
-      return useMutation(getCreateErrorLogMutationOptions(options));
-    }
 
