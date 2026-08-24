@@ -151,17 +151,44 @@ router.post("/discord/sync", async (req, res) => {
 });
 
 function formatDiscordTable(catalog: Awaited<ReturnType<typeof getSeasonCatalog>>, includeAnime: boolean, includeManga: boolean) {
-  const lines = [`**Temporada ${catalog.season} ${catalog.year}**`, "_Atualizado automaticamente pelo Anime Season Board_", ""];
+  const seasonNames: Record<string, string> = { winter: "Inverno", spring: "Primavera", summer: "Verão", fall: "Outono" };
+  const seasonName = seasonNames[catalog.season] ?? catalog.season;
+  const lines = [
+    `📺 **CALENDÁRIO DE ANIME — ${seasonName} ${catalog.year}**`,
+    "_Atualizado automaticamente pelo Anime Season Board_",
+    "",
+  ];
+
+  const formatItem = (item: (typeof catalog.anime)[number], statusLabel: string) => {
+    const score = item.score !== null ? `⭐ ${item.score.toFixed(1)}` : "⭐ —";
+    const episodes = item.episodes ? ` • ${item.episodes} episódios` : "";
+    const genres = item.genres.slice(0, 2).join(", ");
+    return [
+      `**[${item.title.slice(0, 70)}](${item.url})** ${score}`,
+      `> ${statusLabel}${episodes}${genres ? ` • 🏷️ ${genres}` : ""}`,
+    ];
+  };
+
   if (includeAnime) {
-    lines.push("**ANIMES**", "| Título | Situação | Nota |", "|---|---|---|");
-    for (const item of catalog.anime.slice(0, 12)) lines.push(`| [${item.title.slice(0, 62)}](${item.url}) | ${item.status === "upcoming" ? "Entrando" : "No ar"} | ${item.score ? item.score.toFixed(1) : "—"} |`);
-    lines.push("");
+    const airing = catalog.anime.filter((item) => item.status === "airing").slice(0, 8);
+    const upcoming = catalog.anime.filter((item) => item.status === "upcoming").slice(0, 6);
+    if (airing.length) {
+      lines.push("🟢 **ANIMES NO AR**", "");
+      for (const item of airing) lines.push(...formatItem(item, "No ar"), "");
+    }
+    if (upcoming.length) {
+      lines.push("🔜 **ANIMES QUE VÃO ENTRAR**", "");
+      for (const item of upcoming) lines.push(...formatItem(item, "Em breve"), "");
+    }
   }
-  if (includeManga) {
-    lines.push("**MANGÁS EM PUBLICAÇÃO**", "| Título | Nota |", "|---|---|");
-    for (const item of catalog.manga.slice(0, 10)) lines.push(`| [${item.title.slice(0, 68)}](${item.url}) | ${item.score ? item.score.toFixed(1) : "—"} |`);
+
+  if (includeManga && catalog.manga.length) {
+    lines.push("📚 **MANGÁS EM PUBLICAÇÃO**", "");
+    for (const item of catalog.manga.slice(0, 4)) lines.push(...formatItem(item, "Publicando"), "");
   }
-  return lines.join("\n").slice(0, 1990);
+
+  const output = lines.join("\n");
+  return output.length <= 1990 ? output : output.slice(0, 1980) + "\n\n…_Lista reduzida para caber no Discord._";
 }
 
 export default router;
