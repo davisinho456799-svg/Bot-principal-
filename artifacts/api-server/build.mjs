@@ -132,7 +132,10 @@ globalThis.__dirname = __bannerPath.dirname(globalThis.__filename);
 
   // Riffy usa jsdom; o worker do XMLHttpRequest não entra no bundle automaticamente.
   // Copiá-lo para dist evita o crash no runtime do Docker/Railway.
-  const jsdomEntry = globalThis.require.resolve("jsdom");
+  const riffyEntry = globalThis.require.resolve("riffy");
+  const jsdomEntry = globalThis.require.resolve("jsdom", {
+    paths: [path.dirname(riffyEntry)],
+  });
   const jsdomDir = path.resolve(path.dirname(jsdomEntry), "..");
   await cp(
     path.join(jsdomDir, "lib/jsdom/living/xhr/xhr-sync-worker.js"),
