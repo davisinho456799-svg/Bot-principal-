@@ -5,7 +5,7 @@ export const botConfigTable = pgTable("bot_config", {
   guildId: text("guild_id"),
   channelId: text("channel_id"),
   messageId: text("message_id"),
-  intervalMinutes: integer("interval_minutes").notNull().default(60),
+  intervalMinutes: integer("interval_minutes").notNull().default(360),
   includeAnime: boolean("include_anime").notNull().default(true),
   includeManga: boolean("include_manga").notNull().default(true),
   enabled: boolean("enabled").notNull().default(false),
