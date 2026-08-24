@@ -2,6 +2,7 @@ import app from "./app";
 import { logger } from "./lib/logger";
 import { startBot } from "./bot/index.js";
 import { pool } from "@workspace/db";
+import { startDiscordScheduler } from "./discord-scheduler.js";
 
 const rawPort = process.env["PORT"];
 
@@ -17,6 +18,8 @@ async function startApplication() {
     process.exitCode = 1;
     return;
   }
+
+  startDiscordScheduler();
 
   if (!rawPort) {
     logger.info("PORT não definido; iniciando como worker do Discord");
