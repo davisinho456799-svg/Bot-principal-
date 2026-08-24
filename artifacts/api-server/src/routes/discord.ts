@@ -123,17 +123,23 @@ export async function syncConfiguredChannel() {
   const value = await config();
   if (!value.channelId) throw new Error("Escolha um canal antes de sincronizar.");
     const catalog = await getSeasonCatalog();
-    const content = formatDiscordTable(catalog, value.includeAnime, value.includeManga);
+    const embed = formatDiscordEmbed(catalog, value.includeAnime, value.includeManga);
     let messageId = value.messageId;
     if (messageId) {
       try {
-        await discordFetch(`/channels/${value.channelId}/messages/${messageId}`, { method: "PATCH", body: JSON.stringify({ content }) });
+        await discordFetch(`/channels/${value.channelId}/messages/${messageId}`, {
+          method: "PATCH",
+          body: JSON.stringify({ content: "", embeds: [embed] }),
+        });
       } catch {
         messageId = null;
       }
     }
     if (!messageId) {
-      const response = await discordFetch(`/channels/${value.channelId}/messages`, { method: "POST", body: JSON.stringify({ content }) });
+      const response = await discordFetch(`/channels/${value.channelId}/messages`, {
+        method: "POST",
+        body: JSON.stringify({ embeds: [embed] }),
+      });
       messageId = (await response.json() as { id: string }).id;
     }
     const syncedAt = new Date();
@@ -151,13 +157,7 @@ router.post("/discord/sync", async (req, res) => {
 });
 
 function formatDiscordTable(catalog: Awaited<ReturnType<typeof getSeasonCatalog>>, includeAnime: boolean, includeManga: boolean) {
-  const seasonNames: Record<string, string> = { winter: "Inverno", spring: "Primavera", summer: "Verão", fall: "Outono" };
-  const seasonName = seasonNames[catalog.season] ?? catalog.season;
-  const lines = [
-    `📺 **Calendário de Anime — ${seasonName} ${catalog.year}**`,
-    "_Atualizado automaticamente • Horários e informações via AniList_",
-    "",
-  ];
+  const lines: string[] = [];
 
   const formatItem = (item: (typeof catalog.anime)[number], statusLabel: string, icon: string) => {
     const score = item.score !== null ? ` ⭐${item.score.toFixed(1)}` : "";
@@ -200,6 +200,31 @@ function formatDiscordTable(catalog: Awaited<ReturnType<typeof getSeasonCatalog>
   }
   compact.push("…_Lista reduzida para caber no Discord._");
   return compact.join("\n\n");
+}
+
+function formatDiscordEmbed(
+  catalog: Awaited<ReturnType<typeof getSeasonCatalog>>,
+  includeAnime: boolean,
+  includeManga: boolean,
+) {
+  const seasonNames: Record<string, string> = {
+    winter: "Inverno",
+    spring: "Primavera",
+    summer: "Verão",
+    fall: "Outono",
+  };
+  const seasonName = seasonNames[catalog.season] ?? catalog.season;
+  const description = formatDiscordTable(catalog, includeAnime, includeManga);
+
+  return {
+    title: `📺 Calendário de Anime — ${seasonName} ${catalog.year}`,
+    description: description || "_Nenhum título encontrado para esta temporada._",
+    color: 0x2f80ed,
+    footer: {
+      text: "Atualizado automaticamente • Informações via AniList",
+    },
+    timestamp: new Date().toISOString(),
+  };
 }
 
 export default router;
