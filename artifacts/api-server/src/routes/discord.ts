@@ -154,41 +154,52 @@ function formatDiscordTable(catalog: Awaited<ReturnType<typeof getSeasonCatalog>
   const seasonNames: Record<string, string> = { winter: "Inverno", spring: "Primavera", summer: "Verão", fall: "Outono" };
   const seasonName = seasonNames[catalog.season] ?? catalog.season;
   const lines = [
-    `📺 **CALENDÁRIO DE ANIME — ${seasonName} ${catalog.year}**`,
-    "_Atualizado automaticamente pelo Anime Season Board_",
+    `📺 **Calendário de Anime — ${seasonName} ${catalog.year}**`,
+    "_Atualizado automaticamente • Horários e informações via AniList_",
     "",
   ];
 
-  const formatItem = (item: (typeof catalog.anime)[number], statusLabel: string) => {
-    const score = item.score !== null ? `⭐ ${item.score.toFixed(1)}` : "⭐ —";
-    const episodes = item.episodes ? ` • ${item.episodes} episódios` : "";
-    const genres = item.genres.slice(0, 2).join(", ");
+  const formatItem = (item: (typeof catalog.anime)[number], statusLabel: string, icon: string) => {
+    const score = item.score !== null ? ` ⭐${item.score.toFixed(1)}` : "";
+    const episodes = item.episodes ? `📺 ${item.episodes} eps` : "📺 Episódios —";
+    const volumes = item.volumes ? `📚 ${item.volumes} vols` : "";
+    const genres = item.genres.slice(0, 2).join(", ") || "—";
     return [
-      `**[${item.title.slice(0, 70)}](${item.url})** ${score}`,
-      `> ${statusLabel}${episodes}${genres ? ` • 🏷️ ${genres}` : ""}`,
-    ];
+      `• [${item.title.slice(0, 70)}](${item.url})${score}`,
+      `> ${icon} ${statusLabel} | ${episodes}${volumes ? ` | ${volumes}` : ""} | 🏷️ ${genres}`,
+    ].join("\n");
   };
 
+  const blocks: string[] = [];
   if (includeAnime) {
     const airing = catalog.anime.filter((item) => item.status === "airing").slice(0, 8);
     const upcoming = catalog.anime.filter((item) => item.status === "upcoming").slice(0, 6);
     if (airing.length) {
-      lines.push("🟢 **ANIMES NO AR**", "");
-      for (const item of airing) lines.push(...formatItem(item, "No ar"), "");
+      blocks.push("🟢 **ANIMES NO AR**", ...airing.map((item) => formatItem(item, "No ar", "🕐")));
     }
     if (upcoming.length) {
-      lines.push("🔜 **ANIMES QUE VÃO ENTRAR**", "");
-      for (const item of upcoming) lines.push(...formatItem(item, "Em breve"), "");
+      blocks.push("🔜 **ANIMES QUE VÃO ENTRAR**", ...upcoming.map((item) => formatItem(item, "Em breve", "🗓️")));
     }
   }
 
   if (includeManga && catalog.manga.length) {
-    lines.push("📚 **MANGÁS EM PUBLICAÇÃO**", "");
-    for (const item of catalog.manga.slice(0, 4)) lines.push(...formatItem(item, "Publicando"), "");
+    blocks.push("📚 **MANGÁS EM PUBLICAÇÃO**", ...catalog.manga.slice(0, 4).map((item) => formatItem(item, "Publicando", "🇯🇵")));
   }
 
-  const output = lines.join("\n");
-  return output.length <= 1990 ? output : output.slice(0, 1980) + "\n\n…_Lista reduzida para caber no Discord._";
+  const maxLength = 1990;
+  const output = [...lines, ...blocks].join("\n\n");
+  if (output.length <= maxLength) return output;
+
+  const compact = [...lines];
+  let length = compact.join("\n\n").length;
+  for (const block of blocks) {
+    const nextLength = length + 2 + block.length;
+    if (nextLength > maxLength - 45) break;
+    compact.push(block);
+    length = nextLength;
+  }
+  compact.push("…_Lista reduzida para caber no Discord._");
+  return compact.join("\n\n");
 }
 
 export default router;
