@@ -47,6 +47,15 @@ async function fetchPage(path: string) {
   throw lastError ?? new Error("Jikan request failed");
 }
 
+async function fetchCurrentAnime(year: number, season: string) {
+  try {
+    return await fetchPage(`/seasons/${year}/${season}?limit=25&sfw=true`);
+  } catch {
+    // O endpoint anual pode retornar 504 quando o MAL está instável.
+    // /seasons/now é o fallback oficial para os animes em exibição.
+    return fetchPage("/seasons/now?limit=25&sfw=true");
+  }
+}
 function map(item: JikanItem, kind: SeasonDataItem["kind"], status: SeasonDataItem["status"]): SeasonDataItem {
   return { id: item.mal_id, title: item.title_english || item.title || "Sem título", kind, status, imageUrl: item.images?.jpg?.large_image_url || "", url: item.url || `https://myanimelist.net/${kind}/${item.mal_id}`, score: item.score ?? null, episodes: item.episodes ?? null, volumes: item.volumes ?? null, synopsis: item.synopsis ?? null, genres: item.genres?.map((genre) => genre.name) ?? [] };
 }
@@ -54,7 +63,7 @@ function map(item: JikanItem, kind: SeasonDataItem["kind"], status: SeasonDataIt
 export async function getCurrentSeasonData(): Promise<SeasonCatalog> {
   const { season, year } = currentSeason();
   const results = await Promise.allSettled([
-    fetchPage(`/seasons/${year}/${season}?limit=25&sfw=true`),
+    fetchCurrentAnime(year, season),
     fetchPage("/seasons/upcoming?limit=15&sfw=true"),
     fetchPage("/manga?status=publishing&order_by=score&sort=desc&limit=20&sfw=true"),
   ]);
