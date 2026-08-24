@@ -1,14 +1,14 @@
-type JikanItem = {
-  mal_id: number;
-  title?: string;
-  title_english?: string | null;
-  url?: string;
-  images?: { jpg?: { large_image_url?: string } };
-  score?: number | null;
+type AniListItem = {
+  id: number;
+  title: { romaji?: string | null; english?: string | null };
+  siteUrl?: string | null;
+  coverImage?: { large?: string | null };
+  averageScore?: number | null;
   episodes?: number | null;
   volumes?: number | null;
-  synopsis?: string | null;
-  genres?: Array<{ name: string }>;
+  description?: string | null;
+  genres?: string[];
+  status?: string | null;
 };
 
 export type SeasonDataItem = {
@@ -32,47 +32,119 @@ function currentSeason() {
   return { season: month <= 3 ? "winter" : month <= 6 ? "spring" : month <= 9 ? "summer" : "fall", year: new Date().getUTCFullYear() };
 }
 
-async function fetchPage(path: string) {
+const ANILIST_API = "https://graphql.anilist.co";
+const SEASON_QUERY = `
+query CurrentSeason($season: MediaSeason!, $seasonYear: Int!) {
+  anime: Page(page: 1, perPage: 25) {
+    media(
+      season: $season
+      seasonYear: $seasonYear
+      type: ANIME
+      sort: POPULARITY_DESC
+      isAdult: false
+    ) {
+      id
+      title { romaji english }
+      siteUrl
+      coverImage { large }
+      averageScore
+      episodes
+      description(asHtml: false)
+      genres
+      status
+    }
+  }
+  manga: Page(page: 1, perPage: 20) {
+    media(
+      type: MANGA
+      status: RELEASING
+      sort: UPDATED_AT_DESC
+      isAdult: false
+    ) {
+      id
+      title { romaji english }
+      siteUrl
+      coverImage { large }
+      averageScore
+      volumes
+      description(asHtml: false)
+      genres
+      status
+    }
+  }
+}`;
+
+type SeasonResponse = {
+  data?: {
+    anime?: { media?: AniListItem[] };
+    manga?: { media?: AniListItem[] };
+  };
+  errors?: Array<{ message?: string }>;
+};
+
+async function fetchSeasonFromAniList(season: string, year: number) {
   let lastError: Error | undefined;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
-      const response = await fetch(`https://api.jikan.moe/v4${path}`);
-      if (!response.ok) throw new Error(`Jikan returned ${response.status}`);
-      return (await response.json() as { data: JikanItem[] }).data;
+      const response = await fetch(ANILIST_API, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "Cache-Control": "no-cache",
+        },
+        body: JSON.stringify({
+          query: SEASON_QUERY,
+          variables: { season: season.toUpperCase(), seasonYear: year },
+        }),
+        signal: AbortSignal.timeout(12000),
+      });
+      if (!response.ok) throw new Error(`AniList returned ${response.status}`);
+      const json = (await response.json()) as SeasonResponse;
+      if (json.errors?.length) {
+        throw new Error(json.errors[0]?.message ?? "AniList returned a GraphQL error");
+      }
+      const anime = json.data?.anime?.media ?? [];
+      const manga = json.data?.manga?.media ?? [];
+      if (!anime.length && !manga.length) throw new Error("AniList returned an empty catalog");
+      return { anime, manga };
     } catch (error) {
-      lastError = error instanceof Error ? error : new Error("Jikan request failed");
-      await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
+      lastError = error instanceof Error ? error : new Error("AniList request failed");
+      if (attempt < 2) {
+        await new Promise((resolve) => setTimeout(resolve, 700 * (attempt + 1)));
+      }
     }
   }
-  throw lastError ?? new Error("Jikan request failed");
+  throw lastError ?? new Error("AniList request failed");
 }
 
-async function fetchCurrentAnime(year: number, season: string) {
-  try {
-    return await fetchPage(`/seasons/${year}/${season}?limit=25&sfw=true`);
-  } catch {
-    // O endpoint anual pode retornar 504 quando o MAL está instável.
-    // /seasons/now é o fallback oficial para os animes em exibição.
-    return fetchPage("/seasons/now?limit=25&sfw=true");
-  }
-}
-function map(item: JikanItem, kind: SeasonDataItem["kind"], status: SeasonDataItem["status"]): SeasonDataItem {
-  return { id: item.mal_id, title: item.title_english || item.title || "Sem título", kind, status, imageUrl: item.images?.jpg?.large_image_url || "", url: item.url || `https://myanimelist.net/${kind}/${item.mal_id}`, score: item.score ?? null, episodes: item.episodes ?? null, volumes: item.volumes ?? null, synopsis: item.synopsis ?? null, genres: item.genres?.map((genre) => genre.name) ?? [] };
+function map(item: AniListItem, kind: SeasonDataItem["kind"], status: SeasonDataItem["status"]): SeasonDataItem {
+  return {
+    id: item.id,
+    title: item.title.english || item.title.romaji || "Sem título",
+    kind,
+    status,
+    imageUrl: item.coverImage?.large || "",
+    url: item.siteUrl || `https://anilist.co/${kind}/${item.id}`,
+    score: item.averageScore == null ? null : item.averageScore / 10,
+    episodes: item.episodes ?? null,
+    volumes: item.volumes ?? null,
+    synopsis: item.description ?? null,
+    genres: item.genres ?? [],
+  };
 }
 
 export async function getCurrentSeasonData(): Promise<SeasonCatalog> {
   const { season, year } = currentSeason();
-  const results = await Promise.allSettled([
-    fetchCurrentAnime(year, season),
-    fetchPage("/seasons/upcoming?limit=15&sfw=true"),
-    fetchPage("/manga?status=publishing&order_by=score&sort=desc&limit=20&sfw=true"),
-  ]);
-  const [airingResult, upcomingResult, mangaResult] = results;
-  const airing = airingResult.status === "fulfilled" ? airingResult.value : [];
-  const upcoming = upcomingResult.status === "fulfilled" ? upcomingResult.value : [];
-  const manga = mangaResult.status === "fulfilled" ? mangaResult.value : [];
-  if (!airing.length && !upcoming.length && !manga.length) {
-    throw new Error("Jikan is temporarily unavailable");
-  }
-  return { season, year, anime: [...airing.map((item) => map(item, "anime", "airing")), ...upcoming.map((item) => map(item, "anime", "upcoming"))], manga: manga.map((item) => map(item, "manga", "publishing")), updatedAt: new Date() };
+  const result = await fetchSeasonFromAniList(season, year);
+  const anime = result.anime.map((item) =>
+    map(item, "anime", item.status === "NOT_YET_RELEASED" ? "upcoming" : "airing"),
+  );
+  return {
+    season,
+    year,
+    anime,
+    manga: result.manga.map((item) => map(item, "manga", "publishing")),
+    updatedAt: new Date(),
+  };
 }
