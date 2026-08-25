@@ -1,0 +1,33 @@
+server:
+  port: ${PORT}
+  address: 0.0.0.0
+
+lavalink:
+  plugins:
+    - dependency: "dev.lavalink.youtube:youtube-plugin:1.8.3"
+      snapshot: false
+  server:
+    password: ${PASSWORD}
+    sources:
+      youtube: false
+      bandcamp: true
+      soundcloud: true
+      twitch: true
+      vimeo: true
+      nico: true
+      http: true
+      local: false
+    youtubeSearchEnabled: true
+    soundcloudSearchEnabled: true
+    playerUpdateInterval: 5
+    trackStuckThresholdMs: 10000
+    bufferDurationMs: 400
+    frameBufferDurationMs: 5000
+    opusEncodingQuality: 10
+    resamplingQuality: LOW
+    gc-warnings: true
+
+logging:
+  level:
+    root: INFO
+    lavalink: INFO

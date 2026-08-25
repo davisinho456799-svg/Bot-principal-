@@ -6,6 +6,7 @@ import {
   AutocompleteInteraction,
 } from "discord.js";
 import { logger } from "../lib/logger.js";
+import { initLavalink } from "./lavalink.js";
 import { deployCommands } from "./deploy-commands.js";
 import * as searchCommand from "./commands/search.js";
 import * as topCommand from "./commands/top.js";
@@ -31,6 +32,12 @@ import * as temasCommand from "./commands/temas.js";
 import * as filmeCommand from "./commands/filme.js";
 import * as mangaCommand from "./commands/manga.js";
 import * as calendarioCommand from "./commands/calendario.js";
+import * as lplayCommand from "./commands/lplay.js";
+import * as lpauseCommand from "./commands/lpause.js";
+import * as lresumeCommand from "./commands/lresume.js";
+import * as lskipCommand from "./commands/lskip.js";
+import * as lstopCommand from "./commands/lstop.js";
+import * as lqueueCommand from "./commands/lqueue.js";
 import * as calendario18Command from "./commands/calendario18.js";
 import * as temporadaCommand from "./commands/temporada.js";
 import { configurarCommand, atualizarCommand, statusCommand as temporadaStatusCommand } from "./season-management.js";
@@ -79,6 +86,12 @@ const commands = new Map<string, Command>([
   [filmeCommand.data.name, filmeCommand],
   [mangaCommand.data.name, mangaCommand],
   [calendarioCommand.data.name, calendarioCommand],
+  [lplayCommand.data.name, lplayCommand],
+  [lpauseCommand.data.name, lpauseCommand],
+  [lresumeCommand.data.name, lresumeCommand],
+  [lskipCommand.data.name, lskipCommand],
+  [lstopCommand.data.name, lstopCommand],
+  [lqueueCommand.data.name, lqueueCommand],
   [calendario18Command.data.name, calendario18Command],
   [temporadaCommand.data.name, temporadaCommand],
   [configurarCommand.data.name, configurarCommand],
@@ -291,6 +304,9 @@ export async function startBot() {
       }
     }
   });
+
+  // Inicializa o Lavalink sem impedir o bot de subir quando o nó estiver fora do ar.
+  initLavalink(client);
 
   logger.info("Chamando client.login()...");
   await client.login(token);
