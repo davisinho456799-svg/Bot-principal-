@@ -23,13 +23,18 @@ import { data as mangaData } from "./commands/manga.js";
 import { data as calendarioData } from "./commands/calendario.js";
 import { data as calendario18Data } from "./commands/calendario18.js";
 import { data as temporadaData } from "./commands/temporada.js";
-import { configurarData, atualizarData, statusData as temporadaStatusData } from "./season-management.js";
 import { data as statusData } from "./commands/status.js";
 import { data as verificarData } from "./commands/verificar.js";
 import { data as assinarData } from "./commands/assinar.js";
 import { data as assinar18Data } from "./commands/assinar18.js";
 import { data as adminData } from "./commands/admin.js";
 import { data as playData } from "./commands/play.js";
+import { data as lplayData } from "./commands/lplay.js";
+import { data as lpauseData } from "./commands/lpause.js";
+import { data as lresumeData } from "./commands/lresume.js";
+import { data as lskipData } from "./commands/lskip.js";
+import { data as lstopData } from "./commands/lstop.js";
+import { data as lqueueData } from "./commands/lqueue.js";
 import { data as pauseData } from "./commands/pause.js";
 import { data as pularData } from "./commands/pular.js";
 import { data as cancelarData } from "./commands/cancelar.js";
@@ -38,6 +43,12 @@ import { logger } from "../lib/logger.js";
 export async function deployCommands(clientId: string, token: string) {
   const commands = [
     playData.toJSON(),
+    lplayData.toJSON(),
+    lpauseData.toJSON(),
+    lresumeData.toJSON(),
+    lskipData.toJSON(),
+    lstopData.toJSON(),
+    lqueueData.toJSON(),
     pauseData.toJSON(),
     pularData.toJSON(),
     cancelarData.toJSON(),
@@ -65,9 +76,6 @@ export async function deployCommands(clientId: string, token: string) {
     calendarioData.toJSON(),
     calendario18Data.toJSON(),
     temporadaData.toJSON(),
-    configurarData.toJSON(),
-    atualizarData.toJSON(),
-    temporadaStatusData.toJSON(),
     statusData.toJSON(),
     verificarData.toJSON(),
     assinarData.toJSON(),
