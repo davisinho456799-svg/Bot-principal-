@@ -6,6 +6,13 @@ import {
   AutocompleteInteraction,
 } from "discord.js";
 import * as playCommand from "./commands/play.js";
+import * as lplayCommand from "./commands/lplay.js";
+import * as lpauseCommand from "./commands/lpause.js";
+import * as lresumeCommand from "./commands/lresume.js";
+import * as lskipCommand from "./commands/lskip.js";
+import * as lstopCommand from "./commands/lstop.js";
+import * as lqueueCommand from "./commands/lqueue.js";
+import { initLavalink } from "./lavalink.js";
 import * as pauseCommand from "./commands/pause.js";
 import * as pularCommand from "./commands/pular.js";
 import * as cancelarCommand from "./commands/cancelar.js";
@@ -37,7 +44,6 @@ import * as mangaCommand from "./commands/manga.js";
 import * as calendarioCommand from "./commands/calendario.js";
 import * as calendario18Command from "./commands/calendario18.js";
 import * as temporadaCommand from "./commands/temporada.js";
-import { configurarCommand, atualizarCommand, statusCommand as temporadaStatusCommand } from "./season-management.js";
 import * as statusCommand from "./commands/status.js";
 import * as historicoCommand from "./commands/historico.js";
 import * as verificarCommand from "./commands/verificar.js";
@@ -60,6 +66,12 @@ type Command = {
 
 const commands = new Map<string, Command>([
   [playCommand.data.name, playCommand],
+  [lplayCommand.data.name, lplayCommand],
+  [lpauseCommand.data.name, lpauseCommand],
+  [lresumeCommand.data.name, lresumeCommand],
+  [lskipCommand.data.name, lskipCommand],
+  [lstopCommand.data.name, lstopCommand],
+  [lqueueCommand.data.name, lqueueCommand],
   [pauseCommand.data.name, pauseCommand],
   [pularCommand.data.name, pularCommand],
   [cancelarCommand.data.name, cancelarCommand],
@@ -89,10 +101,7 @@ const commands = new Map<string, Command>([
   [calendarioCommand.data.name, calendarioCommand],
   [calendario18Command.data.name, calendario18Command],
   [temporadaCommand.data.name, temporadaCommand],
-  [configurarCommand.data.name, configurarCommand],
-  [atualizarCommand.data.name, atualizarCommand],
   [statusCommand.data.name, statusCommand],
-  [temporadaStatusCommand.data.name, temporadaStatusCommand],
   [historicoCommand.data.name, historicoCommand],
   [verificarCommand.data.name, verificarCommand],
   [assinarCommand.data.name, assinarCommand],
@@ -115,6 +124,8 @@ export async function startBot() {
     intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates],
     rest: { retries: 5 },
   });
+
+  initLavalink(client);
 
   client.once(Events.ClientReady, async (readyClient) => {
     logger.info({ tag: readyClient.user.tag, guilds: readyClient.guilds.cache.size }, "Bot do Discord conectado");
