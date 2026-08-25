@@ -28,7 +28,6 @@ async function buildAll() {
     // - uses native modules and loads them dynamically (e.g. sharp)
     // - use path traversal to read files (e.g. @google-cloud/secret-manager loads sibling .proto files)
     external: [
-      "jsdom",
       "*.node",
       // @discordjs/voice — dependências opcionais de áudio/opus/ffmpeg
       "@snazzah/davey",
@@ -130,6 +129,18 @@ globalThis.__dirname = __bannerPath.dirname(globalThis.__filename);
     `,
     },
   });
+
+  // Riffy usa jsdom; o worker do XMLHttpRequest não entra no bundle automaticamente.
+  // Copiá-lo para dist evita o crash no runtime do Docker/Railway.
+  const riffyEntry = globalThis.require.resolve("riffy");
+  const jsdomEntry = globalThis.require.resolve("jsdom", {
+    paths: [path.dirname(riffyEntry)],
+  });
+  const jsdomDir = path.resolve(path.dirname(jsdomEntry), "..");
+  await cp(
+    path.join(jsdomDir, "lib/jsdom/living/xhr/xhr-sync-worker.js"),
+    path.join(distDir, "xhr-sync-worker.js"),
+  );
 
   // got-scraping bundles header-generator, but header-generator reads these
   // runtime data files relative to the compiled application directory.
