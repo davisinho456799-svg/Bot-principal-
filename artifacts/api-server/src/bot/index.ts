@@ -5,10 +5,6 @@ import {
   ChatInputCommandInteraction,
   AutocompleteInteraction,
 } from "discord.js";
-import * as playCommand from "./commands/play.js";
-import * as pauseCommand from "./commands/pause.js";
-import * as pularCommand from "./commands/pular.js";
-import * as cancelarCommand from "./commands/cancelar.js";
 import { logger } from "../lib/logger.js";
 import { deployCommands } from "./deploy-commands.js";
 import * as searchCommand from "./commands/search.js";
@@ -59,10 +55,6 @@ type Command = {
 };
 
 const commands = new Map<string, Command>([
-  [playCommand.data.name, playCommand],
-  [pauseCommand.data.name, pauseCommand],
-  [pularCommand.data.name, pularCommand],
-  [cancelarCommand.data.name, cancelarCommand],
   [searchCommand.data.name, searchCommand],
   [topCommand.data.name, topCommand],
   [recomendarCommand.data.name, recomendarCommand],
