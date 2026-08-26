@@ -1,6 +1,7 @@
 import { type Client, EmbedBuilder } from "discord.js";
 import {
   db,
+  pool,
   notificacaoCanaisTable,
   capitulosRastreados,
   favoritosTable,
@@ -49,6 +50,45 @@ const COMICK_COOLDOWN_STEPS_MS = [
 let comickBlockedUntil = 0;
 let comickBlockCount = 0;
 let verificationInProgress = false;
+let notificacaoServiceStarted = false;
+
+// Impede que duas instâncias (por exemplo, durante um deploy/restart)
+// consultem as fontes e enviem a mesma atualização simultaneamente.
+const NOTIFICATION_LOCK_NAME = "bot-principal-notification-check";
+
+async function withNotificationLock<T>(fn: () => Promise<T>): Promise<T | null> {
+  const connection = await pool.connect();
+  let locked = false;
+
+  try {
+    const lockResult = await connection.query<{ locked: boolean }>(
+      "SELECT pg_try_advisory_lock(hashtextextended($1, 0)) AS locked",
+      [NOTIFICATION_LOCK_NAME],
+    );
+    locked = lockResult.rows[0]?.locked === true;
+
+    if (!locked) {
+      logger.warn(
+        "Outra instância já está verificando notificações — pulando esta rodada",
+      );
+      return null;
+    }
+
+    return await fn();
+  } finally {
+    if (locked) {
+      await connection
+        .query(
+          "SELECT pg_advisory_unlock(hashtextextended($1, 0))",
+          [NOTIFICATION_LOCK_NAME],
+        )
+        .catch((err) => {
+          logger.warn({ err }, "Falha ao liberar lock do serviço de notificações");
+        });
+    }
+    connection.release();
+  }
+}
 
 function isComickBlocked(): boolean {
   return Date.now() < comickBlockedUntil;
@@ -275,6 +315,17 @@ export type NotificationCheckSummary = {
     attempts: SourceAttempt[];
   }>;
 };
+
+function emptyNotificationCheckSummary(): NotificationCheckSummary {
+  return {
+    titlesChecked: 0,
+    successfulSources: 0,
+    sourcesWithoutData: 0,
+    fallbackUsed: 0,
+    notificationsSent: 0,
+    attempts: [],
+  };
+}
 
 interface MalSnapshot {
   chapters: number | null;
@@ -1502,6 +1553,14 @@ export async function runCheck(
   client: Client,
   options: { verifyAllSources?: boolean } = {},
 ): Promise<NotificationCheckSummary> {
+  const summary = await withNotificationLock(() => runCheckLocked(client, options));
+  return summary ?? emptyNotificationCheckSummary();
+}
+
+async function runCheckLocked(
+  client: Client,
+  options: { verifyAllSources?: boolean } = {},
+): Promise<NotificationCheckSummary> {
   logger.info("Verificando atualizações de capítulos...");
 
   const canais = await db.select().from(notificacaoCanaisTable);
@@ -2025,6 +2084,12 @@ export function startWeeklyService(client: Client) {
 }
 
 export function startNotificacaoService(client: Client) {
+  if (notificacaoServiceStarted) {
+    logger.warn("Serviço de notificações já foi iniciado — ignorando nova inicialização");
+    return;
+  }
+  notificacaoServiceStarted = true;
+
   const runSafe = async () => {
     if (verificationInProgress) {
       logger.warn("Verificação anterior ainda está em andamento — pulando esta rodada");
