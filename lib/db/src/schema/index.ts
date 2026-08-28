@@ -46,6 +46,20 @@ export const notificacaoCanaisTable = pgTable("notificacao_canais", {
 
 export type NotificacaoCanal = typeof notificacaoCanaisTable.$inferSelect;
 
+// ─── Tabela: notificacao_eventos ──────────────────────────────────────────────
+// Ledger idempotente: um evento de capítulo só pode ser reservado uma vez por
+// canal, mesmo que o processo reinicie antes de atualizar o rastreador.
+export const notificacaoEventosTable = pgTable("notificacao_eventos", {
+  eventKey: text("event_key").primaryKey(),
+  channelId: text("channel_id").notNull(),
+  title: text("title").notNull(),
+  chapter: real("chapter").notNull(),
+  claimedAt: timestamp("claimed_at").notNull().defaultNow(),
+  sentAt: timestamp("sent_at"),
+});
+
+export type NotificacaoEvento = typeof notificacaoEventosTable.$inferSelect;
+
 // ─── Tabela: capitulos_rastreados ─────────────────────────────────────────────
 
 export const capitulosRastreados = pgTable("capitulos_rastreados", {

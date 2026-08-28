@@ -3,6 +3,7 @@ import {
   db,
   pool,
   notificacaoCanaisTable,
+  notificacaoEventosTable,
   capitulosRastreados,
   favoritosTable,
   assinaturasTable,
@@ -31,6 +32,7 @@ import {
   normalizeSynopsis,
   sameNullableNumber,
   sameNullableText,
+  notificationEventKey,
 } from "./notificacao-utils.js";
 import { fetchComick, parseComickJson } from "./comick-http.js";
 export type { SourceErrorKind } from "./notificacao-utils.js";
@@ -88,6 +90,51 @@ async function withNotificationLock<T>(fn: () => Promise<T>): Promise<T | null> 
     }
     connection.release();
   }
+}
+
+type NotificationEventClaim = {
+  eventKey: string;
+  claimed: boolean;
+};
+
+/**
+ * Reserva o evento no PostgreSQL antes de chamar o Discord.
+ *
+ * A chave única torna o envio idempotente entre ciclos e reinícios. Se o
+ * processo cair depois da reserva, o próximo ciclo preserva a decisão de não
+ * reenviar o mesmo evento — evitando a rajada de mensagens duplicadas.
+ */
+async function claimNotificationEvent(
+  channelId: string,
+  title: string,
+  chapter: number,
+): Promise<NotificationEventClaim> {
+  const eventKey = notificationEventKey(channelId, title, chapter);
+  const inserted = await db
+    .insert(notificacaoEventosTable)
+    .values({
+      eventKey,
+      channelId,
+      title,
+      chapter,
+    })
+    .onConflictDoNothing()
+    .returning({ eventKey: notificacaoEventosTable.eventKey });
+
+  return { eventKey, claimed: inserted.length > 0 };
+}
+
+async function markNotificationEventSent(eventKey: string): Promise<void> {
+  await db
+    .update(notificacaoEventosTable)
+    .set({ sentAt: new Date() })
+    .where(eq(notificacaoEventosTable.eventKey, eventKey));
+}
+
+async function releaseNotificationEvent(eventKey: string): Promise<void> {
+  await db
+    .delete(notificacaoEventosTable)
+    .where(eq(notificacaoEventosTable.eventKey, eventKey));
 }
 
 function isComickBlocked(): boolean {
@@ -1563,7 +1610,20 @@ async function runCheckLocked(
 ): Promise<NotificationCheckSummary> {
   logger.info("Verificando atualizações de capítulos...");
 
-  const canais = await db.select().from(notificacaoCanaisTable);
+  const canaisRows = await db.select().from(notificacaoCanaisTable);
+  // A tabela antiga permitia mais de um registro por servidor. Mesmo que o
+  // schema atual declare guild_id como chave primária, uma base já existente
+  // pode ainda conter essas linhas. Um servidor deve participar da rodada uma
+  // única vez, senão o mesmo embed sai repetido no mesmo canal.
+  const canais = Array.from(
+    new Map(canaisRows.map((canal) => [canal.guildId, canal])).values(),
+  );
+  if (canais.length !== canaisRows.length) {
+    logger.warn(
+      { rows: canaisRows.length, uniqueGuilds: canais.length },
+      "Registros duplicados de canal de notificação ignorados nesta rodada",
+    );
+  }
   const manhwas = await getTrackedManhwas();
   const summary: NotificationCheckSummary = {
     titlesChecked: manhwas.length,
@@ -1573,6 +1633,11 @@ async function runCheckLocked(
     notificationsSent: 0,
     attempts: [],
   };
+  // Uma obra pode estar cadastrada com IDs de fontes diferentes. Durante uma
+  // rodada, todos esses registros representam o mesmo evento no mesmo canal.
+  // A chave só é adicionada depois de um envio bem-sucedido, para não perder
+  // notificações quando o Discord estiver indisponível.
+  const sentEvents = new Set<string>();
   if (!manhwas.length) return summary;
 
   for (const m of manhwas) {
@@ -1675,7 +1740,34 @@ async function runCheckLocked(
                 );
               // Não envia embed para guilds sem assinantes deste título
               if (!subscribers.length) continue;
-              const mentions = subscribers.map((s) => `<@${s.discordUserId}>`);
+              const mentions = [...new Set(subscribers.map((s) => `<@${s.discordUserId}>`))];
+              const eventKey = notificationEventKey(
+                canal.channelId,
+                m.title,
+                snapshot.chapters,
+              );
+              if (sentEvents.has(eventKey)) {
+                logger.info(
+                  { title: m.title, chapter: snapshot.chapters, channelId: canal.channelId },
+                  "Notificação duplicada da mesma obra ignorada na rodada",
+                );
+                atLeastOneSentMal = true;
+                continue;
+              }
+              const claim = await claimNotificationEvent(
+                canal.channelId,
+                m.title,
+                snapshot.chapters,
+              );
+              if (!claim.claimed) {
+                logger.info(
+                  { title: m.title, chapter: snapshot.chapters, channelId: canal.channelId },
+                  "Evento de notificação já registrado — baseline avançado sem novo envio",
+                );
+                sentEvents.add(eventKey);
+                atLeastOneSentMal = true;
+                continue;
+              }
               const sent = await sendNotification(
                 client,
                 canal.channelId,
@@ -1687,7 +1779,24 @@ async function runCheckLocked(
                 mentions,
                 m.source,
               );
-              if (sent) { summary.notificationsSent++; atLeastOneSentMal = true; }
+              if (sent) {
+                sentEvents.add(eventKey);
+                await markNotificationEventSent(eventKey).catch((err) => {
+                  logger.error(
+                    { err, eventKey },
+                    "Mensagem enviada, mas não foi possível marcar o evento como concluído",
+                  );
+                });
+                summary.notificationsSent++;
+                atLeastOneSentMal = true;
+              } else {
+                await releaseNotificationEvent(eventKey).catch((err) => {
+                  logger.warn(
+                    { err, eventKey },
+                    "Falha ao liberar evento de notificação após erro no Discord",
+                  );
+                });
+              }
             }
             if (atLeastOneSentMal) {
               await db
@@ -1747,7 +1856,7 @@ async function runCheckLocked(
                   eq(assinaturasTable.guildId, canal.guildId),
                 ));
               if (!subscribers.length) continue;
-              const mentions = subscribers.map((s) => `<@${s.discordUserId}>`);
+              const mentions = [...new Set(subscribers.map((s) => `<@${s.discordUserId}>`))];
               const sent = await sendStatusChangeNotification(
                 client, canal.channelId, m.title, m.siteUrl, m.coverUrl ?? null, mentions, kind,
               );
@@ -1774,7 +1883,7 @@ async function runCheckLocked(
                   ),
                 );
               if (!subscribers.length) continue;
-              const mentions = subscribers.map((s) => `<@${s.discordUserId}>`);
+              const mentions = [...new Set(subscribers.map((s) => `<@${s.discordUserId}>`))];
               const sent = await sendFinishedNotification(
                 client,
                 canal.channelId,
@@ -1911,11 +2020,47 @@ async function runCheckLocked(
               );
             // Não envia embed para guilds sem assinantes deste título
             if (!subscribers.length) continue;
-            const mentions = subscribers.map((s) => `<@${s.discordUserId}>`);
+            const mentions = [...new Set(subscribers.map((s) => `<@${s.discordUserId}>`))];
+            const eventKey = notificationEventKey(canal.channelId, m.title, newChapters);
+            if (sentEvents.has(eventKey)) {
+              logger.info(
+                { title: m.title, chapter: newChapters, channelId: canal.channelId },
+                "Notificação duplicada da mesma obra ignorada na rodada",
+              );
+              // Este registro aponta para o mesmo evento já enviado por outro
+              // ID da fonte. Avança sua linha de base para não repetir no
+              // próximo ciclo de duas horas.
+              atLeastOneSent = true;
+              continue;
+            }
+            const claim = await claimNotificationEvent(canal.channelId, m.title, newChapters);
+            if (!claim.claimed) {
+              logger.info(
+                { title: m.title, chapter: newChapters, channelId: canal.channelId },
+                "Evento de notificação já registrado — baseline avançado sem novo envio",
+              );
+              sentEvents.add(eventKey);
+              atLeastOneSent = true;
+              continue;
+            }
             const sent = await sendNotification(client, canal.channelId, m.title, newChapters, lastChapters, m.siteUrl, m.coverUrl ?? null, mentions, diagnosis.selectedSource ?? m.source, isProxy);
             if (sent) {
+              sentEvents.add(eventKey);
+              await markNotificationEventSent(eventKey).catch((err) => {
+                logger.error(
+                  { err, eventKey },
+                  "Mensagem enviada, mas não foi possível marcar o evento como concluído",
+                );
+              });
               atLeastOneSent = true;
               summary.notificationsSent++;
+            } else {
+              await releaseNotificationEvent(eventKey).catch((err) => {
+                logger.warn(
+                  { err, eventKey },
+                  "Falha ao liberar evento de notificação após erro no Discord",
+                );
+              });
             }
           }
         }

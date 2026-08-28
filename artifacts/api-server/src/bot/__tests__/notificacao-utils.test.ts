@@ -8,6 +8,7 @@ import {
   normalizeSynopsis,
   sameNullableNumber,
   sameNullableText,
+  notificationEventKey,
 } from "../notificacao-utils.js";
 
 // ─── normalizeChapterValue ────────────────────────────────────────────────────
@@ -220,5 +221,26 @@ describe("sameNullableText", () => {
   it("null e string → false", () => {
     expect(sameNullableText(null, "Ongoing")).toBe(false);
     expect(sameNullableText("Ongoing", null)).toBe(false);
+  });
+});
+
+// ─── notificationEventKey ─────────────────────────────────────────────────────
+
+describe("notificationEventKey", () => {
+  it("considera iguais títulos com acentos e pontuação diferentes", () => {
+    expect(notificationEventKey("channel-1", "Men Are Rare", 63))
+      .toBe(notificationEventKey("channel-1", "Mén Are Rare!", 63));
+  });
+
+  it("separa canais e capítulos diferentes", () => {
+    expect(notificationEventKey("channel-1", "Men Are Rare", 63))
+      .not.toBe(notificationEventKey("channel-2", "Men Are Rare", 63));
+    expect(notificationEventKey("channel-1", "Men Are Rare", 63))
+      .not.toBe(notificationEventKey("channel-1", "Men Are Rare", 64));
+  });
+
+  it("preserva a separação entre títulos em alfabetos não latinos", () => {
+    expect(notificationEventKey("channel-1", "作品 A", 10))
+      .not.toBe(notificationEventKey("channel-1", "作品 B", 10));
   });
 });

@@ -92,3 +92,24 @@ export function sameNullableNumber(a: number | null, b: number | null): boolean 
 export function sameNullableText(a: string | null, b: string | null): boolean {
   return a === b;
 }
+
+/**
+ * Cria uma chave estável para uma atualização de capítulo.
+ *
+ * O mesmo título pode existir no rastreador com IDs diferentes (por exemplo,
+ * quando alguém assinou a obra em mais de uma fonte). Nesse caso, o evento
+ * lógico é o mesmo para o Discord: um título, um capítulo e um canal.
+ */
+export function notificationEventKey(
+  channelId: string,
+  title: string,
+  newChapters: number,
+): string {
+  const normalizedTitle = title
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLowerCase()
+    .replace(/[^\p{Letter}\p{Number}]+/gu, "");
+
+  return `${channelId}\u0000${normalizedTitle || title.trim().toLowerCase()}\u0000${newChapters}`;
+}

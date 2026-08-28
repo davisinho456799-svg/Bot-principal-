@@ -136,6 +136,17 @@ export async function startBot() {
     try {
       await db.execute(sql`ALTER TABLE capitulos_rastreados ADD COLUMN IF NOT EXISTS last_notified_at TIMESTAMP`);
       logger.info("Migração automática: last_notified_at verificada");
+       await db.execute(sql`
+         CREATE TABLE IF NOT EXISTS notificacao_eventos (
+           event_key TEXT PRIMARY KEY,
+           channel_id TEXT NOT NULL,
+           title TEXT NOT NULL,
+           chapter REAL NOT NULL,
+           claimed_at TIMESTAMP NOT NULL DEFAULT now(),
+           sent_at TIMESTAMP
+         )
+       `);
+       logger.info("Migração automática: notificacao_eventos verificada");
     } catch (err) {
       logger.error({ err }, "Falha na migração automática — bot continuará normalmente");
     }
