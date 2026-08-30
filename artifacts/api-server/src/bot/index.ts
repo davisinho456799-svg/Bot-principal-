@@ -136,6 +136,9 @@ export async function startBot() {
     try {
       await db.execute(sql`ALTER TABLE capitulos_rastreados ADD COLUMN IF NOT EXISTS last_notified_at TIMESTAMP`);
       logger.info("Migração automática: last_notified_at verificada");
+       await db.execute(sql`ALTER TABLE capitulos_rastreados ADD COLUMN IF NOT EXISTS weekly_start_chapters REAL`);
+       await db.execute(sql`ALTER TABLE capitulos_rastreados ADD COLUMN IF NOT EXISTS weekly_start_at TIMESTAMP`);
+       logger.info("Migração automática: snapshot semanal verificado");
        await db.execute(sql`
          CREATE TABLE IF NOT EXISTS notificacao_eventos (
            event_key TEXT PRIMARY KEY,
