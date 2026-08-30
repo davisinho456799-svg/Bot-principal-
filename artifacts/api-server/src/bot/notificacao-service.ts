@@ -821,7 +821,12 @@ export async function resetTrackedTitle(
 
   await db
     .update(capitulosRastreados)
-    .set({ lastChapters: check.currentChapters, lastChecked: sql`now()` })
+    .set({
+      lastChapters: check.currentChapters,
+      weeklyStartChapters: check.currentChapters,
+      weeklyStartAt: new Date(),
+      lastChecked: sql`now()`,
+    })
     .where(eq(capitulosRastreados.manhwaId, manhwaId));
 
   return {
@@ -1966,8 +1971,24 @@ async function runCheckLocked(
           coverUrl: m.coverUrl,
           siteUrl: m.siteUrl,
           lastChapters: newChapters,
+          weeklyStartChapters: newChapters,
+          weeklyStartAt: new Date(),
         });
         continue;
+      }
+
+      // Registros criados antes do snapshot semanal começam a contar a partir
+      // do primeiro ciclo em que forem vistos após a migração.
+      if (existing.weeklyStartAt == null) {
+        await db
+          .update(capitulosRastreados)
+          .set({
+            weeklyStartChapters: existing.lastChapters,
+            weeklyStartAt: new Date(),
+          })
+          .where(eq(capitulosRastreados.manhwaId, m.manhwaId));
+        existing.weeklyStartChapters = existing.lastChapters;
+        existing.weeklyStartAt = new Date();
       }
 
       // Guard de sanidade: detecta baseline gravado como timestamp Unix (> 100 000).
@@ -1982,7 +2003,12 @@ async function runCheckLocked(
         );
         await db
           .update(capitulosRastreados)
-          .set({ lastChapters: newChapters, lastChecked: sql`now()` })
+          .set({
+            lastChapters: newChapters,
+            weeklyStartChapters: newChapters,
+            weeklyStartAt: new Date(),
+            lastChecked: sql`now()`,
+          })
           .where(eq(capitulosRastreados.manhwaId, m.manhwaId));
         continue;
       }
@@ -2140,6 +2166,7 @@ export async function runWeeklySummary(client: Client): Promise<void> {
         .selectDistinct({
           title: capitulosRastreados.title,
           siteUrl: capitulosRastreados.siteUrl,
+          weeklyStartChapters: capitulosRastreados.weeklyStartChapters,
           lastChapters: capitulosRastreados.lastChapters,
           lastNotifiedAt: capitulosRastreados.lastNotifiedAt,
         })
@@ -2154,12 +2181,55 @@ export async function runWeeklySummary(client: Client): Promise<void> {
         .where(and(isNotNull(capitulosRastreados.lastNotifiedAt), gte(capitulosRastreados.lastNotifiedAt, since)))
         .orderBy(capitulosRastreados.lastNotifiedAt);
 
+      const events = await db
+        .select({
+          title: notificacaoEventosTable.title,
+          chapter: notificacaoEventosTable.chapter,
+        })
+        .from(notificacaoEventosTable)
+        .where(
+          and(
+            eq(notificacaoEventosTable.channelId, canal.channelId),
+            isNotNull(notificacaoEventosTable.sentAt),
+            gte(notificacaoEventosTable.sentAt, since),
+          ),
+        );
+
+      const chaptersByTitle = new Map<string, number[]>();
+      for (const event of events) {
+        const chapters = chaptersByTitle.get(event.title) ?? [];
+        chapters.push(event.chapter);
+        chaptersByTitle.set(event.title, chapters);
+      }
+
       if (!rows.length) continue;
 
+      const formatChapter = (chapter: number | null): string => {
+        if (chapter == null || !Number.isFinite(chapter)) return "—";
+        const value = String(chapter);
+        const [integerPart, decimalPart] = value.split(".");
+        return `${integerPart.padStart(3, "0")}${decimalPart ? `.${decimalPart}` : ""}`;
+      };
+
       const lines = rows.map((r) => {
-        const cap = r.lastChapters != null ? ` · Cap. ${String(Math.floor(r.lastChapters)).padStart(3, "0")}` : "";
-        return `• [${r.title}](${r.siteUrl})${cap}`;
+        const chapters = chaptersByTitle.get(r.title) ?? [];
+        const start = r.weeklyStartChapters;
+        const end = r.lastChapters;
+        const progression =
+          start != null && end != null
+            ? `${formatChapter(start)} → ${formatChapter(end)}`
+            : `— → ${formatChapter(end)}`;
+        const releases = chapters.length
+          ? ` · ${chapters.length} lançamento${chapters.length === 1 ? "" : "s"}`
+          : "";
+        const title = r.siteUrl ? `[${r.title}](${r.siteUrl})` : r.title;
+        return `• ${title} · Cap. **${progression}**${releases}`;
       });
+      const description = (
+        `📚 **${rows.length}** obra${rows.length === 1 ? "" : "s"} acompanhada${rows.length === 1 ? "" : "s"}\n` +
+        `🆕 **${events.length}** capítulo${events.length === 1 ? "" : "s"} lançado${events.length === 1 ? "" : "s"}\n\n` +
+        lines.join("\n")
+      ).slice(0, 4096);
 
       const channel = getSendableChannel(
         await client.channels.fetch(canal.channelId),
@@ -2170,8 +2240,8 @@ export async function runWeeklySummary(client: Client): Promise<void> {
       const embed = new EmbedBuilder()
         .setTitle("📅 Resumo semanal — Atualizações da semana")
         .setColor(0x5865f2)
-        .setDescription(lines.join("\n").slice(0, 4096))
-        .setFooter({ text: `${rows.length} título(s) atualizados nos últimos 7 dias` })
+        .setDescription(description)
+        .setFooter({ text: "Capítulos no formato: início da semana → fim da semana" })
         .setTimestamp();
 
       await channel.send({ embeds: [embed], allowedMentions: { parse: [] } });
@@ -2179,6 +2249,16 @@ export async function runWeeklySummary(client: Client): Promise<void> {
       logger.error({ err, guildId: canal.guildId }, "Erro ao enviar resumo semanal");
     }
   }
+
+  // O próximo resumo deve começar no capítulo atual, não acumular o período
+  // anterior. A atualização é feita depois do envio para preservar os dados
+  // usados nesta edição.
+  await db
+    .update(capitulosRastreados)
+    .set({
+      weeklyStartChapters: sql`${capitulosRastreados.lastChapters}`,
+      weeklyStartAt: new Date(),
+    });
 
   logger.info("Resumo semanal enviado.");
 }
