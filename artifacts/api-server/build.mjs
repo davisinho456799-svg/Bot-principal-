@@ -111,6 +111,9 @@ async function buildAll() {
       "puppeteer",
       "puppeteer-core",
       "electron",
+      // Riffy carrega jsdom por caminhos relativos internos; mantê-lo externo
+      // evita que o esbuild quebre require.resolve("./xhr-sync-worker.js").
+      "riffy",
     ],
     sourcemap: "linked",
     plugins: [
