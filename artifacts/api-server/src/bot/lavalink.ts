@@ -74,8 +74,22 @@ export function initLavalink(client: Client): LavalinkManager | null {
     );
   });
   manager.on("nodeError", (node: any, error: any) => {
+    const errorDetails =
+      error instanceof Error
+        ? {
+            name: error.name,
+            message: error.message,
+            code: (error as NodeJS.ErrnoException).code,
+            stack: error.stack,
+          }
+        : {
+            name: error?.name,
+            message: error?.message,
+            code: error?.code,
+            type: error?.type,
+          };
     logger.error(
-      { node: node?.name ?? name, error },
+      { node: node?.name ?? name, error: errorDetails },
       "Erro no nó Lavalink",
     );
   });
