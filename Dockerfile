@@ -22,6 +22,11 @@ FROM node:22-alpine
 
 WORKDIR /app
 
+# O bundle mantém o cliente Lavalink Riffy externo; preserve as dependências
+# instaladas para que Riffy consiga carregar jsdom e seus arquivos relativos.
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/artifacts/api-server/node_modules ./artifacts/api-server/node_modules
+
 # yt-dlp + ffmpeg para streaming de áudio do YouTube sem bloqueio de IP
 # Instala ffmpeg e a versão mais recente do yt-dlp via pip (apk pode ter versão antiga)
 RUN apk add --no-cache ffmpeg python3 py3-pip && \
