@@ -30,6 +30,11 @@ lavalink:
 plugins:
   youtube:
     enabled: true
+    clients:
+      - TV
+      - ANDROID_VR
+      - WEB
+      - WEBEMBEDDED
     oauth:
       enabled: true
 
