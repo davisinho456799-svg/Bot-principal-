@@ -27,6 +27,12 @@ lavalink:
     resamplingQuality: LOW
     gc-warnings: true
 
+plugins:
+  youtube:
+    enabled: true
+    oauth:
+      enabled: true
+
 logging:
   level:
     root: INFO
