@@ -6,6 +6,7 @@ import {
   AutocompleteInteraction,
 } from "discord.js";
 import * as playCommand from "./commands/play.js";
+import { initLavalink } from "./lavalink.js";
 import * as pauseCommand from "./commands/pause.js";
 import * as pularCommand from "./commands/pular.js";
 import * as cancelarCommand from "./commands/cancelar.js";
@@ -115,6 +116,7 @@ export async function startBot() {
     intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates],
     rest: { retries: 5 },
   });
+  initLavalink(client);
 
   client.once(Events.ClientReady, async (readyClient) => {
     logger.info({ tag: readyClient.user.tag, guilds: readyClient.guilds.cache.size }, "Bot do Discord conectado");

@@ -1,5 +1,5 @@
 import { ChatInputCommandInteraction, SlashCommandBuilder } from "discord.js";
-import { getQueue } from "../music-queue.js";
+import { getLavalinkPlayer } from "../lavalink.js";
 
 export const data = new SlashCommandBuilder()
   .setName("pause")
@@ -11,26 +11,18 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     return;
   }
 
-  const queue = getQueue(interaction.guildId);
+  const player = getLavalinkPlayer(interaction.guildId);
 
-  if (!queue || !queue.current) {
+  if (!player?.current) {
     await interaction.reply({ content: "❌ Não há nenhuma música tocando no momento.", ephemeral: true });
     return;
   }
 
-  if (queue.isPaused) {
-    const resumed = queue.resume();
-    if (resumed) {
-      await interaction.reply(`▶️ Música retomada: **${queue.current.title}**`);
-    } else {
-      await interaction.reply({ content: "❌ Não foi possível retomar a música.", ephemeral: true });
-    }
+  if (player.paused) {
+    await player.pause(false);
+    await interaction.reply(`▶️ Música retomada: **${player.current.info?.title ?? "faixa atual"}**`);
   } else {
-    const paused = queue.pause();
-    if (paused) {
-      await interaction.reply(`⏸️ Música pausada: **${queue.current.title}**`);
-    } else {
-      await interaction.reply({ content: "❌ Não foi possível pausar a música.", ephemeral: true });
-    }
+    await player.pause(true);
+    await interaction.reply(`⏸️ Música pausada: **${player.current.info?.title ?? "faixa atual"}**`);
   }
 }

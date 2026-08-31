@@ -1,5 +1,5 @@
 import { ChatInputCommandInteraction, SlashCommandBuilder } from "discord.js";
-import { getQueue } from "../music-queue.js";
+import { getLavalinkPlayer } from "../lavalink.js";
 
 export const data = new SlashCommandBuilder()
   .setName("cancelar")
@@ -11,15 +11,16 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     return;
   }
 
-  const queue = getQueue(interaction.guildId);
+  const player = getLavalinkPlayer(interaction.guildId);
 
-  if (!queue) {
+  if (!player) {
     await interaction.reply({ content: "❌ Não há nada tocando no momento.", ephemeral: true });
     return;
   }
 
-  const queueSize = queue.queue.length;
-  queue.stop();
+  const queueSize = player.queue?.size ?? player.queue?.length ?? 0;
+  player.queue.clear();
+  player.destroy();
 
   const msg = queueSize > 0
     ? `⏹️ Reprodução cancelada e ${queueSize} música(s) removida(s) da fila.`

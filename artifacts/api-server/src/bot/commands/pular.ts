@@ -1,5 +1,5 @@
 import { ChatInputCommandInteraction, SlashCommandBuilder } from "discord.js";
-import { getQueue } from "../music-queue.js";
+import { getLavalinkPlayer } from "../lavalink.js";
 
 export const data = new SlashCommandBuilder()
   .setName("pular")
@@ -11,21 +11,14 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     return;
   }
 
-  const queue = getQueue(interaction.guildId);
+  const player = getLavalinkPlayer(interaction.guildId);
 
-  if (!queue || !queue.current) {
+  if (!player?.current) {
     await interaction.reply({ content: "❌ Não há nenhuma música tocando no momento.", ephemeral: true });
     return;
   }
 
-  const skipped = queue.current.title;
-  const next = queue.queue[0];
-
-  queue.skip();
-
-  if (next) {
-    await interaction.reply(`⏭️ Pulei **${skipped}**\n▶️ Próxima: **${next.title}**`);
-  } else {
-    await interaction.reply(`⏭️ Pulei **${skipped}** — fila vazia, reprodução encerrada.`);
-  }
+  const skipped = player.current.info?.title ?? "faixa atual";
+  await player.stop();
+  await interaction.reply(`⏭️ Pulei **${skipped}**.`);
 }

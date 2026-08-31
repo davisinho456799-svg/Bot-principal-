@@ -1,28 +1,24 @@
-import {
-  ChatInputCommandInteraction,
-  SlashCommandBuilder,
-  EmbedBuilder,
-  GuildMember,
-} from "discord.js";
-import { getOrCreateQueue, resolveTrack, QUEUE_LIMIT } from "../music-queue.js";
+import { ChatInputCommandInteraction, SlashCommandBuilder } from "discord.js";
+import { getLavalink } from "../lavalink.js";
+import { logger } from "../../lib/logger.js";
 
 export const data = new SlashCommandBuilder()
   .setName("play")
-  .setDescription("Toca uma música do YouTube — link ou nome")
+  .setDescription("Toca uma música ou playlist pelo Lavalink")
   .addStringOption((opt) =>
     opt
       .setName("musica")
-      .setDescription("Link do YouTube ou nome da música")
+      .setDescription("Nome, link da música ou playlist")
       .setRequired(true)
   );
 
 export async function execute(interaction: ChatInputCommandInteraction) {
-  const query = interaction.options.getString("musica", true).trim();
+  if (!interaction.guildId || !interaction.guild) {
+    await interaction.reply({ content: "❌ Este comando só funciona em servidores.", ephemeral: true });
+    return;
+  }
 
-  // Verificar se usuário está em canal de voz
-  const member = interaction.member as GuildMember | null;
-  const voiceChannel = member?.voice?.channel;
-
+  const voiceChannel = interaction.guild.members.cache.get(interaction.user.id)?.voice.channel;
   if (!voiceChannel) {
     await interaction.reply({
       content: "❌ Você precisa estar em um canal de voz para usar este comando.",
@@ -31,71 +27,62 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     return;
   }
 
-  if (!interaction.guildId || !interaction.guild) {
-    await interaction.reply({ content: "❌ Este comando só funciona em servidores.", ephemeral: true });
+  const manager = getLavalink();
+  if (!manager) {
+    await interaction.reply({
+      content: "❌ O Lavalink não está configurado neste ambiente.",
+      ephemeral: true,
+    });
     return;
   }
 
   await interaction.deferReply();
+  const query = interaction.options.getString("musica", true).trim();
 
-  const track = await resolveTrack(query, interaction.user.username);
+  try {
+    const player = manager.createConnection({
+      guildId: interaction.guildId,
+      voiceChannel: voiceChannel.id,
+      textChannel: interaction.channelId,
+      deaf: true,
+    });
+    const result: any = await Promise.race([
+      manager.resolve({
+        query,
+        requester: {
+          id: interaction.user.id,
+          username: interaction.user.username,
+        },
+      }),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("Lavalink não respondeu em 15 segundos")), 15_000),
+      ),
+    ]);
 
-  if (!track) {
+    if (!result?.tracks?.length || !["search", "track", "playlist"].includes(result.loadType)) {
+      await interaction.editReply("❌ Nenhuma música encontrada para essa busca.");
+      return;
+    }
+
+    const tracks = result.loadType === "playlist" ? result.tracks : [result.tracks[0]];
+    for (const track of tracks) {
+      track.info.requester = interaction.user;
+      player.queue.add(track);
+    }
+
+    if (!player.playing && !player.paused) await player.play();
     await interaction.editReply(
-      `❌ Não encontrei nenhuma música para **${query}**. Tente outro nome ou link.`
+      tracks.length > 1
+        ? `✅ ${tracks.length} músicas adicionadas à fila.`
+        : `✅ Adicionada: **${tracks[0].info.title}**`,
     );
-    return;
-  }
-
-  const queue = getOrCreateQueue(
-    interaction.guildId,
-    voiceChannel.id,
-    interaction.guild.voiceAdapterCreator
-  );
-
-  // Guarda o canal para notificar erros de streaming
-  if (interaction.channel) queue.notifyChannel = interaction.channel;
-
-  if (queue.queue.length >= QUEUE_LIMIT) {
+  } catch (error) {
+    logger.error(
+      { error, guildId: interaction.guildId, query },
+      "Erro ao carregar música via Lavalink",
+    );
     await interaction.editReply(
-      `❌ A fila está cheia (limite de ${QUEUE_LIMIT} músicas). Use **/pular** ou **/cancelar** para liberar espaço.`
+      "❌ Não consegui carregar essa música. Verifique a busca e a conexão com o Lavalink.",
     );
-    return;
-  }
-
-  const wasIdle = queue.isIdle && !queue.current;
-
-  queue.queue.push(track);
-
-  if (wasIdle) {
-    // Começa a tocar imediatamente
-    await queue._playNext();
-
-    const embed = new EmbedBuilder()
-      .setColor(0x1db954)
-      .setTitle("▶️ Tocando agora")
-      .setDescription(`**[${track.title}](${track.url})**`)
-      .addFields(
-        { name: "⏱️ Duração", value: track.durationStr, inline: true },
-        { name: "👤 Pedido por", value: track.requestedBy, inline: true }
-      )
-      .setFooter({ text: `Fila: ${queue.queue.length} música(s) restante(s)` });
-
-    if (track.thumbnail) embed.setThumbnail(track.thumbnail);
-    await interaction.editReply({ embeds: [embed] });
-  } else {
-    const position = queue.queue.length; // posição na fila (já foi adicionada acima)
-    const embed = new EmbedBuilder()
-      .setColor(0x5865f2)
-      .setTitle("📋 Adicionado à fila")
-      .setDescription(`**[${track.title}](${track.url})**`)
-      .addFields(
-        { name: "⏱️ Duração", value: track.durationStr, inline: true },
-        { name: "👤 Pedido por", value: track.requestedBy, inline: true },
-        { name: "📌 Posição na fila", value: String(position), inline: true }
-      );
-
-    if (track.thumbnail) embed.setThumbnail(track.thumbnail);
-    await interaction.editReply({ embeds: [embed] });
   }
 }
