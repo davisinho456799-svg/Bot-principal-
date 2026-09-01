@@ -1,3 +1,7 @@
+spring:
+  config:
+    import: optional:file:/tmp/lavalink/application.properties
+
 server:
   port: ${PORT}
   address: 0.0.0.0
