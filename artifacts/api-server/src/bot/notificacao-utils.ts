@@ -111,5 +111,6 @@ export function notificationEventKey(
     .toLowerCase()
     .replace(/[^\p{Letter}\p{Number}]+/gu, "");
 
-  return `${channelId}\u0000${normalizedTitle || title.trim().toLowerCase()}\u0000${newChapters}`;
+  const safeTitle = encodeURIComponent(normalizedTitle || title.trim().toLowerCase());
+  return `${channelId}|${safeTitle}|${newChapters}`;
 }
