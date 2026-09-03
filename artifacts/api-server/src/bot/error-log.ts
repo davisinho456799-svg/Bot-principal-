@@ -82,6 +82,7 @@ function describeError(error: unknown): { message: string; stack: string | null 
 
 function redactSensitive(value: string): string {
   return value
+    .replace(/\u0000/g, "\\u0000")
     .replace(
       /((?:token|secret|password|passwd|authorization|api[-_]?key|client[-_]?secret)\s*[:=]\s*)([^\s,;"']+)/gi,
       "$1[REDACTED]",
