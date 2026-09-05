@@ -54,6 +54,12 @@ interface InvFormat {
   bitrate?: number;
 }
 
+function isInvFormat(value: unknown): value is InvFormat {
+  if (!value || typeof value !== "object") return false;
+  const format = value as Record<string, unknown>;
+  return typeof format.url === "string" && typeof format.type === "string";
+}
+
 /** Tenta obter URL de stream via API Invidious (proxiada — sem bloqueio de IP) */
 async function getInvidiousStreamUrl(videoId: string): Promise<string | null> {
   for (const instance of INVIDIOUS_INSTANCES) {
@@ -62,7 +68,9 @@ async function getInvidiousStreamUrl(videoId: string): Promise<string | null> {
       const res = await fetchJson(apiUrl, 8_000);
       if (!res) continue;
 
-      const formats: InvFormat[] = res.adaptiveFormats ?? [];
+      const formats: InvFormat[] = Array.isArray(res.adaptiveFormats)
+        ? res.adaptiveFormats.filter(isInvFormat)
+        : [];
       // Prefere WebM/Opus; aceita qualquer áudio como fallback
       const best =
         formats.find((f) => f.type?.includes("audio/webm") && f.url) ??
@@ -137,9 +145,11 @@ class GuildMusicQueue {
     this.player.on("error", (err) => {
       logger.error({ err, guildId }, "Erro no AudioPlayer");
       if (this.notifyChannel && this.current) {
-        this.notifyChannel
-          .send(`⚠️ Erro no player para **${this.current.title}**:\n\`\`\`${err.message.slice(0, 300)}\`\`\``)
-          .catch(() => null);
+        if (this.notifyChannel?.isSendable()) {
+          this.notifyChannel
+            .send(`⚠️ Erro no player para **${this.current.title}**:\n\`\`\`${err.message.slice(0, 300)}\`\`\``)
+            .catch(() => null);
+        }
       }
       void this._playNext();
     });
@@ -160,16 +170,18 @@ class GuildMusicQueue {
     if (!next) { this.current = null; return; }
     this.current = next;
 
-    const loadingMsg = await this.notifyChannel
-      ?.send(`⏳ Carregando **${next.title}**…`)
-      .catch(() => null);
+    const loadingMsg = this.notifyChannel?.isSendable()
+      ? await this.notifyChannel.send(`⏳ Carregando **${next.title}**…`).catch(() => null)
+      : null;
 
     const fail = (msg: string) => {
       logger.error({ msg, title: next.title }, "Falha ao tocar");
       loadingMsg?.delete().catch(() => null);
-      this.notifyChannel
-        ?.send(`❌ Não consegui tocar **${next.title}**:\n\`\`\`${msg.slice(0, 400)}\`\`\``)
-        .catch(() => null);
+      if (this.notifyChannel?.isSendable()) {
+        this.notifyChannel
+          .send(`❌ Não consegui tocar **${next.title}**:\n\`\`\`${msg.slice(0, 400)}\`\`\``)
+          .catch(() => null);
+      }
       this.current = null;
       void this._playNext();
     };

@@ -3,6 +3,7 @@ import {
   AutocompleteInteraction,
   SlashCommandBuilder,
   EmbedBuilder,
+  type APIEmbedField,
 } from "discord.js";
 import { db, assinaturasTable, notificacaoCanaisTable, capitulosRastreados } from "@workspace/db";
 import { eq, and, ilike, inArray } from "drizzle-orm";
@@ -392,8 +393,8 @@ async function handleListar(interaction: ChatInputCommandInteraction) {
   const chunkFields = (
     lines: string[],
     firstName: string,
-  ): Parameters<typeof embed.addFields>[0][] => {
-    const fields: Parameters<typeof embed.addFields>[0][] = [];
+  ): APIEmbedField[] => {
+    const fields: APIEmbedField[] = [];
     let current: string[] = [];
     let len = 0;
     for (const line of lines) {
