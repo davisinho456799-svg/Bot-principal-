@@ -112,7 +112,113 @@ async function anilistFetch<T>(query: string, variables: Record<string, unknown>
 }
 
 
-type AuthorSource = "anilist" | "mangadex";\n\ninterface MangaDexAuthor {\n  id: string;\n  attributes: {\n    name: string;\n    biography?: Record<string, string> | null;\n    imageUrl?: string | null;\n  };\n}\n\ninterface MangaDexManga {\n  id: string;\n  attributes: {\n    title: Record<string, string>;\n    description?: Record<string, string>;\n    originalLanguage?: string | null;\n    lastChapter?: string | null;\n    status?: string | null;\n    year?: number | null;\n    tags?: Array<{ attributes?: { group?: string; name?: Record<string, string> } }>;\n  };\n  relationships?: Array<{ type: string; id: string; attributes?: { fileName?: string } }>;\n}\n\ninterface MangaDexCollection<T> {\n  data: T[];\n  total?: number;\n}\n\nasync function mangaDexFetch<T>(path: string): Promise<T> {\n  const res = await fetch(`${MANGADEX_API}${path}`, {\n    headers: { Accept: "application/json" },\n    signal: AbortSignal.timeout(10000),\n  });\n  const json = (await res.json().catch(() => ({}))) as T;\n  if (!res.ok) throw new Error(`MangaDex error: ${res.status}`);\n  return json;\n}\n\nfunction mangaDexText(values: Record<string, string> | null | undefined): string | null {\n  if (!values) return null;\n  return values["pt-br"] ?? values.en ?? values.ko ?? Object.values(values)[0] ?? null;\n}\n\nfunction mangaDexTitle(title: Record<string, string>): string {\n  return mangaDexText(title) ?? "Título desconhecido";\n}\n\nfunction mangaDexStatus(status: string | null | undefined): string | null {\n  const map: Record<string, string> = { ongoing: "RELEASING", completed: "FINISHED", hiatus: "HIATUS", cancelled: "CANCELLED" };\n  return status ? (map[status] ?? status) : null;\n}\n\nasync function searchMangaDexAuthors(search: string): Promise<StaffBasic[]> {\n  const params = new URLSearchParams({ name: search, limit: "6" });\n  const result = await mangaDexFetch<MangaDexCollection<MangaDexAuthor>>(`/author?${params.toString()}`);\n  return (result.data ?? []).map((author) => ({\n    id: author.id,\n    name: { full: author.attributes.name, native: null },\n    image: { medium: author.attributes.imageUrl ?? null },\n    description: mangaDexText(author.attributes.biography),\n    siteUrl: `https://mangadex.org/author/${author.id}`,\n  }));\n}\n\nasync function getMangaDexWorks(author: StaffBasic): Promise<StaffFull> {\n  const params = new URLSearchParams({ limit: "12", "order[updatedAt]": "desc" });\n  params.append("authors[]", String(author.id));\n  params.append("includes[]", "cover_art");\n  const result = await mangaDexFetch<MangaDexCollection<MangaDexManga>>(`/manga?${params.toString()}`);\n  const edges: StaffEdge[] = (result.data ?? []).map((manga) => {\n    const attributes = manga.attributes;\n    const chapters = Number.parseInt(attributes.lastChapter ?? "", 10);\n    const country = attributes.originalLanguage === "ko" ? "KR" : attributes.originalLanguage === "ja" ? "JP" : attributes.originalLanguage === "zh" ? "CN" : null;\n    const genres = (attributes.tags ?? [])\n      .filter((tag) => tag.attributes?.group === "genre")\n      .map((tag) => mangaDexText(tag.attributes?.name))\n      .filter((genre): genre is string => Boolean(genre));\n    return {\n      staffRole: "Autor",\n      node: {\n        id: manga.id,\n        title: { romaji: mangaDexTitle(attributes.title), english: attributes.title.en ?? null },\n        countryOfOrigin: country,\n        averageScore: null,\n        genres,\n        chapters: Number.isFinite(chapters) ? chapters : null,\n        status: mangaDexStatus(attributes.status),\n        siteUrl: `https://mangadex.org/title/${manga.id}`,\n        startDate: { year: attributes.year ?? null },\n        coverImage: { color: null },\n      },\n    };\n  });\n  return {\n    id: author.id,\n    name: { full: author.name.full, native: author.name.native },\n    description: author.description,\n    siteUrl: author.siteUrl,\n    image: { large: author.image.medium },\n    staffMedia: {\n      pageInfo: { hasNextPage: (result.total ?? edges.length) > edges.length },\n      edges,\n    },\n  };\n}
+type AuthorSource = "anilist" | "mangadex";
+
+interface MangaDexAuthor {
+  id: string;
+  attributes: {
+    name: string;
+    biography?: Record<string, string> | null;
+    imageUrl?: string | null;
+  };
+}
+
+interface MangaDexManga {
+  id: string;
+  attributes: {
+    title: Record<string, string>;
+    description?: Record<string, string>;
+    originalLanguage?: string | null;
+    lastChapter?: string | null;
+    status?: string | null;
+    year?: number | null;
+    tags?: Array<{ attributes?: { group?: string; name?: Record<string, string> } }>;
+  };
+  relationships?: Array<{ type: string; id: string; attributes?: { fileName?: string } }>;
+}
+
+interface MangaDexCollection<T> {
+  data: T[];
+  total?: number;
+}
+
+async function mangaDexFetch<T>(path: string): Promise<T> {
+  const res = await fetch(`${MANGADEX_API}${path}`, {
+    headers: { Accept: "application/json" },
+    signal: AbortSignal.timeout(10000),
+  });
+  const json = (await res.json().catch(() => ({}))) as T;
+  if (!res.ok) throw new Error(`MangaDex error: ${res.status}`);
+  return json;
+}
+
+function mangaDexText(values: Record<string, string> | null | undefined): string | null {
+  if (!values) return null;
+  return values["pt-br"] ?? values.en ?? values.ko ?? Object.values(values)[0] ?? null;
+}
+
+function mangaDexTitle(title: Record<string, string>): string {
+  return mangaDexText(title) ?? "Título desconhecido";
+}
+
+function mangaDexStatus(status: string | null | undefined): string | null {
+  const map: Record<string, string> = { ongoing: "RELEASING", completed: "FINISHED", hiatus: "HIATUS", cancelled: "CANCELLED" };
+  return status ? (map[status] ?? status) : null;
+}
+
+async function searchMangaDexAuthors(search: string): Promise<StaffBasic[]> {
+  const params = new URLSearchParams({ name: search, limit: "6" });
+  const result = await mangaDexFetch<MangaDexCollection<MangaDexAuthor>>(`/author?${params.toString()}`);
+  return (result.data ?? []).map((author) => ({
+    id: author.id,
+    name: { full: author.attributes.name, native: null },
+    image: { medium: author.attributes.imageUrl ?? null },
+    description: mangaDexText(author.attributes.biography),
+    siteUrl: `https://mangadex.org/author/${author.id}`,
+  }));
+}
+
+async function getMangaDexWorks(author: StaffBasic): Promise<StaffFull> {
+  const params = new URLSearchParams({ limit: "12", "order[updatedAt]": "desc" });
+  params.append("authors[]", String(author.id));
+  params.append("includes[]", "cover_art");
+  const result = await mangaDexFetch<MangaDexCollection<MangaDexManga>>(`/manga?${params.toString()}`);
+  const edges: StaffEdge[] = (result.data ?? []).map((manga) => {
+    const attributes = manga.attributes;
+    const chapters = Number.parseInt(attributes.lastChapter ?? "", 10);
+    const country = attributes.originalLanguage === "ko" ? "KR" : attributes.originalLanguage === "ja" ? "JP" : attributes.originalLanguage === "zh" ? "CN" : null;
+    const genres = (attributes.tags ?? [])
+      .filter((tag) => tag.attributes?.group === "genre")
+      .map((tag) => mangaDexText(tag.attributes?.name))
+      .filter((genre): genre is string => Boolean(genre));
+    return {
+      staffRole: "Autor",
+      node: {
+        id: manga.id,
+        title: { romaji: mangaDexTitle(attributes.title), english: attributes.title.en ?? null },
+        countryOfOrigin: country,
+        averageScore: null,
+        genres,
+        chapters: Number.isFinite(chapters) ? chapters : null,
+        status: mangaDexStatus(attributes.status),
+        siteUrl: `https://mangadex.org/title/${manga.id}`,
+        startDate: { year: attributes.year ?? null },
+        coverImage: { color: null },
+      },
+    };
+  });
+  return {
+    id: author.id,
+    name: { full: author.name.full, native: author.name.native },
+    description: author.description,
+    siteUrl: author.siteUrl,
+    image: { large: author.image.medium },
+    staffMedia: {
+      pageInfo: { hasNextPage: (result.total ?? edges.length) > edges.length },
+      edges,
+    },
+  };
+}
 
 function isAniListUnavailable(error: unknown): boolean {
   return error instanceof Error && /AniList error: (403|429|5\d\d)|temporarily disabled|timeout/i.test(error.message);
