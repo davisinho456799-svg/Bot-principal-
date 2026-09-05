@@ -1,6 +1,6 @@
-# Bot de Notificação Discord + MAL
+# Panel Watch — Chapter Monitor
 
-API para monitorar atualizações de mangás/animes no MyAnimeList e notificar membros do Discord via bot.
+Panel Watch monitors public chapter listings for Lezhin, Toomics, and Toptoon and publishes grouped thumbnail-only release strips to Discord.
 
 ## Run & Operate
 
@@ -9,7 +9,7 @@ API para monitorar atualizações de mangás/animes no MyAnimeList e notificar m
 - `pnpm run build` — typecheck + build all packages
 - `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
 - `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
-- Required env: `NEON_DATABASE_URL` — external PostgreSQL/Neon connection string. `DATABASE_URL` remains supported as a fallback.
+- Required env: `DATABASE_URL`, `DISCORD_BOT_TOKEN`
 
 ## Stack
 
@@ -22,31 +22,39 @@ API para monitorar atualizações de mangás/animes no MyAnimeList e notificar m
 
 ## Where things live
 
-- `lib/api-spec/openapi.yaml` — contrato da API (source of truth)
-- `lib/db/src/schema/subscriptions.ts` — tabela de assinaturas
-- `lib/db/src/schema/malSnapshots.ts` — tabela de snapshots (máx. 2 por assinatura)
-- `artifacts/api-server/src/routes/subscriptions.ts` — rotas de assinatura e check
-- `artifacts/api-server/src/lib/mal.ts` — integração com a API do MAL
+- `artifacts/chapter-monitor` — responsive configuration dashboard for watchlist, manual runs, channel selection, and health.
+- `artifacts/api-server/src/routes/monitor.ts` — monitor API endpoints, Discord channel discovery, and persisted configuration.
+- `artifacts/api-server/src/services/monitor-service.ts` — public listing polling, thumbnail extraction, deduplication, grouped strip generation, and Discord publishing.
+- `lib/db/src/schema/monitor.ts` — works, detected chapters, activity, and monitor configuration tables.
+- `lib/api-spec/openapi.yaml` — source of truth for generated monitor API clients and Zod schemas.
 
 ## Architecture decisions
 
-- Snapshots limitados a 2 por assinatura: a mais antiga é apagada a cada novo check para não pesar no banco
-- `changed: true` apenas quando `chapters` aumenta — outros campos (sinopse, nota, status) são armazenados mas não disparam notificação
-- MAL API usa `X-MAL-CLIENT-ID` no header — sem OAuth, só leitura de dados públicos
+- The app uses the Discord bot token for channel listing and message delivery; the user OAuth connection is not sufficient for channel writes.
+- The first check for a newly added work captures a baseline without publishing the existing backlog.
+- Chapter identity is stored per work using platform, chapter number, and thumbnail URL so old releases are never reposted.
+- Release strips are generated as thumbnail-only SVG attachments and split into groups of up to five chapters for legibility.
+- When no destination is configured, the first accessible channel named `previw` is selected automatically.
 
 ## Product
 
-- Membros do Discord usam `/assinar adicionar` para monitorar mangás/animes do MAL
-- O bot chama `POST /api/subscriptions/{id}/check` periodicamente
-- Se `changed: true`, o bot menciona o membro no canal informando novo capítulo
+- Dashboard for monitored works, recent activity, health, and manual runs.
+- Watchlist CRUD for Lezhin, Toomics, and Toptoon listing URLs.
+- Discord channel discovery by guild/channel name, with automatic `previw` selection.
+- Discord slash commands for adding and listing monitored works without opening the dashboard.
+- Scheduled checks plus persistent deduplication of detected chapters.
+- Grouped, numbered thumbnail strips with automatic splitting.
 
 ## User preferences
 
-_Populate as you build — explicit user instructions worth remembering across sessions._
+- The user's Discord destination is the channel named `previw` when it is accessible to the bot.
 
 ## Gotchas
 
-_Populate as you build — sharp edges, "always run X before Y" rules._
+- Site HTML and anti-bot rules can change; keep platform-specific parsing refinements isolated in `monitor-service.ts`.
+- The monitor intentionally baselines existing chapters on first check, so a new work does not flood Discord with its full history.
+- The app's managed workflows provide `PORT` and `BASE_PATH`; do not start artifact dev servers manually for preview debugging.
+- The Discord command listener uses the same `DISCORD_BOT_TOKEN` and registers `/manhwa adicionar` and `/manhwa listar` per accessible guild.
 
 ## Pointers
 

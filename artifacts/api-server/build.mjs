@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build as esbuild } from "esbuild";
 import esbuildPluginPino from "esbuild-plugin-pino";
-import { cp, rm } from "node:fs/promises";
+import { rm } from "node:fs/promises";
 
 // Plugins (e.g. 'esbuild-plugin-pino') may use `require` to resolve dependencies
 globalThis.require = createRequire(import.meta.url);
@@ -29,18 +29,8 @@ async function buildAll() {
     // - use path traversal to read files (e.g. @google-cloud/secret-manager loads sibling .proto files)
     external: [
       "*.node",
-      // @discordjs/voice — dependências opcionais de áudio/opus/ffmpeg
-      "@snazzah/davey",
-      "@snazzah/davey-wasm32-wasi",
-      "@napi-rs/wasm-runtime",
-      "@emnapi/core",
-      "@emnapi/runtime",
-      "play-opus",
-      // "opusscript" removido dos externals — precisa ser bundlado (encoder Opus JS puro)
-      "@discordjs/opus",
-      "ffmpeg-static",
-      "sodium-native",
       "sharp",
+      "discord.js",
       "better-sqlite3",
       "sqlite3",
       "canvas",
@@ -111,9 +101,6 @@ async function buildAll() {
       "puppeteer",
       "puppeteer-core",
       "electron",
-      // Riffy carrega jsdom por caminhos relativos internos; mantê-lo externo
-      // evita que o esbuild quebre require.resolve("./xhr-sync-worker.js").
-      "riffy",
     ],
     sourcemap: "linked",
     plugins: [
@@ -132,21 +119,6 @@ globalThis.__dirname = __bannerPath.dirname(globalThis.__filename);
     `,
     },
   });
-
-  // got-scraping bundles header-generator, but header-generator reads these
-  // runtime data files relative to the compiled application directory.
-  // Without copying them, Railway crashes at startup with:
-  // ENOENT .../dist/data_files/headers-order.json
-  const gotScrapingDir = path.dirname(globalThis.require.resolve("got-scraping"));
-  const headerGeneratorEntry = globalThis.require.resolve("header-generator", {
-    paths: [gotScrapingDir],
-  });
-  const headerGeneratorDir = path.dirname(headerGeneratorEntry);
-  await cp(
-    path.join(headerGeneratorDir, "data_files"),
-    path.join(distDir, "data_files"),
-    { recursive: true },
-  );
 }
 
 buildAll().catch((err) => {

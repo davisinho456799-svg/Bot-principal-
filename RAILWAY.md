@@ -43,3 +43,21 @@ O comando precisa ser executado com a mesma `DATABASE_URL` do PostgreSQL do Rail
 - `/api/healthz` — healthcheck do Railway
 
 O bot precisa estar no servidor do Discord com permissão para visualizar o canal `previw` e enviar mensagens.
+
+## Comandos do Discord
+
+O bot registra comandos slash automaticamente em todos os servidores onde está instalado. Para cadastrar uma obra sem abrir o painel:
+
+```text
+/manhwa adicionar link:https://... nome:Nome da obra
+```
+
+O domínio identifica automaticamente Lezhin, Toomics ou Toptoon. Se o domínio não for reconhecido, informe também a opção `plataforma`.
+
+Para conferir a lista ativa:
+
+```text
+/manhwa listar
+```
+
+Os comandos exigem a permissão **Gerenciar servidor** e gravam na mesma watchlist usada pelo painel web.
