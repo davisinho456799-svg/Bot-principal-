@@ -73,6 +73,7 @@ const FALLBACK_SITES = [
   { name: "ReMangas", url: "https://remangas.net", search: "/?s=" },
   { name: "MangaHost", url: "https://mangahost4.com", search: "/find/" },
   { name: "UnionMangas", url: "https://unionleitor.top", search: "/lista-mangas/0/0/0/0/1/0/0?busca=" },
+  { name: "MangaDex", url: "https://mangadex.org", search: "/titles?title=" },
   { name: "MangaLivre", url: "https://mangalivre.net", search: "/series/index/busca=" },
   { name: "TsukiMangás", url: "https://tsukimangas.com", search: "/?busca=" },
   { name: "SeitaManga", url: "https://seitamanga.com", search: "/?s=" },
