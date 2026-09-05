@@ -11,6 +11,7 @@ import { statusLabel } from "../anilist.js";
 import { buildScanLinksExternal } from "./search.js";
 
 const ANILIST_API = "https://graphql.anilist.co";
+const MANGADEX_API = "https://api.mangadex.org";
 
 const SEARCH_STAFF_QUERY = `
 query SearchStaff($search: String!) {
@@ -57,7 +58,7 @@ query StaffWorks($id: Int!, $page: Int!) {
 `;
 
 interface StaffBasic {
-  id: number;
+  id: number | string;
   name: { full: string; native: string | null };
   image: { medium: string | null };
   description: string | null;
@@ -83,7 +84,7 @@ interface StaffEdge {
 }
 
 interface StaffFull {
-  id: number;
+  id: number | string;
   name: { full: string; native: string | null };
   description: string | null;
   siteUrl: string;
@@ -110,6 +111,8 @@ async function anilistFetch<T>(query: string, variables: Record<string, unknown>
   return json.data as T;
 }
 
+
+type AuthorSource = "anilist" | "mangadex";\n\ninterface MangaDexAuthor {\n  id: string;\n  attributes: {\n    name: string;\n    biography?: Record<string, string> | null;\n    imageUrl?: string | null;\n  };\n}\n\ninterface MangaDexManga {\n  id: string;\n  attributes: {\n    title: Record<string, string>;\n    description?: Record<string, string>;\n    originalLanguage?: string | null;\n    lastChapter?: string | null;\n    status?: string | null;\n    year?: number | null;\n    tags?: Array<{ attributes?: { group?: string; name?: Record<string, string> } }>;\n  };\n  relationships?: Array<{ type: string; id: string; attributes?: { fileName?: string } }>;\n}\n\ninterface MangaDexCollection<T> {\n  data: T[];\n  total?: number;\n}\n\nasync function mangaDexFetch<T>(path: string): Promise<T> {\n  const res = await fetch(`${MANGADEX_API}${path}`, {\n    headers: { Accept: "application/json" },\n    signal: AbortSignal.timeout(10000),\n  });\n  const json = (await res.json().catch(() => ({}))) as T;\n  if (!res.ok) throw new Error(`MangaDex error: ${res.status}`);\n  return json;\n}\n\nfunction mangaDexText(values: Record<string, string> | null | undefined): string | null {\n  if (!values) return null;\n  return values["pt-br"] ?? values.en ?? values.ko ?? Object.values(values)[0] ?? null;\n}\n\nfunction mangaDexTitle(title: Record<string, string>): string {\n  return mangaDexText(title) ?? "Título desconhecido";\n}\n\nfunction mangaDexStatus(status: string | null | undefined): string | null {\n  const map: Record<string, string> = { ongoing: "RELEASING", completed: "FINISHED", hiatus: "HIATUS", cancelled: "CANCELLED" };\n  return status ? (map[status] ?? status) : null;\n}\n\nasync function searchMangaDexAuthors(search: string): Promise<StaffBasic[]> {\n  const params = new URLSearchParams({ name: search, limit: "6" });\n  const result = await mangaDexFetch<MangaDexCollection<MangaDexAuthor>>(`/author?${params.toString()}`);\n  return (result.data ?? []).map((author) => ({\n    id: author.id,\n    name: { full: author.attributes.name, native: null },\n    image: { medium: author.attributes.imageUrl ?? null },\n    description: mangaDexText(author.attributes.biography),\n    siteUrl: `https://mangadex.org/author/${author.id}`,\n  }));\n}\n\nasync function getMangaDexWorks(author: StaffBasic): Promise<StaffFull> {\n  const params = new URLSearchParams({ limit: "12", "order[updatedAt]": "desc" });\n  params.append("authors[]", String(author.id));\n  params.append("includes[]", "cover_art");\n  const result = await mangaDexFetch<MangaDexCollection<MangaDexManga>>(`/manga?${params.toString()}`);\n  const edges: StaffEdge[] = (result.data ?? []).map((manga) => {\n    const attributes = manga.attributes;\n    const chapters = Number.parseInt(attributes.lastChapter ?? "", 10);\n    const country = attributes.originalLanguage === "ko" ? "KR" : attributes.originalLanguage === "ja" ? "JP" : attributes.originalLanguage === "zh" ? "CN" : null;\n    const genres = (attributes.tags ?? [])\n      .filter((tag) => tag.attributes?.group === "genre")\n      .map((tag) => mangaDexText(tag.attributes?.name))\n      .filter((genre): genre is string => Boolean(genre));\n    return {\n      staffRole: "Autor",\n      node: {\n        id: manga.id,\n        title: { romaji: mangaDexTitle(attributes.title), english: attributes.title.en ?? null },\n        countryOfOrigin: country,\n        averageScore: null,\n        genres,\n        chapters: Number.isFinite(chapters) ? chapters : null,\n        status: mangaDexStatus(attributes.status),\n        siteUrl: `https://mangadex.org/title/${manga.id}`,\n        startDate: { year: attributes.year ?? null },\n        coverImage: { color: null },\n      },\n    };\n  });\n  return {\n    id: author.id,\n    name: { full: author.name.full, native: author.name.native },\n    description: author.description,\n    siteUrl: author.siteUrl,\n    image: { large: author.image.medium },\n    staffMedia: {\n      pageInfo: { hasNextPage: (result.total ?? edges.length) > edges.length },\n      edges,\n    },\n  };\n}
 
 function isAniListUnavailable(error: unknown): boolean {
   return error instanceof Error && /AniList error: (403|429|5\d\d)|temporarily disabled|timeout/i.test(error.message);
@@ -141,22 +144,35 @@ export async function execute(interaction: ChatInputCommandInteraction) {
   await interaction.deferReply();
   await interaction.editReply({ content: `🔍 Buscando autor **${nome}**...` });
 
-  let staffList: StaffBasic[];
+  let staffList: StaffBasic[] = [];
+  let source: AuthorSource = "anilist";
+  let primaryError: unknown = null;
   try {
     const data = await anilistFetch<{ Page: { staff: StaffBasic[] } }>(SEARCH_STAFF_QUERY, { search: nome });
     staffList = data.Page.staff ?? [];
   } catch (error) {
-    console.error("[/autor] Falha ao buscar autor", error);
-    await interaction.editReply(
-      isAniListUnavailable(error)
-        ? "⚠️ O AniList está temporariamente indisponível. Tente novamente mais tarde."
-        : "❌ Erro ao buscar o autor. Tente novamente.",
-    );
-    return;
+    primaryError = error;
+    console.error("[/autor] AniList indisponível; tentando MangaDex", error);
   }
 
   if (!staffList.length) {
-    await interaction.editReply(`❌ Nenhum autor encontrado com o nome **${nome}**.`);
+    try {
+      const fallbackStaff = await searchMangaDexAuthors(nome);
+      if (fallbackStaff.length) {
+        staffList = fallbackStaff;
+        source = "mangadex";
+      }
+    } catch (error) {
+      console.error("[/autor] Falha no fallback MangaDex", error);
+    }
+  }
+
+  if (!staffList.length) {
+    await interaction.editReply(
+      primaryError && isAniListUnavailable(primaryError)
+        ? "⚠️ AniList e MangaDex estão indisponíveis no momento. Tente novamente mais tarde."
+        : `❌ Nenhum autor encontrado com o nome **${nome}**.`,
+    );
     return;
   }
 
@@ -211,10 +227,19 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 
   let staffFull: StaffFull;
   try {
-    const data = await anilistFetch<{ Staff: StaffFull }>(STAFF_WORKS_QUERY, { id: chosenStaff.id, page: 1 });
-    staffFull = data.Staff;
-  } catch {
-    await interaction.editReply("❌ Erro ao buscar as obras do autor. Tente novamente.");
+    if (source === "mangadex") {
+      staffFull = await getMangaDexWorks(chosenStaff);
+    } else {
+      const data = await anilistFetch<{ Staff: StaffFull }>(STAFF_WORKS_QUERY, { id: Number(chosenStaff.id), page: 1 });
+      staffFull = data.Staff;
+    }
+  } catch (error) {
+    console.error("[/autor] Falha ao buscar obras", error);
+    await interaction.editReply(
+      source === "mangadex"
+        ? "❌ Não foi possível carregar as obras pelo MangaDex. Tente novamente."
+        : "❌ Erro ao buscar as obras do autor. Tente novamente.",
+    );
     return;
   }
 
@@ -264,7 +289,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
         (hasMore ? "\n\n*...e mais obras no AniList*" : "")
     )
     .setFooter({
-      text: `${worksToShow.length} obra(s) listada(s) • Fonte: AniList`,
+      text: `${worksToShow.length} obra(s) listada(s) • Fonte: ${source === "mangadex" ? "MangaDex" : "AniList"}`,
     });
 
   if (staffFull.image.large) embed.setThumbnail(staffFull.image.large);
