@@ -101,10 +101,18 @@ async function anilistFetch<T>(query: string, variables: Record<string, unknown>
     body: JSON.stringify({ query, variables }),
     signal: AbortSignal.timeout(10000),
   });
-  if (!res.ok) throw new Error(`AniList error: ${res.status}`);
-  const json = (await res.json()) as { data: T; errors?: { message: string }[] };
-  if (json.errors?.length) throw new Error(json.errors[0].message);
-  return json.data;
+  const json = (await res.json().catch(() => ({}))) as { data?: T; errors?: { message: string }[] };
+  const apiMessage = json.errors?.[0]?.message;
+  if (!res.ok) {
+    throw new Error(`AniList error: ${res.status}${apiMessage ? ": " + apiMessage : ""}`);
+  }
+  if (apiMessage) throw new Error(apiMessage);
+  return json.data as T;
+}
+
+
+function isAniListUnavailable(error: unknown): boolean {
+  return error instanceof Error && /AniList error: (403|429|5\d\d)|temporarily disabled|timeout/i.test(error.message);
 }
 
 function cleanDesc(raw: string | null, maxLen = 200): string {
@@ -137,8 +145,13 @@ export async function execute(interaction: ChatInputCommandInteraction) {
   try {
     const data = await anilistFetch<{ Page: { staff: StaffBasic[] } }>(SEARCH_STAFF_QUERY, { search: nome });
     staffList = data.Page.staff ?? [];
-  } catch {
-    await interaction.editReply("❌ Erro ao buscar o autor. Tente novamente.");
+  } catch (error) {
+    console.error("[/autor] Falha ao buscar autor", error);
+    await interaction.editReply(
+      isAniListUnavailable(error)
+        ? "⚠️ O AniList está temporariamente indisponível. Tente novamente mais tarde."
+        : "❌ Erro ao buscar o autor. Tente novamente.",
+    );
     return;
   }
 
