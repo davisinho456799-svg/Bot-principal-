@@ -6,9 +6,9 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export interface DiscordChannel {
-  id: string;
-  name: string;
-  guildId: string;
-  guildName: string;
+export interface RunResult {
+  status: string;
+  worksChecked: number;
+  chaptersFound: number;
+  postsSent: number;
 }

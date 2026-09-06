@@ -21,13 +21,14 @@ import type {
 
 import type {
   DiscordChannel,
-  DiscordConfig,
-  DiscordConfigInput,
-  DiscordGuild,
-  DiscordStatus,
   HealthStatus,
-  SeasonCatalog,
-  SyncResult
+  MonitorConfig,
+  MonitorConfigUpdate,
+  MonitorOverview,
+  MonitoredWork,
+  MonitoredWorkInput,
+  MonitoredWorkUpdate,
+  RunResult
 } from './api.schemas';
 
 import { customFetch } from '../custom-fetch';
@@ -135,20 +136,20 @@ export function useHealthCheck<TData = Awaited<ReturnType<typeof healthCheck>>, 
 
 
 
-export const getGetCurrentSeasonUrl = () => {
+export const getGetMonitorOverviewUrl = () => {
 
 
 
 
-  return `/api/season/current`
+  return `/api/monitor/overview`
 }
 
 /**
- * @summary Get current anime and manga season
+ * @summary Get monitor overview
  */
-export const getCurrentSeason = async ( options?: Parameters<typeof customFetch>[1]): Promise<SeasonCatalog> => {
+export const getMonitorOverview = async ( options?: Parameters<typeof customFetch>[1]): Promise<MonitorOverview> => {
 
-  return customFetch<SeasonCatalog>(getGetCurrentSeasonUrl(),
+  return customFetch<MonitorOverview>(getGetMonitorOverviewUrl(),
   {
     ...options,
     method: 'GET'
@@ -161,45 +162,45 @@ export const getCurrentSeason = async ( options?: Parameters<typeof customFetch>
 
 
 
-export const getGetCurrentSeasonQueryKey = () => {
+export const getGetMonitorOverviewQueryKey = () => {
     return [
-    `/api/season/current`
+    `/api/monitor/overview`
     ] as const;
     }
 
 
-export const getGetCurrentSeasonQueryOptions = <TData = Awaited<ReturnType<typeof getCurrentSeason>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getCurrentSeason>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+export const getGetMonitorOverviewQueryOptions = <TData = Awaited<ReturnType<typeof getMonitorOverview>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getMonitorOverview>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 ) => {
 
 const {query: queryOptions, request: requestOptions} = options ?? {};
 
-  const queryKey =  queryOptions?.queryKey ?? getGetCurrentSeasonQueryKey();
+  const queryKey =  queryOptions?.queryKey ?? getGetMonitorOverviewQueryKey();
 
 
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof getCurrentSeason>>> = ({ signal }) => getCurrentSeason({ signal, ...requestOptions });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getMonitorOverview>>> = ({ signal }) => getMonitorOverview({ signal, ...requestOptions });
 
 
 
 
 
-   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getCurrentSeason>>, TError, TData> & { queryKey: QueryKey }
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getMonitorOverview>>, TError, TData> & { queryKey: QueryKey }
 }
 
-export type GetCurrentSeasonQueryResult = NonNullable<Awaited<ReturnType<typeof getCurrentSeason>>>
-export type GetCurrentSeasonQueryError = ErrorType<unknown>
+export type GetMonitorOverviewQueryResult = NonNullable<Awaited<ReturnType<typeof getMonitorOverview>>>
+export type GetMonitorOverviewQueryError = ErrorType<unknown>
 
 
 /**
- * @summary Get current anime and manga season
+ * @summary Get monitor overview
  */
 
-export function useGetCurrentSeason<TData = Awaited<ReturnType<typeof getCurrentSeason>>, TError = ErrorType<unknown>>(
-  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getCurrentSeason>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+export function useGetMonitorOverview<TData = Awaited<ReturnType<typeof getMonitorOverview>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getMonitorOverview>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
 
-  const queryOptions = getGetCurrentSeasonQueryOptions(options)
+  const queryOptions = getGetMonitorOverviewQueryOptions(options)
 
   const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
 
@@ -212,20 +213,20 @@ export function useGetCurrentSeason<TData = Awaited<ReturnType<typeof getCurrent
 
 
 
-export const getListDiscordGuildsUrl = () => {
+export const getListMonitoredWorksUrl = () => {
 
 
 
 
-  return `/api/discord/guilds`
+  return `/api/monitor/works`
 }
 
 /**
- * @summary List servers available to the bot
+ * @summary List monitored works
  */
-export const listDiscordGuilds = async ( options?: Parameters<typeof customFetch>[1]): Promise<DiscordGuild[]> => {
+export const listMonitoredWorks = async ( options?: Parameters<typeof customFetch>[1]): Promise<MonitoredWork[]> => {
 
-  return customFetch<DiscordGuild[]>(getListDiscordGuildsUrl(),
+  return customFetch<MonitoredWork[]>(getListMonitoredWorksUrl(),
   {
     ...options,
     method: 'GET'
@@ -238,45 +239,45 @@ export const listDiscordGuilds = async ( options?: Parameters<typeof customFetch
 
 
 
-export const getListDiscordGuildsQueryKey = () => {
+export const getListMonitoredWorksQueryKey = () => {
     return [
-    `/api/discord/guilds`
+    `/api/monitor/works`
     ] as const;
     }
 
 
-export const getListDiscordGuildsQueryOptions = <TData = Awaited<ReturnType<typeof listDiscordGuilds>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listDiscordGuilds>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+export const getListMonitoredWorksQueryOptions = <TData = Awaited<ReturnType<typeof listMonitoredWorks>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listMonitoredWorks>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 ) => {
 
 const {query: queryOptions, request: requestOptions} = options ?? {};
 
-  const queryKey =  queryOptions?.queryKey ?? getListDiscordGuildsQueryKey();
+  const queryKey =  queryOptions?.queryKey ?? getListMonitoredWorksQueryKey();
 
 
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof listDiscordGuilds>>> = ({ signal }) => listDiscordGuilds({ signal, ...requestOptions });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listMonitoredWorks>>> = ({ signal }) => listMonitoredWorks({ signal, ...requestOptions });
 
 
 
 
 
-   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listDiscordGuilds>>, TError, TData> & { queryKey: QueryKey }
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listMonitoredWorks>>, TError, TData> & { queryKey: QueryKey }
 }
 
-export type ListDiscordGuildsQueryResult = NonNullable<Awaited<ReturnType<typeof listDiscordGuilds>>>
-export type ListDiscordGuildsQueryError = ErrorType<unknown>
+export type ListMonitoredWorksQueryResult = NonNullable<Awaited<ReturnType<typeof listMonitoredWorks>>>
+export type ListMonitoredWorksQueryError = ErrorType<unknown>
 
 
 /**
- * @summary List servers available to the bot
+ * @summary List monitored works
  */
 
-export function useListDiscordGuilds<TData = Awaited<ReturnType<typeof listDiscordGuilds>>, TError = ErrorType<unknown>>(
-  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listDiscordGuilds>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+export function useListMonitoredWorks<TData = Awaited<ReturnType<typeof listMonitoredWorks>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listMonitoredWorks>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
 
-  const queryOptions = getListDiscordGuildsQueryOptions(options)
+  const queryOptions = getListMonitoredWorksQueryOptions(options)
 
   const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
 
@@ -289,179 +290,25 @@ export function useListDiscordGuilds<TData = Awaited<ReturnType<typeof listDisco
 
 
 
-export const getListDiscordChannelsUrl = (guildId: string,) => {
+export const getCreateMonitoredWorkUrl = () => {
 
 
 
 
-  return `/api/discord/guilds/${guildId}/channels`
+  return `/api/monitor/works`
 }
 
 /**
- * @summary List text channels in a server
+ * @summary Add a work to monitor
  */
-export const listDiscordChannels = async (guildId: string, options?: Parameters<typeof customFetch>[1]): Promise<DiscordChannel[]> => {
+export const createMonitoredWork = async (monitoredWorkInput: MonitoredWorkInput, options?: Parameters<typeof customFetch>[1]): Promise<MonitoredWork> => {
 
-  return customFetch<DiscordChannel[]>(getListDiscordChannelsUrl(guildId),
+  return customFetch<MonitoredWork>(getCreateMonitoredWorkUrl(),
   {
     ...options,
-    method: 'GET'
-
-
-  }
-);}
-
-
-
-
-
-export const getListDiscordChannelsQueryKey = (guildId: string,) => {
-    return [
-    `/api/discord/guilds/${guildId}/channels`
-    ] as const;
-    }
-
-
-export const getListDiscordChannelsQueryOptions = <TData = Awaited<ReturnType<typeof listDiscordChannels>>, TError = ErrorType<unknown>>(guildId: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listDiscordChannels>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
-) => {
-
-const {query: queryOptions, request: requestOptions} = options ?? {};
-
-  const queryKey =  queryOptions?.queryKey ?? getListDiscordChannelsQueryKey(guildId);
-
-
-
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof listDiscordChannels>>> = ({ signal }) => listDiscordChannels(guildId, { signal, ...requestOptions });
-
-
-
-
-
-   return  { queryKey, queryFn, enabled: guildId !== null && guildId !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listDiscordChannels>>, TError, TData> & { queryKey: QueryKey }
-}
-
-export type ListDiscordChannelsQueryResult = NonNullable<Awaited<ReturnType<typeof listDiscordChannels>>>
-export type ListDiscordChannelsQueryError = ErrorType<unknown>
-
-
-/**
- * @summary List text channels in a server
- */
-
-export function useListDiscordChannels<TData = Awaited<ReturnType<typeof listDiscordChannels>>, TError = ErrorType<unknown>>(
- guildId: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listDiscordChannels>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
-
- ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
-
-  const queryOptions = getListDiscordChannelsQueryOptions(guildId,options)
-
-  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
-
-  return withQueryKey(query, queryOptions.queryKey);
-}
-
-
-
-
-
-
-
-export const getGetDiscordConfigUrl = () => {
-
-
-
-
-  return `/api/discord/config`
-}
-
-/**
- * @summary Get saved bot configuration
- */
-export const getDiscordConfig = async ( options?: Parameters<typeof customFetch>[1]): Promise<DiscordConfig> => {
-
-  return customFetch<DiscordConfig>(getGetDiscordConfigUrl(),
-  {
-    ...options,
-    method: 'GET'
-
-
-  }
-);}
-
-
-
-
-
-export const getGetDiscordConfigQueryKey = () => {
-    return [
-    `/api/discord/config`
-    ] as const;
-    }
-
-
-export const getGetDiscordConfigQueryOptions = <TData = Awaited<ReturnType<typeof getDiscordConfig>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getDiscordConfig>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
-) => {
-
-const {query: queryOptions, request: requestOptions} = options ?? {};
-
-  const queryKey =  queryOptions?.queryKey ?? getGetDiscordConfigQueryKey();
-
-
-
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof getDiscordConfig>>> = ({ signal }) => getDiscordConfig({ signal, ...requestOptions });
-
-
-
-
-
-   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getDiscordConfig>>, TError, TData> & { queryKey: QueryKey }
-}
-
-export type GetDiscordConfigQueryResult = NonNullable<Awaited<ReturnType<typeof getDiscordConfig>>>
-export type GetDiscordConfigQueryError = ErrorType<unknown>
-
-
-/**
- * @summary Get saved bot configuration
- */
-
-export function useGetDiscordConfig<TData = Awaited<ReturnType<typeof getDiscordConfig>>, TError = ErrorType<unknown>>(
-  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getDiscordConfig>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
-
- ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
-
-  const queryOptions = getGetDiscordConfigQueryOptions(options)
-
-  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
-
-  return withQueryKey(query, queryOptions.queryKey);
-}
-
-
-
-
-
-
-
-export const getSaveDiscordConfigUrl = () => {
-
-
-
-
-  return `/api/discord/config`
-}
-
-/**
- * @summary Save bot channel and update settings
- */
-export const saveDiscordConfig = async (discordConfigInput: DiscordConfigInput, options?: Parameters<typeof customFetch>[1]): Promise<DiscordConfig> => {
-
-  return customFetch<DiscordConfig>(getSaveDiscordConfigUrl(),
-  {
-    ...options,
-    method: 'PUT',
+    method: 'POST',
     headers: { 'Content-Type': 'application/json', ...options?.headers },
-    body: JSON.stringify(discordConfigInput)
+    body: JSON.stringify(monitoredWorkInput)
   }
 );}
 
@@ -469,11 +316,11 @@ export const saveDiscordConfig = async (discordConfigInput: DiscordConfigInput, 
 
 
 
-export const getSaveDiscordConfigMutationOptions = <TError = ErrorType<unknown>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof saveDiscordConfig>>, TError,{data: BodyType<DiscordConfigInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
-): UseMutationOptions<Awaited<ReturnType<typeof saveDiscordConfig>>, TError,{data: BodyType<DiscordConfigInput>}, TContext> => {
+export const getCreateMonitoredWorkMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createMonitoredWork>>, TError,{data: BodyType<MonitoredWorkInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof createMonitoredWork>>, TError,{data: BodyType<MonitoredWorkInput>}, TContext> => {
 
-const mutationKey = ['saveDiscordConfig'];
+const mutationKey = ['createMonitoredWork'];
 const {mutation: mutationOptions, request: requestOptions} = options ?
       options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
       options
@@ -483,10 +330,10 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
 
 
-      const mutationFn: MutationFunction<Awaited<ReturnType<typeof saveDiscordConfig>>, {data: BodyType<DiscordConfigInput>}> = (props) => {
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof createMonitoredWork>>, {data: BodyType<MonitoredWorkInput>}> = (props) => {
           const {data} = props ?? {};
 
-          return  saveDiscordConfig(data,requestOptions)
+          return  createMonitoredWork(data,requestOptions)
         }
 
 
@@ -496,38 +343,181 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
   return  { mutationFn, ...mutationOptions }}
 
-    export type SaveDiscordConfigMutationResult = NonNullable<Awaited<ReturnType<typeof saveDiscordConfig>>>
-    export type SaveDiscordConfigMutationBody = BodyType<DiscordConfigInput>
-    export type SaveDiscordConfigMutationError = ErrorType<unknown>
+    export type CreateMonitoredWorkMutationResult = NonNullable<Awaited<ReturnType<typeof createMonitoredWork>>>
+    export type CreateMonitoredWorkMutationBody = BodyType<MonitoredWorkInput>
+    export type CreateMonitoredWorkMutationError = ErrorType<unknown>
 
     /**
- * @summary Save bot channel and update settings
+ * @summary Add a work to monitor
  */
-export const useSaveDiscordConfig = <TError = ErrorType<unknown>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof saveDiscordConfig>>, TError,{data: BodyType<DiscordConfigInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+export const useCreateMonitoredWork = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createMonitoredWork>>, TError,{data: BodyType<MonitoredWorkInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
-        Awaited<ReturnType<typeof saveDiscordConfig>>,
+        Awaited<ReturnType<typeof createMonitoredWork>>,
         TError,
-        {data: BodyType<DiscordConfigInput>},
+        {data: BodyType<MonitoredWorkInput>},
         TContext
       > => {
-      return useMutation(getSaveDiscordConfigMutationOptions(options));
+      return useMutation(getCreateMonitoredWorkMutationOptions(options));
     }
 
-export const getSyncDiscordTableUrl = () => {
+export const getUpdateMonitoredWorkUrl = (id: number,) => {
 
 
 
 
-  return `/api/discord/sync`
+  return `/api/monitor/works/${id}`
 }
 
 /**
- * @summary Sync the current catalog to Discord now
+ * @summary Update a monitored work
  */
-export const syncDiscordTable = async ( options?: Parameters<typeof customFetch>[1]): Promise<SyncResult> => {
+export const updateMonitoredWork = async (id: number,
+    monitoredWorkUpdate: MonitoredWorkUpdate, options?: Parameters<typeof customFetch>[1]): Promise<MonitoredWork> => {
 
-  return customFetch<SyncResult>(getSyncDiscordTableUrl(),
+  return customFetch<MonitoredWork>(getUpdateMonitoredWorkUrl(id),
+  {
+    ...options,
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(monitoredWorkUpdate)
+  }
+);}
+
+
+
+
+
+export const getUpdateMonitoredWorkMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateMonitoredWork>>, TError,{id: number;data: BodyType<MonitoredWorkUpdate>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof updateMonitoredWork>>, TError,{id: number;data: BodyType<MonitoredWorkUpdate>}, TContext> => {
+
+const mutationKey = ['updateMonitoredWork'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof updateMonitoredWork>>, {id: number;data: BodyType<MonitoredWorkUpdate>}> = (props) => {
+          const {id,data} = props ?? {};
+
+          return  updateMonitoredWork(id,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type UpdateMonitoredWorkMutationResult = NonNullable<Awaited<ReturnType<typeof updateMonitoredWork>>>
+    export type UpdateMonitoredWorkMutationBody = BodyType<MonitoredWorkUpdate>
+    export type UpdateMonitoredWorkMutationError = ErrorType<void>
+
+    /**
+ * @summary Update a monitored work
+ */
+export const useUpdateMonitoredWork = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateMonitoredWork>>, TError,{id: number;data: BodyType<MonitoredWorkUpdate>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof updateMonitoredWork>>,
+        TError,
+        {id: number;data: BodyType<MonitoredWorkUpdate>},
+        TContext
+      > => {
+      return useMutation(getUpdateMonitoredWorkMutationOptions(options));
+    }
+
+export const getDeleteMonitoredWorkUrl = (id: number,) => {
+
+
+
+
+  return `/api/monitor/works/${id}`
+}
+
+/**
+ * @summary Delete a monitored work
+ */
+export const deleteMonitoredWork = async (id: number, options?: Parameters<typeof customFetch>[1]): Promise<void> => {
+
+  return customFetch<void>(getDeleteMonitoredWorkUrl(id),
+  {
+    ...options,
+    method: 'DELETE'
+
+
+  }
+);}
+
+
+
+
+
+export const getDeleteMonitoredWorkMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteMonitoredWork>>, TError,{id: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof deleteMonitoredWork>>, TError,{id: number}, TContext> => {
+
+const mutationKey = ['deleteMonitoredWork'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof deleteMonitoredWork>>, {id: number}> = (props) => {
+          const {id} = props ?? {};
+
+          return  deleteMonitoredWork(id,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type DeleteMonitoredWorkMutationResult = NonNullable<Awaited<ReturnType<typeof deleteMonitoredWork>>>
+
+    export type DeleteMonitoredWorkMutationError = ErrorType<void>
+
+    /**
+ * @summary Delete a monitored work
+ */
+export const useDeleteMonitoredWork = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteMonitoredWork>>, TError,{id: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof deleteMonitoredWork>>,
+        TError,
+        {id: number},
+        TContext
+      > => {
+      return useMutation(getDeleteMonitoredWorkMutationOptions(options));
+    }
+
+export const getRunMonitorNowUrl = () => {
+
+
+
+
+  return `/api/monitor/run`
+}
+
+/**
+ * @summary Run all monitors now
+ */
+export const runMonitorNow = async ( options?: Parameters<typeof customFetch>[1]): Promise<RunResult> => {
+
+  return customFetch<RunResult>(getRunMonitorNowUrl(),
   {
     ...options,
     method: 'POST'
@@ -540,11 +530,11 @@ export const syncDiscordTable = async ( options?: Parameters<typeof customFetch>
 
 
 
-export const getSyncDiscordTableMutationOptions = <TError = ErrorType<unknown>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof syncDiscordTable>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
-): UseMutationOptions<Awaited<ReturnType<typeof syncDiscordTable>>, TError,void, TContext> => {
+export const getRunMonitorNowMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof runMonitorNow>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof runMonitorNow>>, TError,void, TContext> => {
 
-const mutationKey = ['syncDiscordTable'];
+const mutationKey = ['runMonitorNow'];
 const {mutation: mutationOptions, request: requestOptions} = options ?
       options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
       options
@@ -554,10 +544,10 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
 
 
-      const mutationFn: MutationFunction<Awaited<ReturnType<typeof syncDiscordTable>>, void> = () => {
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof runMonitorNow>>, void> = () => {
 
 
-          return  syncDiscordTable(requestOptions)
+          return  runMonitorNow(requestOptions)
         }
 
 
@@ -567,38 +557,38 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
   return  { mutationFn, ...mutationOptions }}
 
-    export type SyncDiscordTableMutationResult = NonNullable<Awaited<ReturnType<typeof syncDiscordTable>>>
+    export type RunMonitorNowMutationResult = NonNullable<Awaited<ReturnType<typeof runMonitorNow>>>
 
-    export type SyncDiscordTableMutationError = ErrorType<unknown>
+    export type RunMonitorNowMutationError = ErrorType<unknown>
 
     /**
- * @summary Sync the current catalog to Discord now
+ * @summary Run all monitors now
  */
-export const useSyncDiscordTable = <TError = ErrorType<unknown>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof syncDiscordTable>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
+export const useRunMonitorNow = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof runMonitorNow>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
-        Awaited<ReturnType<typeof syncDiscordTable>>,
+        Awaited<ReturnType<typeof runMonitorNow>>,
         TError,
         void,
         TContext
       > => {
-      return useMutation(getSyncDiscordTableMutationOptions(options));
+      return useMutation(getRunMonitorNowMutationOptions(options));
     }
 
-export const getGetDiscordStatusUrl = () => {
+export const getListDiscordChannelsUrl = () => {
 
 
 
 
-  return `/api/discord/status`
+  return `/api/monitor/discord/channels`
 }
 
 /**
- * @summary Get bot synchronization status
+ * @summary List channels accessible to the bot
  */
-export const getDiscordStatus = async ( options?: Parameters<typeof customFetch>[1]): Promise<DiscordStatus> => {
+export const listDiscordChannels = async ( options?: Parameters<typeof customFetch>[1]): Promise<DiscordChannel[]> => {
 
-  return customFetch<DiscordStatus>(getGetDiscordStatusUrl(),
+  return customFetch<DiscordChannel[]>(getListDiscordChannelsUrl(),
   {
     ...options,
     method: 'GET'
@@ -611,45 +601,45 @@ export const getDiscordStatus = async ( options?: Parameters<typeof customFetch>
 
 
 
-export const getGetDiscordStatusQueryKey = () => {
+export const getListDiscordChannelsQueryKey = () => {
     return [
-    `/api/discord/status`
+    `/api/monitor/discord/channels`
     ] as const;
     }
 
 
-export const getGetDiscordStatusQueryOptions = <TData = Awaited<ReturnType<typeof getDiscordStatus>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getDiscordStatus>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+export const getListDiscordChannelsQueryOptions = <TData = Awaited<ReturnType<typeof listDiscordChannels>>, TError = ErrorType<void>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listDiscordChannels>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 ) => {
 
 const {query: queryOptions, request: requestOptions} = options ?? {};
 
-  const queryKey =  queryOptions?.queryKey ?? getGetDiscordStatusQueryKey();
+  const queryKey =  queryOptions?.queryKey ?? getListDiscordChannelsQueryKey();
 
 
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof getDiscordStatus>>> = ({ signal }) => getDiscordStatus({ signal, ...requestOptions });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listDiscordChannels>>> = ({ signal }) => listDiscordChannels({ signal, ...requestOptions });
 
 
 
 
 
-   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getDiscordStatus>>, TError, TData> & { queryKey: QueryKey }
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listDiscordChannels>>, TError, TData> & { queryKey: QueryKey }
 }
 
-export type GetDiscordStatusQueryResult = NonNullable<Awaited<ReturnType<typeof getDiscordStatus>>>
-export type GetDiscordStatusQueryError = ErrorType<unknown>
+export type ListDiscordChannelsQueryResult = NonNullable<Awaited<ReturnType<typeof listDiscordChannels>>>
+export type ListDiscordChannelsQueryError = ErrorType<void>
 
 
 /**
- * @summary Get bot synchronization status
+ * @summary List channels accessible to the bot
  */
 
-export function useGetDiscordStatus<TData = Awaited<ReturnType<typeof getDiscordStatus>>, TError = ErrorType<unknown>>(
-  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getDiscordStatus>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+export function useListDiscordChannels<TData = Awaited<ReturnType<typeof listDiscordChannels>>, TError = ErrorType<void>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listDiscordChannels>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
 
-  const queryOptions = getGetDiscordStatusQueryOptions(options)
+  const queryOptions = getListDiscordChannelsQueryOptions(options)
 
   const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
 
@@ -661,4 +651,152 @@ export function useGetDiscordStatus<TData = Awaited<ReturnType<typeof getDiscord
 
 
 
+
+export const getGetMonitorConfigUrl = () => {
+
+
+
+
+  return `/api/monitor/config`
+}
+
+/**
+ * @summary Get monitor configuration
+ */
+export const getMonitorConfig = async ( options?: Parameters<typeof customFetch>[1]): Promise<MonitorConfig> => {
+
+  return customFetch<MonitorConfig>(getGetMonitorConfigUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetMonitorConfigQueryKey = () => {
+    return [
+    `/api/monitor/config`
+    ] as const;
+    }
+
+
+export const getGetMonitorConfigQueryOptions = <TData = Awaited<ReturnType<typeof getMonitorConfig>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getMonitorConfig>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetMonitorConfigQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getMonitorConfig>>> = ({ signal }) => getMonitorConfig({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getMonitorConfig>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetMonitorConfigQueryResult = NonNullable<Awaited<ReturnType<typeof getMonitorConfig>>>
+export type GetMonitorConfigQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary Get monitor configuration
+ */
+
+export function useGetMonitorConfig<TData = Awaited<ReturnType<typeof getMonitorConfig>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getMonitorConfig>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetMonitorConfigQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getUpdateMonitorConfigUrl = () => {
+
+
+
+
+  return `/api/monitor/config`
+}
+
+/**
+ * @summary Update monitor configuration
+ */
+export const updateMonitorConfig = async (monitorConfigUpdate: MonitorConfigUpdate, options?: Parameters<typeof customFetch>[1]): Promise<MonitorConfig> => {
+
+  return customFetch<MonitorConfig>(getUpdateMonitorConfigUrl(),
+  {
+    ...options,
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(monitorConfigUpdate)
+  }
+);}
+
+
+
+
+
+export const getUpdateMonitorConfigMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateMonitorConfig>>, TError,{data: BodyType<MonitorConfigUpdate>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof updateMonitorConfig>>, TError,{data: BodyType<MonitorConfigUpdate>}, TContext> => {
+
+const mutationKey = ['updateMonitorConfig'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof updateMonitorConfig>>, {data: BodyType<MonitorConfigUpdate>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  updateMonitorConfig(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type UpdateMonitorConfigMutationResult = NonNullable<Awaited<ReturnType<typeof updateMonitorConfig>>>
+    export type UpdateMonitorConfigMutationBody = BodyType<MonitorConfigUpdate>
+    export type UpdateMonitorConfigMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Update monitor configuration
+ */
+export const useUpdateMonitorConfig = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateMonitorConfig>>, TError,{data: BodyType<MonitorConfigUpdate>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof updateMonitorConfig>>,
+        TError,
+        {data: BodyType<MonitorConfigUpdate>},
+        TContext
+      > => {
+      return useMutation(getUpdateMonitorConfigMutationOptions(options));
+    }
 

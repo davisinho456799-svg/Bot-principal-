@@ -9,103 +9,106 @@ export interface HealthStatus {
   status: string;
 }
 
-export type SeasonItemKind = typeof SeasonItemKind[keyof typeof SeasonItemKind];
+export type MonitoredWorkPlatform = typeof MonitoredWorkPlatform[keyof typeof MonitoredWorkPlatform];
 
 
-export const SeasonItemKind = {
-  anime: 'anime',
-  manga: 'manga',
+export const MonitoredWorkPlatform = {
+  lezhin: 'lezhin',
+  toomics: 'toomics',
+  toptoon: 'toptoon',
 } as const;
 
-export type SeasonItemStatus = typeof SeasonItemStatus[keyof typeof SeasonItemStatus];
-
-
-export const SeasonItemStatus = {
-  airing: 'airing',
-  upcoming: 'upcoming',
-  publishing: 'publishing',
-} as const;
-
-export interface SeasonItem {
+export interface MonitoredWork {
   id: number;
   title: string;
-  kind: SeasonItemKind;
-  status: SeasonItemStatus;
-  imageUrl: string;
-  url: string;
+  platform: MonitoredWorkPlatform;
+  listingUrl: string;
+  active: boolean;
+  chaptersSeen: number;
   /** @nullable */
-  score?: number | null;
+  lastCheckedAt: string | null;
   /** @nullable */
-  episodes?: number | null;
-  /** @nullable */
-  volumes?: number | null;
-  /** @nullable */
-  synopsis?: string | null;
-  genres?: string[];
+  lastPublishedAt: string | null;
+  lastStatus?: string;
 }
 
-export interface SeasonCatalog {
-  season: string;
-  year: number;
-  anime: SeasonItem[];
-  manga: SeasonItem[];
-  updatedAt: string;
+export type MonitoredWorkInputPlatform = typeof MonitoredWorkInputPlatform[keyof typeof MonitoredWorkInputPlatform];
+
+
+export const MonitoredWorkInputPlatform = {
+  lezhin: 'lezhin',
+  toomics: 'toomics',
+  toptoon: 'toptoon',
+} as const;
+
+export interface MonitoredWorkInput {
+  /** @minLength 1 */
+  title: string;
+  platform: MonitoredWorkInputPlatform;
+  /** @minLength 1 */
+  listingUrl: string;
+  active?: boolean;
 }
 
-export interface DiscordGuild {
-  id: string;
-  name: string;
+export interface MonitoredWorkUpdate {
+  /** @minLength 1 */
+  title?: string;
+  /** @minLength 1 */
+  listingUrl?: string;
+  active?: boolean;
+}
+
+export interface ActivityItem {
+  id: number;
+  workTitle: string;
+  platform: string;
+  chapterCount: number;
+  status: string;
+  createdAt: string;
+}
+
+export interface MonitorOverview {
+  activeWorks: number;
+  chaptersTracked: number;
+  postsSent: number;
   /** @nullable */
-  iconUrl?: string | null;
+  lastRunAt: string | null;
+  /** @nullable */
+  nextRunAt: string | null;
+  recentActivity: ActivityItem[];
+}
+
+export interface RunResult {
+  status: string;
+  worksChecked: number;
+  chaptersFound: number;
+  postsSent: number;
 }
 
 export interface DiscordChannel {
   id: string;
   name: string;
-  type: string;
-}
-
-export interface DiscordConfig {
-  /** @nullable */
-  guildId: string | null;
-  /** @nullable */
-  channelId: string | null;
-  intervalMinutes: number;
-  includeAnime: boolean;
-  includeManga: boolean;
-  enabled: boolean;
-  /** @nullable */
-  lastSyncedAt?: string | null;
-  /** @nullable */
-  messageId?: string | null;
-}
-
-export interface DiscordConfigInput {
-  /** @minLength 1 */
   guildId: string;
-  /** @minLength 1 */
-  channelId: string;
-  /**
-     * @minimum 15
-     * @maximum 10080
-     */
-  intervalMinutes: number;
-  includeAnime: boolean;
-  includeManga: boolean;
-  enabled: boolean;
+  guildName: string;
 }
 
-export interface SyncResult {
-  success: boolean;
-  message: string;
-  updatedAt: string;
-}
-
-export interface DiscordStatus {
-  configured: boolean;
-  connected: boolean;
-  enabled: boolean;
+export interface MonitorConfig {
   /** @nullable */
-  lastSyncedAt: string | null;
+  discordChannelId: string | null;
+  /** @nullable */
+  discordChannelName: string | null;
+  intervalMinutes: number;
+}
+
+export interface MonitorConfigUpdate {
+  /** @nullable */
+  discordChannelId?: string | null;
+  /** @nullable */
+  discordChannelName?: string | null;
+  /**
+     * @minimum 5
+     * @maximum 1440
+     */
+  intervalMinutes?: number;
 }
 

@@ -1,38 +1,24 @@
-FROM node:22-alpine AS builder
+FROM node:22-bookworm-slim AS builder
 
 WORKDIR /app
 
-RUN corepack enable && corepack prepare pnpm@latest --activate
+RUN corepack enable && corepack prepare pnpm@10.26.1 --activate
 
-# Copy workspace config
-COPY pnpm-workspace.yaml package.json pnpm-lock.yaml* ./
+COPY . .
 
-# Copy all packages needed for build
-COPY lib/ ./lib/
-COPY artifacts/api-server/ ./artifacts/api-server/
+RUN pnpm install --frozen-lockfile
+RUN pnpm run railway:build
 
-# Install dependencies
-RUN pnpm install --frozen-lockfile --ignore-scripts
-
-# Build the bot
-RUN pnpm --filter @workspace/api-server run build
-
-# ---- Runtime stage ----
-FROM node:22-alpine
+FROM node:22-bookworm-slim
 
 WORKDIR /app
 
-# O bundle mantém o cliente Lavalink Riffy externo; preserve as dependências
-# instaladas para que Riffy consiga carregar jsdom e seus arquivos relativos.
+ENV NODE_ENV=production
+ENV SERVE_FRONTEND=true
+
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/artifacts/api-server/node_modules ./artifacts/api-server/node_modules
-
-# yt-dlp + ffmpeg para streaming de áudio do YouTube sem bloqueio de IP
-# Instala ffmpeg e a versão mais recente do yt-dlp via pip (apk pode ter versão antiga)
-RUN apk add --no-cache ffmpeg python3 py3-pip && \
-    pip3 install --no-cache-dir --break-system-packages yt-dlp
-
-# Preserva o caminho exato usado no build (pino embute o path absoluto dos workers)
 COPY --from=builder /app/artifacts/api-server/dist ./artifacts/api-server/dist
+COPY --from=builder /app/artifacts/chapter-monitor/dist ./artifacts/chapter-monitor/dist
 
 CMD ["node", "--enable-source-maps", "./artifacts/api-server/dist/index.mjs"]
