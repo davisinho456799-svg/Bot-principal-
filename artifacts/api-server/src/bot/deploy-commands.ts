@@ -9,22 +9,46 @@ import { data as favoritosData } from "./commands/favoritos.js";
 import { data as noticiasData } from "./commands/noticias.js";
 import { data as temporadaData } from "./commands/temporada.js";
 import { data as statusData } from "./commands/status.js";
+import { data as playData } from "./commands/play.js";
+import { data as pauseData } from "./commands/pause.js";
+import { data as pularData } from "./commands/pular.js";
+import { data as cancelarData } from "./commands/cancelar.js";
+import { data as searchData } from "./commands/search.js";
+import { data as topData } from "./commands/top.js";
+import { data as recomendarData } from "./commands/recomendar.js";
+import { data as aleatorioData } from "./commands/aleatorio.js";
+import { data as lancamentosData } from "./commands/lancamentos.js";
+import { data as compararData } from "./commands/comparar.js";
+import { data as notificarData } from "./commands/notificar.js";
+import { data as rankingData } from "./commands/ranking.js";
+import { data as perfilData } from "./commands/perfil.js";
+import { data as similarData } from "./commands/similar.js";
+import { data as identificarData } from "./commands/identificar.js";
+import { data as temasData } from "./commands/temas.js";
+import { data as filmeData } from "./commands/filme.js";
+import { data as calendarioData } from "./commands/calendario.js";
+import { data as calendario18Data } from "./commands/calendario18.js";
+import { configurarData, atualizarData, statusData as temporadaStatusData } from "./season-management.js";
+import { data as historicoData } from "./commands/historico.js";
+import { data as verificarData } from "./commands/verificar.js";
+import { data as assinarData } from "./commands/assinar.js";
+import { data as assinar18Data } from "./commands/assinar18.js";
+import { data as adminData } from "./commands/admin.js";
 import { logger } from "../lib/logger.js";
 import { manhwaCommandDefinition } from "../services/discord-command-service.js";
 
 export async function deployCommands(clientId: string, token: string) {
   const commands = [
-    ajudaData.toJSON(),
-    autorData.toJSON(),
-    animeData.toJSON(),
-    mangaData.toJSON(),
-    buscarData.toJSON(),
-    listaData.toJSON(),
-    favoritosData.toJSON(),
-    noticiasData.toJSON(),
-    temporadaData.toJSON(),
-    statusData.toJSON(),
-    manhwaCommandDefinition,
+    playData.toJSON(), pauseData.toJSON(), pularData.toJSON(), cancelarData.toJSON(),
+    searchData.toJSON(), topData.toJSON(), recomendarData.toJSON(), ajudaData.toJSON(),
+    aleatorioData.toJSON(), lancamentosData.toJSON(), favoritosData.toJSON(), compararData.toJSON(),
+    autorData.toJSON(), notificarData.toJSON(), listaData.toJSON(), rankingData.toJSON(),
+    perfilData.toJSON(), similarData.toJSON(), buscarData.toJSON(), animeData.toJSON(),
+    noticiasData.toJSON(), identificarData.toJSON(), temasData.toJSON(), filmeData.toJSON(),
+    mangaData.toJSON(), calendarioData.toJSON(), calendario18Data.toJSON(), temporadaData.toJSON(),
+    configurarData.toJSON(), atualizarData.toJSON(), temporadaStatusData.toJSON(), statusData.toJSON(),
+    historicoData.toJSON(), verificarData.toJSON(), assinarData.toJSON(), assinar18Data.toJSON(),
+    adminData.toJSON(), manhwaCommandDefinition,
   ];
   const rest = new REST().setToken(token);
 
