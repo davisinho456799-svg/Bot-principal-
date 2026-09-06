@@ -11,8 +11,7 @@ import { db } from "@workspace/db";
 import { monitoredWorksTable } from "@workspace/db/schema";
 import { logger } from "../lib/logger";
 
-const commandDefinitions = [
-  new SlashCommandBuilder()
+export const manhwaCommandDefinition = new SlashCommandBuilder()
     .setName("manhwa")
     .setDescription("Gerencia os manhwas monitorados")
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild.toString())
@@ -46,8 +45,10 @@ const commandDefinitions = [
     )
     .addSubcommand((command) =>
       command.setName("listar").setDescription("Lista os manhwas ativos"),
-    ),
-].map((command) => command.toJSON());
+    )
+    .toJSON();
+
+const commandDefinitions = [manhwaCommandDefinition];
 
 type Platform = "lezhin" | "toomics" | "toptoon";
 
@@ -158,7 +159,7 @@ async function handleList(interaction: ChatInputCommandInteraction) {
   });
 }
 
-async function handleInteraction(interaction: ChatInputCommandInteraction) {
+export async function executeManhwaCommand(interaction: ChatInputCommandInteraction) {
   await interaction.deferReply({ ephemeral: true });
   const subcommand = interaction.options.getSubcommand();
   if (subcommand === "adicionar") {
@@ -198,7 +199,7 @@ export function startDiscordCommandBot() {
   });
   client.on(Events.InteractionCreate, (interaction) => {
     if (!interaction.isChatInputCommand() || interaction.commandName !== "manhwa") return;
-    void handleInteraction(interaction).catch((error) => {
+    void executeManhwaCommand(interaction).catch((error) => {
       logger.error({ err: error }, "Discord manhwa command failed");
       void replyError(interaction, "Não foi possível concluir o comando agora.");
     });
