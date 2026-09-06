@@ -114,9 +114,8 @@ async function handleAdd(interaction: ChatInputCommandInteraction) {
     .where(eq(monitoredWorksTable.listingUrl, listingUrl))
     .limit(1);
   if (existing) {
-    await interaction.reply({
+    await interaction.editReply({
       content: `ℹ️ **${existing.title}** já está cadastrado como ${existing.active ? "ativo" : "pausado"}.\n${existing.listingUrl}`,
-      ephemeral: true,
     });
     return;
   }
@@ -127,14 +126,13 @@ async function handleAdd(interaction: ChatInputCommandInteraction) {
     .values({ title, platform, listingUrl, active: true })
     .returning();
 
-  await interaction.reply({
+  await interaction.editReply({
     content: [
       `✅ **${work.title}** agora está sendo monitorado.`,
       `Plataforma: ${platform}`,
       `A primeira verificação será feita na próxima rodada e criará a linha de base sem repostar o histórico.`,
       `ID da obra: ${work.id}`,
     ].join("\n"),
-    ephemeral: true,
   });
 }
 
@@ -146,9 +144,8 @@ async function handleList(interaction: ChatInputCommandInteraction) {
     .orderBy(desc(monitoredWorksTable.createdAt));
 
   if (!works.length) {
-    await interaction.reply({
+    await interaction.editReply({
       content: "Ainda não há manhwas ativos. Use `/manhwa adicionar` para cadastrar o primeiro.",
-      ephemeral: true,
     });
     return;
   }
@@ -156,13 +153,13 @@ async function handleList(interaction: ChatInputCommandInteraction) {
   const lines = works.map(
     (work) => `• **${work.title}** · ${work.platform} · ID ${work.id}\n  ${work.listingUrl}`,
   );
-  await interaction.reply({
+  await interaction.editReply({
     content: `📚 **Manhwas monitorados (${works.length})**\n${lines.join("\n")}`.slice(0, 1900),
-    ephemeral: true,
   });
 }
 
 async function handleInteraction(interaction: ChatInputCommandInteraction) {
+  await interaction.deferReply({ ephemeral: true });
   const subcommand = interaction.options.getSubcommand();
   if (subcommand === "adicionar") {
     await handleAdd(interaction);
