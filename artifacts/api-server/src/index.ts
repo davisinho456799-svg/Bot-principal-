@@ -4,6 +4,7 @@ import { pool, db } from "@workspace/db";
 import { monitorConfigTable } from "@workspace/db/schema";
 import { runMonitor } from "./services/monitor-service";
 import { startBot } from "./bot/index.js";
+import { startDiscordScheduler } from "./discord-scheduler.js";
 
 const rawPort = process.env["PORT"];
 
@@ -11,6 +12,7 @@ async function startApplication() {
   try {
     await pool.query("select 1");
     logger.info("Conexão com o PostgreSQL confirmada");
+    startDiscordScheduler();
   } catch (error) {
     logger.error(
       { err: error },
