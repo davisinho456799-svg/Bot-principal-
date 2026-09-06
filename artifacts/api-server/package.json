@@ -19,7 +19,6 @@
     "discord.js": "^14.27.0",
     "drizzle-orm": "catalog:",
     "express": "^5.2.1",
-    "got-scraping": "^3.2.15",
     "jsonwebtoken": "^9.0.3",
     "libsodium-wrappers": "^0.8.4",
     "opusscript": "^0.1.1",
