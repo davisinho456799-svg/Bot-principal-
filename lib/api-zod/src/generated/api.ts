@@ -133,13 +133,16 @@ export const RunMonitorNowResponse = zod.object({
 
 
 /**
- * @summary List channels accessible to the bot
+ * @summary List text channels in a server
  */
+export const ListDiscordChannelsParams = zod.object({
+  "guildId": zod.coerce.string()
+})
+
 export const ListDiscordChannelsResponseItem = zod.object({
   "id": zod.string(),
   "name": zod.string(),
-  "guildId": zod.string(),
-  "guildName": zod.string()
+  "type": zod.string()
 })
 export const ListDiscordChannelsResponse = zod.array(ListDiscordChannelsResponseItem)
 
@@ -175,3 +178,119 @@ export const UpdateMonitorConfigResponse = zod.object({
 })
 
 
+
+
+/**
+ * @summary Get current anime and manga season
+ */
+export const GetCurrentSeasonResponse = zod.object({
+  "season": zod.string(),
+  "year": zod.number(),
+  "anime": zod.array(zod.object({
+  "id": zod.number(),
+  "title": zod.string(),
+  "kind": zod.enum(['anime', 'manga']),
+  "status": zod.enum(['airing', 'upcoming', 'publishing']),
+  "imageUrl": zod.string(),
+  "url": zod.string(),
+  "score": zod.number().nullish(),
+  "episodes": zod.number().nullish(),
+  "volumes": zod.number().nullish(),
+  "synopsis": zod.string().nullish(),
+  "genres": zod.array(zod.string()).optional()
+})),
+  "manga": zod.array(zod.object({
+  "id": zod.number(),
+  "title": zod.string(),
+  "kind": zod.enum(['anime', 'manga']),
+  "status": zod.enum(['airing', 'upcoming', 'publishing']),
+  "imageUrl": zod.string(),
+  "url": zod.string(),
+  "score": zod.number().nullish(),
+  "episodes": zod.number().nullish(),
+  "volumes": zod.number().nullish(),
+  "synopsis": zod.string().nullish(),
+  "genres": zod.array(zod.string()).optional()
+})),
+  "updatedAt": zod.coerce.date()
+})
+
+
+/**
+ * @summary List servers available to the bot
+ */
+export const ListDiscordGuildsResponseItem = zod.object({
+  "id": zod.string(),
+  "name": zod.string(),
+  "iconUrl": zod.string().nullish()
+})
+export const ListDiscordGuildsResponse = zod.array(ListDiscordGuildsResponseItem)
+
+
+
+
+/**
+ * @summary Get saved bot configuration
+ */
+export const GetDiscordConfigResponse = zod.object({
+  "guildId": zod.string().nullable(),
+  "channelId": zod.string().nullable(),
+  "intervalMinutes": zod.number(),
+  "includeAnime": zod.boolean(),
+  "includeManga": zod.boolean(),
+  "enabled": zod.boolean(),
+  "lastSyncedAt": zod.coerce.date().nullish(),
+  "messageId": zod.string().nullish()
+})
+
+
+/**
+ * @summary Save bot channel and update settings
+ */
+
+
+export const saveDiscordConfigBodyIntervalMinutesMin = 15;
+export const saveDiscordConfigBodyIntervalMinutesMax = 10080;
+
+
+
+export const SaveDiscordConfigBody = zod.object({
+  "guildId": zod.string().min(1),
+  "channelId": zod.string().min(1),
+  "intervalMinutes": zod.number().min(saveDiscordConfigBodyIntervalMinutesMin).max(saveDiscordConfigBodyIntervalMinutesMax),
+  "includeAnime": zod.boolean(),
+  "includeManga": zod.boolean(),
+  "enabled": zod.boolean()
+})
+
+export const SaveDiscordConfigResponse = zod.object({
+  "guildId": zod.string().nullable(),
+  "channelId": zod.string().nullable(),
+  "intervalMinutes": zod.number(),
+  "includeAnime": zod.boolean(),
+  "includeManga": zod.boolean(),
+  "enabled": zod.boolean(),
+  "lastSyncedAt": zod.coerce.date().nullish(),
+  "messageId": zod.string().nullish()
+})
+
+
+/**
+ * @summary Sync the current catalog to Discord now
+ */
+export const SyncDiscordTableResponse = zod.object({
+  "success": zod.boolean(),
+  "message": zod.string(),
+  "updatedAt": zod.coerce.date()
+})
+
+
+/**
+ * @summary Get bot synchronization status
+ */
+export const GetDiscordStatusResponse = zod.object({
+  "configured": zod.boolean(),
+  "connected": zod.boolean(),
+  "enabled": zod.boolean(),
+  "lastSyncedAt": zod.coerce.date().nullable()
+})
