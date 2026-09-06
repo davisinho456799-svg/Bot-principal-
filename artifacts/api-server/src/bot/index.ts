@@ -17,6 +17,31 @@ import * as favoritosCommand from "./commands/favoritos.js";
 import * as noticiasCommand from "./commands/noticias.js";
 import * as temporadaCommand from "./commands/temporada.js";
 import * as statusCommand from "./commands/status.js";
+import * as playCommand from "./commands/play.js";
+import * as pauseCommand from "./commands/pause.js";
+import * as pularCommand from "./commands/pular.js";
+import * as cancelarCommand from "./commands/cancelar.js";
+import * as searchCommand from "./commands/search.js";
+import * as topCommand from "./commands/top.js";
+import * as recomendarCommand from "./commands/recomendar.js";
+import * as aleatorioCommand from "./commands/aleatorio.js";
+import * as lancamentosCommand from "./commands/lancamentos.js";
+import * as compararCommand from "./commands/comparar.js";
+import * as notificarCommand from "./commands/notificar.js";
+import * as rankingCommand from "./commands/ranking.js";
+import * as perfilCommand from "./commands/perfil.js";
+import * as similarCommand from "./commands/similar.js";
+import * as identificarCommand from "./commands/identificar.js";
+import * as temasCommand from "./commands/temas.js";
+import * as filmeCommand from "./commands/filme.js";
+import * as calendarioCommand from "./commands/calendario.js";
+import * as calendario18Command from "./commands/calendario18.js";
+import { configurarCommand, atualizarCommand, statusCommand as temporadaStatusCommand } from "./season-management.js";
+import * as historicoCommand from "./commands/historico.js";
+import * as verificarCommand from "./commands/verificar.js";
+import * as assinarCommand from "./commands/assinar.js";
+import * as assinar18Command from "./commands/assinar18.js";
+import * as adminCommand from "./commands/admin.js";
 import { startNotificacaoService, startWeeklyService } from "./notificacao-service.js";
 import { cleanupDuplicateAliases } from "./unified.js";
 import { logUsage } from "./usage-logger.js";
@@ -37,16 +62,43 @@ type Command = {
 };
 
 const commands = new Map<string, Command>([
+  [playCommand.data.name, playCommand],
+  [pauseCommand.data.name, pauseCommand],
+  [pularCommand.data.name, pularCommand],
+  [cancelarCommand.data.name, cancelarCommand],
+  [searchCommand.data.name, searchCommand],
+  [topCommand.data.name, topCommand],
+  [recomendarCommand.data.name, recomendarCommand],
   [ajudaCommand.data.name, ajudaCommand],
-  [autorCommand.data.name, autorCommand],
-  [animeCommand.data.name, animeCommand],
-  [mangaCommand.data.name, mangaCommand],
-  [buscarCommand.data.name, buscarCommand],
-  [listaCommand.data.name, listaCommand],
+  [aleatorioCommand.data.name, aleatorioCommand],
+  [lancamentosCommand.data.name, lancamentosCommand],
   [favoritosCommand.data.name, favoritosCommand],
+  [compararCommand.data.name, compararCommand],
+  [autorCommand.data.name, autorCommand],
+  [notificarCommand.data.name, notificarCommand],
+  [listaCommand.data.name, listaCommand],
+  [rankingCommand.data.name, rankingCommand],
+  [perfilCommand.data.name, perfilCommand],
+  [similarCommand.data.name, similarCommand],
+  [buscarCommand.data.name, buscarCommand],
+  [animeCommand.data.name, animeCommand],
   [noticiasCommand.data.name, noticiasCommand],
+  [identificarCommand.data.name, identificarCommand],
+  [temasCommand.data.name, temasCommand],
+  [filmeCommand.data.name, filmeCommand],
+  [mangaCommand.data.name, mangaCommand],
+  [calendarioCommand.data.name, calendarioCommand],
+  [calendario18Command.data.name, calendario18Command],
   [temporadaCommand.data.name, temporadaCommand],
+  [configurarCommand.data.name, configurarCommand],
+  [atualizarCommand.data.name, atualizarCommand],
+  [temporadaStatusCommand.data.name, temporadaStatusCommand],
   [statusCommand.data.name, statusCommand],
+  [historicoCommand.data.name, historicoCommand],
+  [verificarCommand.data.name, verificarCommand],
+  [assinarCommand.data.name, assinarCommand],
+  [assinar18Command.data.name, assinar18Command],
+  [adminCommand.data.name, adminCommand],
   [manhwaCommandDefinition.name, { data: manhwaCommandDefinition, execute: executeManhwaCommand }],
 ]);
 
