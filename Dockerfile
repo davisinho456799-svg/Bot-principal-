@@ -19,9 +19,12 @@ FROM node:22-bookworm-slim
 
 WORKDIR /app
 
+RUN corepack enable && corepack prepare pnpm@10.26.1 --activate
+
 ENV NODE_ENV=production
 ENV SERVE_FRONTEND=true
 
+COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/artifacts/api-server/node_modules ./artifacts/api-server/node_modules
 COPY --from=builder /app/artifacts/api-server/dist ./artifacts/api-server/dist
