@@ -8,7 +8,7 @@
     "typecheck:libs": "tsc --build",
     "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck",
     "railway:build": "NODE_ENV=production PORT=4173 BASE_PATH=/ pnpm --filter @workspace/chapter-monitor run build && pnpm --filter @workspace/api-server run build",
-    "railway:start": "NODE_ENV=production SERVE_FRONTEND=true pnpm --filter @workspace/api-server run start"
+    "railway:start": "NODE_ENV=production SERVE_FRONTEND=true node --enable-source-maps ./artifacts/api-server/dist/index.mjs"
   },
   "private": true,
   "dependencies": {
