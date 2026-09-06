@@ -6,6 +6,10 @@ RUN corepack enable && corepack prepare pnpm@10.26.1 --activate
 
 COPY . .
 
+RUN test -f .railway/chapter-monitor-source.tgz.b64 \
+  && base64 -d .railway/chapter-monitor-source.tgz.b64 | tar -xzf - -C /app \
+  && rm -f .railway/chapter-monitor-source.tgz.b64
+
 RUN pnpm install --frozen-lockfile
 RUN pnpm run railway:build \
   && test -f /app/artifacts/chapter-monitor/dist/public/index.html \
