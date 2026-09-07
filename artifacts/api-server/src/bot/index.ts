@@ -48,7 +48,7 @@ import type { StatusLeitura } from "@workspace/db";
 import { recordBotError } from "./error-log.js";
 import {
   executeManhwaCommand,
-  manhwaCommandDefinition,
+  monitorCommandDefinition,
 } from "../services/discord-command-service.js";
 
 type Command = {
@@ -91,7 +91,7 @@ const commands = new Map<string, Command>([
   [assinarCommand.data.name, assinarCommand],
   [assinar18Command.data.name, assinar18Command],
   [adminCommand.data.name, adminCommand],
-  [manhwaCommandDefinition.name, { data: manhwaCommandDefinition, execute: executeManhwaCommand }],
+  [monitorCommandDefinition.name, { data: monitorCommandDefinition, execute: executeManhwaCommand }],
 ]);
 
 export async function startBot() {
@@ -264,6 +264,8 @@ export async function startBot() {
         } catch {
           // Autocomplete silently falha — nunca responder com erro visível
         }
+      } else {
+        await interaction.respond([]).catch(() => null);
       }
       return;
     }
@@ -271,7 +273,13 @@ export async function startBot() {
     if (!interaction.isChatInputCommand()) return;
 
     const command = commands.get(interaction.commandName);
-    if (!command) return;
+    if (!command) {
+      await interaction.reply({
+        content: "⚠️ Este comando está desatualizado. Aguarde a sincronização dos comandos do bot.",
+        ephemeral: true,
+      }).catch(() => null);
+      return;
+    }
 
     // Log de uso (fire-and-forget, nunca bloqueia o comando)
     void logUsage({

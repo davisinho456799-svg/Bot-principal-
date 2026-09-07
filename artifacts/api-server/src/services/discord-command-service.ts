@@ -11,8 +11,8 @@ import { db } from "@workspace/db";
 import { monitoredWorksTable } from "@workspace/db/schema";
 import { logger } from "../lib/logger";
 
-export const manhwaCommandDefinition = new SlashCommandBuilder()
-    .setName("manhwa")
+export const monitorCommandDefinition = new SlashCommandBuilder()
+    .setName("monitor")
     .setDescription("Gerencia os manhwas monitorados")
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild.toString())
     .addSubcommand((command) =>
@@ -48,7 +48,7 @@ export const manhwaCommandDefinition = new SlashCommandBuilder()
     )
     .toJSON();
 
-const commandDefinitions = [manhwaCommandDefinition];
+const commandDefinitions = [monitorCommandDefinition];
 
 type Platform = "lezhin" | "toomics" | "toptoon";
 
@@ -146,7 +146,7 @@ async function handleList(interaction: ChatInputCommandInteraction) {
 
   if (!works.length) {
     await interaction.editReply({
-      content: "Ainda não há manhwas ativos. Use `/manhwa adicionar` para cadastrar o primeiro.",
+      content: "Ainda não há manhwas ativos. Use `/monitor adicionar` para cadastrar o primeiro.",
     });
     return;
   }
@@ -180,7 +180,7 @@ async function registerCommands(client: Client<true>) {
   await Promise.all(guilds.map((guild) => guild!.commands.set(commandDefinitions)));
   logger.info(
     { guildCount: guilds.length, configuredGuildId: configuredGuildId ?? null },
-    "Discord manhwa commands registered",
+    "Discord monitor commands registered",
   );
 }
 
@@ -198,9 +198,9 @@ export function startDiscordCommandBot() {
     });
   });
   client.on(Events.InteractionCreate, (interaction) => {
-    if (!interaction.isChatInputCommand() || interaction.commandName !== "manhwa") return;
+    if (!interaction.isChatInputCommand() || interaction.commandName !== "monitor") return;
     void executeManhwaCommand(interaction).catch((error) => {
-      logger.error({ err: error }, "Discord manhwa command failed");
+      logger.error({ err: error }, "Discord monitor command failed");
       void replyError(interaction, "Não foi possível concluir o comando agora.");
     });
   });

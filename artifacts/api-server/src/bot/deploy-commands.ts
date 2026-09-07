@@ -31,7 +31,7 @@ import { data as assinarData } from "./commands/assinar.js";
 import { data as assinar18Data } from "./commands/assinar18.js";
 import { data as adminData } from "./commands/admin.js";
 import { logger } from "../lib/logger.js";
-import { manhwaCommandDefinition } from "../services/discord-command-service.js";
+import { monitorCommandDefinition } from "../services/discord-command-service.js";
 
 export async function deployCommands(clientId: string, token: string) {
   const commands = [
@@ -43,7 +43,7 @@ export async function deployCommands(clientId: string, token: string) {
     mangaData.toJSON(), calendarioData.toJSON(), calendario18Data.toJSON(), temporadaData.toJSON(),
     configurarData.toJSON(), atualizarData.toJSON(), temporadaStatusData.toJSON(), statusData.toJSON(),
     historicoData.toJSON(), verificarData.toJSON(), assinarData.toJSON(), assinar18Data.toJSON(),
-    adminData.toJSON(), manhwaCommandDefinition,
+    adminData.toJSON(), monitorCommandDefinition,
   ];
   const rest = new REST().setToken(token);
 
