@@ -17,10 +17,6 @@ import * as favoritosCommand from "./commands/favoritos.js";
 import * as noticiasCommand from "./commands/noticias.js";
 import * as temporadaCommand from "./commands/temporada.js";
 import * as statusCommand from "./commands/status.js";
-import * as playCommand from "./commands/play.js";
-import * as pauseCommand from "./commands/pause.js";
-import * as pularCommand from "./commands/pular.js";
-import * as cancelarCommand from "./commands/cancelar.js";
 import * as searchCommand from "./commands/search.js";
 import * as topCommand from "./commands/top.js";
 import * as recomendarCommand from "./commands/recomendar.js";
@@ -62,10 +58,6 @@ type Command = {
 };
 
 const commands = new Map<string, Command>([
-  [playCommand.data.name, playCommand],
-  [pauseCommand.data.name, pauseCommand],
-  [pularCommand.data.name, pularCommand],
-  [cancelarCommand.data.name, cancelarCommand],
   [searchCommand.data.name, searchCommand],
   [topCommand.data.name, topCommand],
   [recomendarCommand.data.name, recomendarCommand],
