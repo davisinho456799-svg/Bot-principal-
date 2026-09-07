@@ -177,9 +177,10 @@ export async function getComickBySlug(slug: string): Promise<ComickResult | null
       `${BASE}/comic/${encodeURIComponent(slug)}`,
     );
 
-    // Recuperação após 404: o slug pode ter mudado por renomeação da obra.
-    // Tenta localizar a obra via busca e confirma o resultado pelo título/slug.
-    if (response.status === 404) {
+    // O endpoint de detalhes pode retornar 404 ou ser bloqueado pelo Cloudflare
+    // (403), enquanto a busca continua disponível. Nesse caso, usa o candidato
+    // retornado pela busca; ele já traz os campos necessários para o comando.
+    if (response.status < 200 || response.status >= 300) {
       const query = slugToQuery(slug);
       const candidates = await searchComickAny(query);
 
@@ -197,11 +198,10 @@ export async function getComickBySlug(slug: string): Promise<ComickResult | null
       // Exige pontuação mínima de 2 para evitar falsos positivos
       if (bestScore < 2 || !bestCandidate?.slug) return null;
 
-      // Consulta o detalhe completo usando o slug/hid atualizado
-      return await fetchComicDetail(bestCandidate.hid ?? bestCandidate.slug);
+      // Tenta enriquecer pelo detalhe, mas não perde o resultado se o endpoint
+      // estiver bloqueado ou indisponível.
+      return (await fetchComicDetail(bestCandidate.hid ?? bestCandidate.slug)) ?? bestCandidate;
     }
-
-    if (response.status < 200 || response.status >= 300) return null;
 
     const json = parseComickJson<{
       comic?: ComickResult;
