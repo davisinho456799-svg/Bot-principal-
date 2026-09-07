@@ -9,10 +9,6 @@ import { data as favoritosData } from "./commands/favoritos.js";
 import { data as noticiasData } from "./commands/noticias.js";
 import { data as temporadaData } from "./commands/temporada.js";
 import { data as statusData } from "./commands/status.js";
-import { data as playData } from "./commands/play.js";
-import { data as pauseData } from "./commands/pause.js";
-import { data as pularData } from "./commands/pular.js";
-import { data as cancelarData } from "./commands/cancelar.js";
 import { data as searchData } from "./commands/search.js";
 import { data as topData } from "./commands/top.js";
 import { data as recomendarData } from "./commands/recomendar.js";
@@ -39,7 +35,6 @@ import { manhwaCommandDefinition } from "../services/discord-command-service.js"
 
 export async function deployCommands(clientId: string, token: string) {
   const commands = [
-    playData.toJSON(), pauseData.toJSON(), pularData.toJSON(), cancelarData.toJSON(),
     searchData.toJSON(), topData.toJSON(), recomendarData.toJSON(), ajudaData.toJSON(),
     aleatorioData.toJSON(), lancamentosData.toJSON(), favoritosData.toJSON(), compararData.toJSON(),
     autorData.toJSON(), notificarData.toJSON(), listaData.toJSON(), rankingData.toJSON(),
