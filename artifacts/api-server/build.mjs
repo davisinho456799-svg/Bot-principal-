@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build as esbuild } from "esbuild";
 import esbuildPluginPino from "esbuild-plugin-pino";
-import { rm } from "node:fs/promises";
+import { cp, rm } from "node:fs/promises";
 
 // Plugins (e.g. 'esbuild-plugin-pino') may use `require` to resolve dependencies
 globalThis.require = createRequire(import.meta.url);
@@ -119,6 +119,18 @@ globalThis.__dirname = __bannerPath.dirname(globalThis.__filename);
     `,
     },
   });
+
+  // got-scraping/header-generator lê estes arquivos em runtime.
+  // Sem copiá-los, o Railway falha com ENOENT para headers-order.json.
+  const gotScrapingDir = path.dirname(globalThis.require.resolve("got-scraping"));
+  const headerGeneratorEntry = globalThis.require.resolve("header-generator", {
+    paths: [gotScrapingDir],
+  });
+  await cp(
+    path.join(path.dirname(headerGeneratorEntry), "data_files"),
+    path.join(distDir, "data_files"),
+    { recursive: true },
+  );
 }
 
 buildAll().catch((err) => {
