@@ -3,7 +3,7 @@ import { searchManhwa, searchAnime } from "./anilist.js";
 import { searchComick } from "./comick.js";
 import { searchMangaDex } from "./mangadex.js";
 import { searchMangaUpdates } from "./mangaupdates.js";
-import { searchJikan } from "./jikan.js";
+import { searchJikan, searchJikanAnimeAny } from "./jikan.js";
 import { searchVNDB, searchVNDBSFW } from "./vndb.js";
 import { searchErogamescape } from "./erogamescape.js";
 
@@ -14,6 +14,35 @@ import { searchErogamescape } from "./erogamescape.js";
 interface Suggestion {
   name: string;
   value: string;
+}
+
+const SOURCE_LABELS: Record<string, string> = {
+  anilist: "AniList",
+  "anilist-anime": "AniList",
+  comick: "Comick",
+  mangadex: "MangaDex",
+  mangaupdates: "MangaUpdates",
+  jikan: "MyAnimeList",
+  "jikan-anime": "MyAnimeList",
+};
+
+const SOURCE_ICONS: Record<string, string> = {
+  anilist: "🟣",
+  "anilist-anime": "🟣",
+  comick: "🟢",
+  mangadex: "🟠",
+  mangaupdates: "🔵",
+  jikan: "🔴",
+  "jikan-anime": "🔴",
+};
+
+function sourceSuggestion(
+  title: string,
+  source: keyof typeof SOURCE_LABELS,
+  id: string,
+): Suggestion {
+  const label = `${SOURCE_ICONS[source]} ${title} · ${SOURCE_LABELS[source]}`;
+  return { name: label.slice(0, 100), value: `${source}:${id}` };
 }
 
 // ── Cache em memória (30s TTL) ───────────────────────────────────────────────
@@ -69,6 +98,8 @@ export async function respondAutocomplete(
       withTimeout(searchJikan(query),         TIMEOUT_MS),
     ]);
 
+  // A mesma obra pode existir em várias fontes. Não deduplicar apenas pelo
+  // título: a fonte faz parte da escolha da assinatura.
   const seen        = new Set<string>();
   const suggestions: Suggestion[] = [];
 
@@ -76,9 +107,10 @@ export async function respondAutocomplete(
     let count = 0;
     for (const m of comickRaw.value) {
       if (count >= PER_SOURCE_LIMIT) break;
-      if (m.title && !seen.has(m.title.toLowerCase())) {
-        seen.add(m.title.toLowerCase());
-        suggestions.push({ name: m.title.slice(0, 100), value: `comick:${m.slug}` });
+      const key = m.title?.toLowerCase();
+      if (m.title && m.slug && key && !seen.has(`comick:${key}`)) {
+        seen.add(`comick:${key}`);
+        suggestions.push(sourceSuggestion(m.title, "comick", m.slug));
         count++;
       }
     }
@@ -89,9 +121,10 @@ export async function respondAutocomplete(
     for (const m of anilistRaw.value) {
       if (count >= PER_SOURCE_LIMIT) break;
       const title = m.title.english ?? m.title.romaji ?? m.title.native ?? "";
-      if (title && !seen.has(title.toLowerCase())) {
-        seen.add(title.toLowerCase());
-        suggestions.push({ name: title.slice(0, 100), value: `anilist:${m.id}` });
+      const key = title.toLowerCase();
+      if (title && !seen.has(`anilist:${key}`)) {
+        seen.add(`anilist:${key}`);
+        suggestions.push(sourceSuggestion(title, "anilist", String(m.id)));
         count++;
       }
     }
@@ -101,9 +134,10 @@ export async function respondAutocomplete(
     let count = 0;
     for (const m of mangadexRaw.value) {
       if (count >= PER_SOURCE_LIMIT) break;
-      if (m.mainTitle && !seen.has(m.mainTitle.toLowerCase())) {
-        seen.add(m.mainTitle.toLowerCase());
-        suggestions.push({ name: m.mainTitle.slice(0, 100), value: `mangadex:${m.id}` });
+      const key = m.mainTitle?.toLowerCase();
+      if (m.mainTitle && key && !seen.has(`mangadex:${key}`)) {
+        seen.add(`mangadex:${key}`);
+        suggestions.push(sourceSuggestion(m.mainTitle, "mangadex", m.id));
         count++;
       }
     }
@@ -113,9 +147,10 @@ export async function respondAutocomplete(
     let count = 0;
     for (const m of muRaw.value) {
       if (count >= PER_SOURCE_LIMIT) break;
-      if (m.title && !seen.has(m.title.toLowerCase())) {
-        seen.add(m.title.toLowerCase());
-        suggestions.push({ name: m.title.slice(0, 100), value: `mangaupdates:${m.id}` });
+      const key = m.title?.toLowerCase();
+      if (m.title && key && !seen.has(`mangaupdates:${key}`)) {
+        seen.add(`mangaupdates:${key}`);
+        suggestions.push(sourceSuggestion(m.title, "mangaupdates", m.id));
         count++;
       }
     }
@@ -125,9 +160,10 @@ export async function respondAutocomplete(
     let count = 0;
     for (const m of jikanRaw.value) {
       if (count >= PER_SOURCE_LIMIT) break;
-      if (m.mainTitle && !seen.has(m.mainTitle.toLowerCase())) {
-        seen.add(m.mainTitle.toLowerCase());
-        suggestions.push({ name: m.mainTitle.slice(0, 100), value: `jikan:${m.malId}` });
+      const key = m.mainTitle?.toLowerCase();
+      if (m.mainTitle && key && !seen.has(`jikan:${key}`)) {
+        seen.add(`jikan:${key}`);
+        suggestions.push(sourceSuggestion(m.mainTitle, "jikan", String(m.malId)));
         count++;
       }
     }
@@ -156,14 +192,38 @@ export async function respondAutocompleteAnime(
   }
 
   try {
-    const results = await withTimeout(searchAnime(query), TIMEOUT_MS);
-    const suggestions: Suggestion[] = results
-      .map((a) => {
+    // AniList pode estar temporariamente indisponível. O MAL/Jikan já é
+    // suportado pelo rastreador de episódios e aparece como fonte alternativa.
+    const [anilistRaw, jikanRaw] = await Promise.allSettled([
+      withTimeout(searchAnime(query), TIMEOUT_MS),
+      withTimeout(searchJikanAnimeAny(query), TIMEOUT_MS),
+    ]);
+    const suggestions: Suggestion[] = [];
+    const seen = new Set<string>();
+
+    if (anilistRaw.status === "fulfilled") {
+      for (const a of anilistRaw.value) {
         const title = a.title.english ?? a.title.romaji ?? a.title.native ?? "";
-        return { name: title.slice(0, 100), value: `anilist-anime:${a.id}` };
-      })
-      .filter((s) => s.name.length > 0)
-      .slice(0, 25);
+        const key = title.toLowerCase();
+        if (title && !seen.has(`anilist-anime:${key}`)) {
+          seen.add(`anilist-anime:${key}`);
+          suggestions.push(sourceSuggestion(title, "anilist-anime", String(a.id)));
+        }
+      }
+    }
+
+    if (jikanRaw.status === "fulfilled") {
+      for (const a of jikanRaw.value) {
+        const title = a.mainTitle;
+        const key = title.toLowerCase();
+        if (title && !seen.has(`jikan-anime:${key}`)) {
+          seen.add(`jikan-anime:${key}`);
+          suggestions.push(sourceSuggestion(title, "jikan-anime", String(a.malId)));
+        }
+      }
+    }
+
+    suggestions.splice(25);
 
     animeCache.set(query, { results: suggestions, expires: Date.now() + CACHE_TTL });
     await interaction.respond(suggestions);

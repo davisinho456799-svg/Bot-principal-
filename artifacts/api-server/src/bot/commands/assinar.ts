@@ -122,7 +122,7 @@ async function handleAdicionar(interaction: ChatInputCommandInteraction) {
   const guildId = interaction.guildId;
 
   // Só aceita valores vindos do autocomplete no formato "source:id"
-  if (!/^(anilist|anilist-anime|comick|mangadex|mangaupdates|jikan|vndb|erogamescape):[^\s]+$/.test(titulo)) {
+  if (!/^(anilist|anilist-anime|comick|mangadex|mangaupdates|jikan|jikan-anime|vndb|erogamescape):[^\s]+$/.test(titulo)) {
     await interaction.editReply("❌ Por favor, selecione um título da lista de sugestões ao digitar.");
     return;
   }
@@ -132,8 +132,8 @@ async function handleAdicionar(interaction: ChatInputCommandInteraction) {
 
   let result;
   try {
-    result = src === "anilist-anime"
-      ? await getUnifiedAnimeById("anilist-anime", id)
+    result = src === "anilist-anime" || src === "jikan-anime"
+      ? await getUnifiedAnimeById(src, id)
       : await getUnifiedById(
           src as "anilist" | "mangadex" | "comick" | "mangaupdates" | "jikan" | "vndb" | "erogamescape",
           id

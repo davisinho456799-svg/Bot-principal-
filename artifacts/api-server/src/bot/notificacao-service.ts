@@ -603,7 +603,7 @@ async function fetchChapters(
           // informação suficiente para o rastreamento.
           const searchResults = await searchComickAny(
             manhwaId.replace(/[-_]+/g, " "),
-          ).catch(() => []);
+          ).catch((): Awaited<ReturnType<typeof searchComickAny>> => []);
           const match = searchResults.find((item) =>
             [item.title, ...(item.md_titles ?? []).map((entry) => entry.title)]
               .some((name) => name && likelySameTitle(name, manhwaId)),
