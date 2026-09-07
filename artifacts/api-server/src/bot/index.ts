@@ -107,7 +107,7 @@ export async function startBot() {
   logger.info({ tokenLen: token.length, tokenPrefix: token.slice(0, 10) }, "Token encontrado, criando client Discord");
 
   const client = new Client({
-    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates],
+    intents: [GatewayIntentBits.Guilds],
     rest: { retries: 5 },
   });
   client.once(Events.ClientReady, async (readyClient) => {
