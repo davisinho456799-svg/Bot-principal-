@@ -41,8 +41,11 @@ function sourceSuggestion(
   source: keyof typeof SOURCE_LABELS,
   id: string,
 ): Suggestion {
-  const label = `${SOURCE_ICONS[source]} ${title} · ${SOURCE_LABELS[source]}`;
-  return { name: label.slice(0, 100), value: `${source}:${id}` };
+  const sourceTag = `${SOURCE_ICONS[source]} ${SOURCE_LABELS[source]}`;
+  const separator = " · ";
+  const maxTitleLength = 100 - separator.length - sourceTag.length;
+  const label = `${title.slice(0, Math.max(1, maxTitleLength)).trimEnd()}${separator}${sourceTag}`;
+  return { name: label, value: `${source}:${id}` };
 }
 
 // ── Cache em memória (30s TTL) ───────────────────────────────────────────────
