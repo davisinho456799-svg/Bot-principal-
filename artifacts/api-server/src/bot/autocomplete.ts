@@ -16,36 +16,15 @@ interface Suggestion {
   value: string;
 }
 
-const SOURCE_LABELS: Record<string, string> = {
-  anilist: "AniList",
-  "anilist-anime": "AniList",
-  comick: "Comick",
-  mangadex: "MangaDex",
-  mangaupdates: "MangaUpdates",
-  jikan: "MyAnimeList",
-  "jikan-anime": "MyAnimeList",
-};
-
-const SOURCE_ICONS: Record<string, string> = {
-  anilist: "🟣",
-  "anilist-anime": "🟣",
-  comick: "🟢",
-  mangadex: "🟠",
-  mangaupdates: "🔵",
-  jikan: "🔴",
-  "jikan-anime": "🔴",
-};
+export type SourceChoice = "anilist" | "comick" | "mangadex" | "mangaupdates" | "jikan";
+type InternalSource = SourceChoice | "anilist-anime" | "jikan-anime";
 
 function sourceSuggestion(
   title: string,
-  source: keyof typeof SOURCE_LABELS,
+  source: InternalSource,
   id: string,
 ): Suggestion {
-  const sourceTag = `${SOURCE_ICONS[source]} ${SOURCE_LABELS[source]}`;
-  const separator = " · ";
-  const maxTitleLength = 100 - separator.length - sourceTag.length;
-  const label = `${title.slice(0, Math.max(1, maxTitleLength)).trimEnd()}${separator}${sourceTag}`;
-  return { name: label, value: `${source}:${id}` };
+  return { name: title.slice(0, 100), value: `${source}:${id}` };
 }
 
 // ── Cache em memória (30s TTL) ───────────────────────────────────────────────
@@ -75,7 +54,8 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
 // ── Autocomplete para manga / manhwa ─────────────────────────────────────────
 export async function respondAutocomplete(
   interaction: AutocompleteInteraction,
-  focusedValue: string
+  focusedValue: string,
+  sourceFilter: SourceChoice | null = null,
 ): Promise<void> {
   const query = focusedValue.trim();
 
@@ -84,7 +64,8 @@ export async function respondAutocomplete(
     return;
   }
 
-  const cached = cache.get(query);
+  const cacheKey = `${sourceFilter ?? "all"}:${query}`;
+  const cached = cache.get(cacheKey);
   if (cached && cached.expires > Date.now()) {
     await interaction.respond(cached.results.slice(0, 25));
     return;
@@ -106,7 +87,7 @@ export async function respondAutocomplete(
   const seen        = new Set<string>();
   const suggestions: Suggestion[] = [];
 
-  if (comickRaw.status === "fulfilled") {
+  if (comickRaw.status === "fulfilled" && (!sourceFilter || sourceFilter === "comick")) {
     let count = 0;
     for (const m of comickRaw.value) {
       if (count >= PER_SOURCE_LIMIT) break;
@@ -119,7 +100,7 @@ export async function respondAutocomplete(
     }
   }
 
-  if (anilistRaw.status === "fulfilled") {
+  if (anilistRaw.status === "fulfilled" && (!sourceFilter || sourceFilter === "anilist")) {
     let count = 0;
     for (const m of anilistRaw.value) {
       if (count >= PER_SOURCE_LIMIT) break;
@@ -133,7 +114,7 @@ export async function respondAutocomplete(
     }
   }
 
-  if (mangadexRaw.status === "fulfilled") {
+  if (mangadexRaw.status === "fulfilled" && (!sourceFilter || sourceFilter === "mangadex")) {
     let count = 0;
     for (const m of mangadexRaw.value) {
       if (count >= PER_SOURCE_LIMIT) break;
@@ -146,7 +127,7 @@ export async function respondAutocomplete(
     }
   }
 
-  if (muRaw.status === "fulfilled") {
+  if (muRaw.status === "fulfilled" && (!sourceFilter || sourceFilter === "mangaupdates")) {
     let count = 0;
     for (const m of muRaw.value) {
       if (count >= PER_SOURCE_LIMIT) break;
@@ -159,7 +140,7 @@ export async function respondAutocomplete(
     }
   }
 
-  if (jikanRaw.status === "fulfilled") {
+  if (jikanRaw.status === "fulfilled" && (!sourceFilter || sourceFilter === "jikan")) {
     let count = 0;
     for (const m of jikanRaw.value) {
       if (count >= PER_SOURCE_LIMIT) break;
@@ -172,14 +153,15 @@ export async function respondAutocomplete(
     }
   }
 
-  cache.set(query, { results: suggestions, expires: Date.now() + CACHE_TTL });
+  cache.set(cacheKey, { results: suggestions, expires: Date.now() + CACHE_TTL });
   await interaction.respond(suggestions.slice(0, 25));
 }
 
 // ── Autocomplete para anime ───────────────────────────────────────────────────
 export async function respondAutocompleteAnime(
   interaction: AutocompleteInteraction,
-  focusedValue: string
+  focusedValue: string,
+  sourceFilter: SourceChoice | null = null,
 ): Promise<void> {
   const query = focusedValue.trim();
 
@@ -188,7 +170,8 @@ export async function respondAutocompleteAnime(
     return;
   }
 
-  const cached = animeCache.get(query);
+  const cacheKey = `${sourceFilter ?? "all"}:${query}`;
+  const cached = animeCache.get(cacheKey);
   if (cached && cached.expires > Date.now()) {
     await interaction.respond(cached.results.slice(0, 25));
     return;
@@ -204,7 +187,7 @@ export async function respondAutocompleteAnime(
     const suggestions: Suggestion[] = [];
     const seen = new Set<string>();
 
-    if (anilistRaw.status === "fulfilled") {
+    if (anilistRaw.status === "fulfilled" && (!sourceFilter || sourceFilter === "anilist")) {
       for (const a of anilistRaw.value) {
         const title = a.title.english ?? a.title.romaji ?? a.title.native ?? "";
         const key = title.toLowerCase();
@@ -215,7 +198,7 @@ export async function respondAutocompleteAnime(
       }
     }
 
-    if (jikanRaw.status === "fulfilled") {
+    if (jikanRaw.status === "fulfilled" && (!sourceFilter || sourceFilter === "jikan")) {
       for (const a of jikanRaw.value) {
         const title = a.mainTitle;
         const key = title.toLowerCase();
@@ -228,7 +211,7 @@ export async function respondAutocompleteAnime(
 
     suggestions.splice(25);
 
-    animeCache.set(query, { results: suggestions, expires: Date.now() + CACHE_TTL });
+    animeCache.set(cacheKey, { results: suggestions, expires: Date.now() + CACHE_TTL });
     await interaction.respond(suggestions);
   } catch {
     await interaction.respond([]);
