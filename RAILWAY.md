@@ -66,4 +66,10 @@ Para executar uma verificação imediatamente:
 /monitor verificar
 ```
 
+Para remover uma obra da lista ativa, use o ID exibido pelo `/monitor listar`:
+
+```text
+/monitor remover id:123
+```
+
 Os comandos exigem a permissão **Gerenciar servidor** e gravam na mesma watchlist usada pelo painel web.

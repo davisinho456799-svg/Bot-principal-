@@ -50,6 +50,17 @@ export const monitorCommandDefinition = new SlashCommandBuilder()
     .addSubcommand((command) =>
       command.setName("verificar").setDescription("Executa uma verificação agora"),
     )
+    .addSubcommand((command) =>
+      command
+        .setName("remover")
+        .setDescription("Remove uma obra da monitoração")
+        .addIntegerOption((option) =>
+          option
+            .setName("id")
+            .setDescription("ID exibido pelo /monitor listar")
+            .setRequired(true),
+        ),
+    )
     .toJSON();
 
 const commandDefinitions = [monitorCommandDefinition];
@@ -182,6 +193,29 @@ export async function executeManhwaCommand(interaction: ChatInputCommandInteract
         `Obras verificadas: ${result.worksChecked}`,
         `Capítulos novos encontrados: ${result.chaptersFound}`,
         `Publicações enviadas: ${result.postsSent}`,
+      ].join("\n"),
+    });
+    return;
+  }
+  if (subcommand === "remover") {
+    const workId = interaction.options.getInteger("id", true);
+    const [work] = await db
+      .update(monitoredWorksTable)
+      .set({ active: false, updatedAt: new Date() })
+      .where(eq(monitoredWorksTable.id, workId))
+      .returning();
+
+    if (!work) {
+      await interaction.editReply({
+        content: `❌ Não encontrei nenhuma obra com o ID ${workId}. Use \`/monitor listar\` para conferir os IDs ativos.`,
+      });
+      return;
+    }
+
+    await interaction.editReply({
+      content: [
+        `🗑️ **${work.title}** foi removido da monitoração.`,
+        "O histórico foi preservado e a obra pode ser reativada pelo painel.",
       ].join("\n"),
     });
   }
