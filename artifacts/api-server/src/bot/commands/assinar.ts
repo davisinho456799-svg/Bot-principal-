@@ -11,6 +11,7 @@ import { getUnifiedById, getUnifiedAnimeById } from "../unified.js";
 import {
   respondAutocomplete,
   respondAutocompleteAnime,
+  type SourceChoice,
 } from "../autocomplete.js";
 import { logger } from "../../lib/logger.js";
 import { recordBotError } from "../error-log.js";
@@ -31,6 +32,19 @@ export const data = new SlashCommandBuilder()
             { name: "📺 Anime",   value: "anime"   },
             { name: "🇯🇵 Manga",  value: "manga"   },
             { name: "🇰🇷 Manhwa", value: "manhwa"  },
+          )
+      )
+      .addStringOption((opt) =>
+        opt
+          .setName("fonte")
+          .setDescription("Fonte usada para pesquisar o título")
+          .setRequired(true)
+          .addChoices(
+            { name: "🟣 AniList", value: "anilist" },
+            { name: "🟢 Comick", value: "comick" },
+            { name: "🟠 MangaDex", value: "mangadex" },
+            { name: "🔵 MangaUpdates", value: "mangaupdates" },
+            { name: "🔴 MyAnimeList", value: "jikan" },
           )
       )
       .addStringOption((opt) =>
@@ -88,10 +102,11 @@ export async function autocomplete(interaction: AutocompleteInteraction): Promis
   // Autocomplete do /assinar adicionar
   const tipo    = interaction.options.getString("tipo") ?? "manhwa";
   const focused = interaction.options.getFocused();
+  const fonte = interaction.options.getString("fonte") as SourceChoice | null;
   if (tipo === "anime") {
-    await respondAutocompleteAnime(interaction, focused);
+    await respondAutocompleteAnime(interaction, focused, fonte);
   } else {
-    await respondAutocomplete(interaction, focused);
+    await respondAutocomplete(interaction, focused, fonte);
   }
 }
 
@@ -114,6 +129,7 @@ async function handleAdicionar(interaction: ChatInputCommandInteraction) {
   // lança TypeError e o bot mostra a mensagem de erro genérica.
   // Por isso usamos fallback "manhwa" para manter compatibilidade durante a transição.
   const tipo   = (interaction.options.getString("tipo") ?? "manhwa") as "anime" | "manga" | "manhwa";
+  const fonte  = interaction.options.getString("fonte") as SourceChoice | null;
   const titulo = interaction.options.getString("titulo", true);
 
   await interaction.deferReply({ ephemeral: true });
@@ -129,6 +145,25 @@ async function handleAdicionar(interaction: ChatInputCommandInteraction) {
 
   const [src, ...idParts] = titulo.split(":");
   const id = idParts.join(":");
+
+  const expectedSource = fonte
+    ? tipo === "anime"
+      ? fonte === "anilist"
+        ? "anilist-anime"
+        : fonte === "jikan"
+          ? "jikan-anime"
+          : null
+      : fonte
+    : null;
+
+  if (fonte && !expectedSource) {
+    await interaction.editReply("❌ A fonte escolhida não está disponível para este tipo de título.");
+    return;
+  }
+  if (expectedSource && src !== expectedSource) {
+    await interaction.editReply("❌ O título selecionado não pertence à fonte escolhida. Selecione novamente um título da lista.");
+    return;
+  }
 
   let result;
   try {
