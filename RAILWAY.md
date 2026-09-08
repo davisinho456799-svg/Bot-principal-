@@ -49,7 +49,7 @@ O bot precisa estar no servidor do Discord com permissão para visualizar o cana
 O bot registra comandos slash automaticamente em todos os servidores onde está instalado. Para cadastrar uma obra sem abrir o painel:
 
 ```text
-/manhwa adicionar link:https://... nome:Nome da obra
+/monitor adicionar link:https://... nome:Nome da obra
 ```
 
 O domínio identifica automaticamente Lezhin, Toomics ou Toptoon. Se o domínio não for reconhecido, informe também a opção `plataforma`.
@@ -57,7 +57,13 @@ O domínio identifica automaticamente Lezhin, Toomics ou Toptoon. Se o domínio 
 Para conferir a lista ativa:
 
 ```text
-/manhwa listar
+/monitor listar
+```
+
+Para executar uma verificação imediatamente:
+
+```text
+/monitor verificar
 ```
 
 Os comandos exigem a permissão **Gerenciar servidor** e gravam na mesma watchlist usada pelo painel web.

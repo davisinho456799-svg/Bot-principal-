@@ -10,6 +10,7 @@ import { desc, eq } from "drizzle-orm";
 import { db } from "@workspace/db";
 import { monitoredWorksTable } from "@workspace/db/schema";
 import { logger } from "../lib/logger";
+import { runMonitor } from "./monitor-service.js";
 
 export const monitorCommandDefinition = new SlashCommandBuilder()
     .setName("monitor")
@@ -45,6 +46,9 @@ export const monitorCommandDefinition = new SlashCommandBuilder()
     )
     .addSubcommand((command) =>
       command.setName("listar").setDescription("Lista os manhwas ativos"),
+    )
+    .addSubcommand((command) =>
+      command.setName("verificar").setDescription("Executa uma verificação agora"),
     )
     .toJSON();
 
@@ -168,6 +172,18 @@ export async function executeManhwaCommand(interaction: ChatInputCommandInteract
   }
   if (subcommand === "listar") {
     await handleList(interaction);
+    return;
+  }
+  if (subcommand === "verificar") {
+    const result = await runMonitor();
+    await interaction.editReply({
+      content: [
+        "✅ Verificação concluída.",
+        `Obras verificadas: ${result.worksChecked}`,
+        `Capítulos novos encontrados: ${result.chaptersFound}`,
+        `Publicações enviadas: ${result.postsSent}`,
+      ].join("\n"),
+    });
   }
 }
 
