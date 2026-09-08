@@ -15,6 +15,14 @@ type ChapterCandidate = {
   thumbnailUrl: string;
 };
 
+type MonitorFailure = {
+  workId: number;
+  title: string;
+  message: string;
+};
+
+let lastFailureAlertKey: string | null = null;
+
 function parseCandidates(html: string, listingUrl: string, platform: string): ChapterCandidate[] {
   const candidates: ChapterCandidate[] = [];
   const imagePattern = /<img\b[^>]*>/gi;
@@ -106,11 +114,48 @@ async function postStrip(channelId: string, title: string, chapters: ChapterCand
   if (!response.ok) throw new Error(`Discord returned ${response.status}`);
 }
 
+function escapeDiscordText(value: string) {
+  return value.replace(/[\\`*_~|>]/g, "\\$&").replace(/\r?\n/g, " ").trim();
+}
+
+async function postFailureAlert(channelId: string, failures: MonitorFailure[], intervalMinutes: number) {
+  const token = process.env.DISCORD_BOT_TOKEN;
+  if (!token) throw new Error("DISCORD_BOT_TOKEN is not configured");
+
+  const visibleFailures = failures.slice(0, 10);
+  const lines = visibleFailures.map(
+    (failure) =>
+      `• **${escapeDiscordText(failure.title)}** — ${escapeDiscordText(failure.message).slice(0, 240)}`,
+  );
+  if (failures.length > visibleFailures.length) {
+    lines.push(`• ... e mais ${failures.length - visibleFailures.length} falha(s)`);
+  }
+
+  const response = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bot ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      content: [
+        "⚠️ **Falha no monitoramento**",
+        `A última rodada encontrou ${failures.length} erro${failures.length === 1 ? "" : "s"}:`,
+        ...lines,
+        `Nova tentativa automática em aproximadamente ${intervalMinutes} minuto${intervalMinutes === 1 ? "" : "s"}.`,
+      ].join("\n"),
+      allowed_mentions: { parse: [] },
+    }),
+  });
+  if (!response.ok) throw new Error(`Discord failure alert returned ${response.status}`);
+}
+
 export async function runMonitor() {
   const [config] = await db.select().from(monitorConfigTable).limit(1);
   const works = await db.select().from(monitoredWorksTable).where(eq(monitoredWorksTable.active, true));
   let chaptersFound = 0;
   let postsSent = 0;
+  const failures: MonitorFailure[] = [];
   for (const work of works) {
     try {
       const candidates = await fetchListing(work.listingUrl, work.platform);
@@ -145,9 +190,39 @@ export async function runMonitor() {
         await tx.update(monitoredWorksTable).set({ chaptersSeen: existing.length + fresh.length, lastCheckedAt: checkedAt, lastPublishedAt: checkedAt, lastStatus: `${fresh.length} new chapter${fresh.length === 1 ? "" : "s"} published`, updatedAt: checkedAt }).where(eq(monitoredWorksTable.id, work.id));
       });
     } catch (error) {
-      logger.warn({ err: error, workId: work.id }, "Work monitor failed");
+      const message = error instanceof Error ? error.message : String(error);
+      failures.push({ workId: work.id, title: work.title, message });
+      logger.warn(
+        { err: error, workId: work.id, title: work.title, listingUrl: work.listingUrl },
+        "Work monitor failed",
+      );
       await db.update(monitoredWorksTable).set({ lastCheckedAt: new Date(), lastStatus: "Check failed", updatedAt: new Date() }).where(eq(monitoredWorksTable.id, work.id));
     }
   }
+
+  if (!failures.length) {
+    lastFailureAlertKey = null;
+  } else {
+    const failureAlertKey = failures.map((failure) => failure.workId).sort((a, b) => a - b).join(",");
+    if (config?.discordChannelId && failureAlertKey !== lastFailureAlertKey) {
+      try {
+        await postFailureAlert(config.discordChannelId, failures, config.intervalMinutes);
+        lastFailureAlertKey = failureAlertKey;
+      } catch (error) {
+        logger.error({ err: error }, "Could not send monitor failure alert");
+      }
+    }
+  }
+
+  logger.info(
+    {
+      worksChecked: works.length,
+      chaptersFound,
+      postsSent,
+      failures: failures.length,
+    },
+    "Monitor run completed",
+  );
+
   return { status: "completed", worksChecked: works.length, chaptersFound, postsSent };
 }
