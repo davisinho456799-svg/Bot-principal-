@@ -196,7 +196,14 @@ export async function runMonitor() {
         { err: error, workId: work.id, title: work.title, listingUrl: work.listingUrl },
         "Work monitor failed",
       );
-      await db.update(monitoredWorksTable).set({ lastCheckedAt: new Date(), lastStatus: "Check failed", updatedAt: new Date() }).where(eq(monitoredWorksTable.id, work.id));
+      await db
+        .update(monitoredWorksTable)
+        .set({
+          lastCheckedAt: new Date(),
+          lastStatus: `Check failed: ${message.slice(0, 300)}`,
+          updatedAt: new Date(),
+        })
+        .where(eq(monitoredWorksTable.id, work.id));
     }
   }
 

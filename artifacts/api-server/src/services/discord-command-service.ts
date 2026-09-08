@@ -6,7 +6,7 @@ import {
   SlashCommandBuilder,
   type ChatInputCommandInteraction,
 } from "discord.js";
-import { desc, eq } from "drizzle-orm";
+import { desc, eq, like } from "drizzle-orm";
 import { db } from "@workspace/db";
 import { monitoredWorksTable } from "@workspace/db/schema";
 import { logger } from "../lib/logger";
@@ -60,6 +60,9 @@ export const monitorCommandDefinition = new SlashCommandBuilder()
             .setDescription("ID exibido pelo /monitor listar")
             .setRequired(true),
         ),
+    )
+    .addSubcommand((command) =>
+      command.setName("erros").setDescription("Mostra os erros atuais do monitor"),
     )
     .toJSON();
 
@@ -217,6 +220,30 @@ export async function executeManhwaCommand(interaction: ChatInputCommandInteract
         `🗑️ **${work.title}** foi removido da monitoração.`,
         "O histórico foi preservado e a obra pode ser reativada pelo painel.",
       ].join("\n"),
+    });
+    return;
+  }
+  if (subcommand === "erros") {
+    const failedWorks = await db
+      .select()
+      .from(monitoredWorksTable)
+      .where(like(monitoredWorksTable.lastStatus, "Check failed:%"))
+      .orderBy(desc(monitoredWorksTable.lastCheckedAt));
+
+    if (!failedWorks.length) {
+      await interaction.editReply({
+        content: "✅ Nenhuma obra está com erro no momento.",
+      });
+      return;
+    }
+
+    const lines = failedWorks.map((work) => [
+      `• **${work.title}** · ID ${work.id}`,
+      `  ${work.lastStatus}`,
+      `  Última tentativa: ${work.lastCheckedAt?.toISOString() ?? "desconhecida"}`,
+    ].join("\n"));
+    await interaction.editReply({
+      content: `⚠️ **Erros atuais do monitor (${failedWorks.length})**\n${lines.join("\n")}`.slice(0, 1900),
     });
   }
 }
