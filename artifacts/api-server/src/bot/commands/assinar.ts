@@ -36,6 +36,13 @@ export const data = new SlashCommandBuilder()
       )
       .addStringOption((opt) =>
         opt
+          .setName("titulo")
+          .setDescription("Nome do título para pesquisar")
+          .setRequired(true)
+          .setAutocomplete(true)
+      )
+      .addStringOption((opt) =>
+        opt
           .setName("fonte")
           .setDescription("Fonte usada para pesquisar o título")
           .setRequired(true)
@@ -46,13 +53,6 @@ export const data = new SlashCommandBuilder()
             { name: "🔵 MangaUpdates", value: "mangaupdates" },
             { name: "🔴 MyAnimeList", value: "jikan" },
           )
-      )
-      .addStringOption((opt) =>
-        opt
-          .setName("titulo")
-          .setDescription("Nome do título para pesquisar")
-          .setRequired(true)
-          .setAutocomplete(true)
       )
   )
   .addSubcommand((sub) =>
