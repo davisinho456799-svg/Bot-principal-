@@ -1,4 +1,5 @@
 import {
+  ChannelType,
   Client,
   Events,
   GatewayIntentBits,
@@ -8,7 +9,7 @@ import {
 } from "discord.js";
 import { desc, eq, like } from "drizzle-orm";
 import { db } from "@workspace/db";
-import { monitoredWorksTable } from "@workspace/db/schema";
+import { monitorConfigTable, monitoredWorksTable } from "@workspace/db/schema";
 import { logger } from "../lib/logger";
 import { runMonitor, runTestNotification } from "./monitor-service.js";
 
@@ -46,6 +47,18 @@ export const monitorCommandDefinition = new SlashCommandBuilder()
     )
     .addSubcommand((command) =>
       command.setName("listar").setDescription("Lista os manhwas ativos"),
+    )
+    .addSubcommand((command) =>
+      command
+        .setName("canal")
+        .setDescription("Escolhe o canal que receberá as notificações")
+        .addChannelOption((option) =>
+          option
+            .setName("canal")
+            .setDescription("Canal de texto para as notificações")
+            .addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)
+            .setRequired(true),
+        ),
     )
     .addSubcommand((command) =>
       command.setName("verificar").setDescription("Executa uma verificação agora"),
@@ -182,6 +195,44 @@ async function handleList(interaction: ChatInputCommandInteraction) {
   });
 }
 
+async function handleSetChannel(interaction: ChatInputCommandInteraction) {
+  const channel = interaction.options.getChannel("canal", true);
+  if (!channel.isTextBased() || !("name" in channel)) {
+    await replyError(interaction, "Escolha um canal de texto válido.");
+    return;
+  }
+
+  const [existing] = await db
+    .select({ id: monitorConfigTable.id })
+    .from(monitorConfigTable)
+    .limit(1);
+
+  if (existing) {
+    await db
+      .update(monitorConfigTable)
+      .set({
+        discordChannelId: channel.id,
+        discordChannelName: channel.name,
+        updatedAt: new Date(),
+      })
+      .where(eq(monitorConfigTable.id, existing.id));
+  } else {
+    await db.insert(monitorConfigTable).values({
+      id: 1,
+      discordChannelId: channel.id,
+      discordChannelName: channel.name,
+    });
+  }
+
+  await interaction.editReply({
+    content: [
+      "✅ Canal de notificações salvo.",
+      `As próximas notificações serão enviadas em <#${channel.id}>.`,
+      "Agora você pode usar `/monitor teste` para validar o envio.",
+    ].join("\n"),
+  });
+}
+
 export async function executeManhwaCommand(interaction: ChatInputCommandInteraction) {
   await interaction.deferReply({ ephemeral: true });
   const subcommand = interaction.options.getSubcommand();
@@ -191,6 +242,10 @@ export async function executeManhwaCommand(interaction: ChatInputCommandInteract
   }
   if (subcommand === "listar") {
     await handleList(interaction);
+    return;
+  }
+  if (subcommand === "canal") {
+    await handleSetChannel(interaction);
     return;
   }
   if (subcommand === "verificar") {
