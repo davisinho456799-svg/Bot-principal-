@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import sharp from "sharp";
 import { db } from "@workspace/db";
 import {
@@ -8,59 +8,103 @@ import {
   monitoredWorksTable,
 } from "@workspace/db/schema";
 import { logger } from "../lib/logger";
+import {
+  buildChapterKey,
+  genericParser,
+  parserForPlatform,
+  type MonitorPlatform,
+  type ParsedChapter,
+  type ParserContext,
+} from "./parsers/index";
 
-type ChapterCandidate = {
+type ChapterCandidate = ParsedChapter & {
   key: string;
-  number: string;
-  thumbnailUrl: string;
+  parser: string;
 };
 
-type MonitorFailure = {
-  workId: number;
-  title: string;
-  message: string;
-};
-
-let lastFailureAlertKey: string | null = null;
-
-function parseCandidates(html: string, listingUrl: string, platform: string): ChapterCandidate[] {
-  const candidates: ChapterCandidate[] = [];
-  const imagePattern = /<img\b[^>]*>/gi;
-  for (const match of html.matchAll(imagePattern)) {
-    const tag = match[0];
-    const src = tag.match(/\b(?:src|data-src|data-original)=["']([^"']+)["']/i)?.[1]
-      ?? tag.match(/\bsrcset=["']([^"']+)["']/i)?.[1]?.split(",")[0]?.trim().split(" ")[0];
-    if (!src) continue;
-    const position = match.index ?? 0;
-    const context = html.slice(Math.max(0, position - 700), Math.min(html.length, position + 700))
-      .replace(/<[^>]+>/g, " ")
-      .replace(/\s+/g, " ");
-    const number = context.match(/(?:chapter|cap[ií]tulo|episode|epis[oó]dio|ep\.?|ch\.?)\s*#?\s*(\d+(?:\.\d+)?)/i)?.[1]
-      ?? context.match(/(?:^|\s)#(\d{1,4}(?:\.\d+)?)(?:\s|$)/)?.[1];
-    if (!number) continue;
-    let thumbnailUrl: string;
-    try {
-      thumbnailUrl = new URL(src, listingUrl).toString();
-    } catch {
-      continue;
-    }
-    const key = `${platform}:${number}:${thumbnailUrl}`;
-    if (!candidates.some((candidate) => candidate.key === key)) {
-      candidates.push({ key, number, thumbnailUrl });
-    }
-  }
-  return candidates.sort((a, b) => Number(a.number) - Number(b.number));
+function chapterNumberIdentity(value: string): string {
+  return value.trim().replace(/^0+(?=\d)/, "");
 }
 
-async function fetchListing(url: string, platform: string) {
-  const response = await fetch(url, {
-    headers: {
-      "User-Agent": "ChapterMonitor/1.0 (+public-thumbnail-monitor)",
-      Accept: "text/html,application/xhtml+xml",
-    },
-  });
-  if (!response.ok) throw new Error(`${platform} returned ${response.status}`);
-  return parseCandidates(await response.text(), url, platform);
+type ExistingChapter = {
+  id: number;
+  key: string;
+  number: string;
+};
+
+async function migrateLegacyKeys(
+  tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
+  work: typeof monitoredWorksTable.$inferSelect,
+  existing: ExistingChapter[],
+) {
+  const occupiedKeys = new Set(existing.map((chapter) => chapter.key));
+  for (const chapter of existing) {
+    const desiredKey = buildChapterKey(
+      work.platform as MonitorPlatform,
+      work.title,
+      chapter.number,
+    );
+    if (chapter.key === desiredKey || occupiedKeys.has(desiredKey)) continue;
+    await tx
+      .update(detectedChaptersTable)
+      .set({ chapterKey: desiredKey })
+      .where(and(
+        eq(detectedChaptersTable.id, chapter.id),
+        eq(detectedChaptersTable.workId, work.id),
+      ));
+    occupiedKeys.add(desiredKey);
+  }
+}
+
+function withChapterKeys(
+  chapters: ParsedChapter[],
+  platform: MonitorPlatform,
+  workTitle: string,
+  parser: string,
+): ChapterCandidate[] {
+  const seen = new Set<string>();
+  return chapters
+    .map((chapter) => ({
+      ...chapter,
+      key: buildChapterKey(platform, workTitle, chapter.number),
+      parser,
+    }))
+    .filter((chapter) => {
+      if (seen.has(chapter.key)) return false;
+      seen.add(chapter.key);
+      return true;
+    });
+}
+
+async function fetchListing(work: typeof monitoredWorksTable.$inferSelect) {
+  const platform = work.platform as MonitorPlatform;
+  const context: ParserContext = {
+    listingUrl: work.listingUrl,
+    platform,
+    workTitle: work.title,
+  };
+  const specificParser = parserForPlatform(work.platform);
+
+  if (specificParser) {
+    try {
+      const specificChapters = await specificParser.parse(context);
+      if (specificChapters.length) {
+        return {
+          parser: specificParser.name,
+          candidates: withChapterKeys(specificChapters, platform, work.title, specificParser.name),
+        };
+      }
+      logger.debug({ workId: work.id, parser: specificParser.name }, "Specific parser found no chapters; using generic parser");
+    } catch (error) {
+      logger.warn({ err: error, workId: work.id, parser: specificParser.name }, "Specific parser failed; using generic parser");
+    }
+  }
+
+  const genericChapters = await genericParser.parse(context);
+  return {
+    parser: specificParser ? `${genericParser.name} (fallback)` : genericParser.name,
+    candidates: withChapterKeys(genericChapters, platform, work.title, genericParser.name),
+  };
 }
 
 async function downloadAsDataUri(url: string) {
@@ -114,69 +158,46 @@ async function postStrip(channelId: string, title: string, chapters: ChapterCand
   if (!response.ok) throw new Error(`Discord returned ${response.status}`);
 }
 
-function escapeDiscordText(value: string) {
-  return value.replace(/[\\`*_~|>]/g, "\\$&").replace(/\r?\n/g, " ").trim();
-}
-
-async function postFailureAlert(channelId: string, failures: MonitorFailure[], intervalMinutes: number) {
-  const token = process.env.DISCORD_BOT_TOKEN;
-  if (!token) throw new Error("DISCORD_BOT_TOKEN is not configured");
-
-  const visibleFailures = failures.slice(0, 10);
-  const lines = visibleFailures.map(
-    (failure) =>
-      `• **${escapeDiscordText(failure.title)}** — ${escapeDiscordText(failure.message).slice(0, 240)}`,
-  );
-  if (failures.length > visibleFailures.length) {
-    lines.push(`• ... e mais ${failures.length - visibleFailures.length} falha(s)`);
-  }
-
-  const response = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bot ${token}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      content: [
-        "⚠️ **Falha no monitoramento**",
-        `A última rodada encontrou ${failures.length} erro${failures.length === 1 ? "" : "s"}:`,
-        ...lines,
-        `Nova tentativa automática em aproximadamente ${intervalMinutes} minuto${intervalMinutes === 1 ? "" : "s"}.`,
-      ].join("\n"),
-      allowed_mentions: { parse: [] },
-    }),
-  });
-  if (!response.ok) throw new Error(`Discord failure alert returned ${response.status}`);
-}
-
 export async function runMonitor() {
   const [config] = await db.select().from(monitorConfigTable).limit(1);
   const works = await db.select().from(monitoredWorksTable).where(eq(monitoredWorksTable.active, true));
   let chaptersFound = 0;
   let postsSent = 0;
-  const failures: MonitorFailure[] = [];
   for (const work of works) {
     try {
-      const candidates = await fetchListing(work.listingUrl, work.platform);
-      const existing = await db.select({ key: detectedChaptersTable.chapterKey }).from(detectedChaptersTable).where(eq(detectedChaptersTable.workId, work.id));
-      const seen = new Set(existing.map((item) => item.key));
-      const fresh = candidates.filter((candidate) => !seen.has(candidate.key));
+      const { parser, candidates } = await fetchListing(work);
+      const existing = await db
+        .select({
+          id: detectedChaptersTable.id,
+          key: detectedChaptersTable.chapterKey,
+          number: detectedChaptersTable.chapterNumber,
+        })
+        .from(detectedChaptersTable)
+        .where(eq(detectedChaptersTable.workId, work.id));
+      const seenKeys = new Set(existing.map((item) => item.key));
+      const seenNumbers = new Set(existing.map((item) => chapterNumberIdentity(item.number)));
+      const fresh = candidates.filter((candidate) =>
+        !seenKeys.has(candidate.key) &&
+        !seenNumbers.has(chapterNumberIdentity(candidate.number)),
+      );
       const checkedAt = new Date();
       if (existing.length === 0) {
         await db.transaction(async (tx) => {
           if (candidates.length) await tx.insert(detectedChaptersTable).values(candidates.map((chapter) => ({ workId: work.id, chapterKey: chapter.key, chapterNumber: chapter.number, thumbnailUrl: chapter.thumbnailUrl, detectedAt: checkedAt })));
-          await tx.update(monitoredWorksTable).set({ chaptersSeen: candidates.length, lastCheckedAt: checkedAt, lastStatus: candidates.length ? "Baseline captured" : "No chapters found", updatedAt: checkedAt }).where(eq(monitoredWorksTable.id, work.id));
+          await tx.update(monitoredWorksTable).set({ chaptersSeen: candidates.length, lastCheckedAt: checkedAt, lastStatus: candidates.length ? `${parser}: baseline captured` : `${parser}: no chapters found`, updatedAt: checkedAt }).where(eq(monitoredWorksTable.id, work.id));
         });
         continue;
       }
       if (!fresh.length) {
-        await db.update(monitoredWorksTable).set({ lastCheckedAt: checkedAt, lastStatus: "No new chapters", updatedAt: checkedAt }).where(eq(monitoredWorksTable.id, work.id));
+        await db.transaction(async (tx) => {
+          await migrateLegacyKeys(tx, work, existing);
+          await tx.update(monitoredWorksTable).set({ lastCheckedAt: checkedAt, lastStatus: `${parser}: no new chapters`, updatedAt: checkedAt }).where(eq(monitoredWorksTable.id, work.id));
+        });
         continue;
       }
       chaptersFound += fresh.length;
       if (!config?.discordChannelId) {
-        await db.update(monitoredWorksTable).set({ lastCheckedAt: checkedAt, lastStatus: "New chapters found — choose a Discord channel", updatedAt: checkedAt }).where(eq(monitoredWorksTable.id, work.id));
+        await db.update(monitoredWorksTable).set({ lastCheckedAt: checkedAt, lastStatus: `${parser}: new chapters found — choose a Discord channel`, updatedAt: checkedAt }).where(eq(monitoredWorksTable.id, work.id));
         continue;
       }
       const chunks = Array.from({ length: Math.ceil(fresh.length / 5) }, (_, index) => fresh.slice(index * 5, index * 5 + 5));
@@ -185,51 +206,15 @@ export async function runMonitor() {
         postsSent++;
       }
       await db.transaction(async (tx) => {
+        await migrateLegacyKeys(tx, work, existing);
         await tx.insert(detectedChaptersTable).values(fresh.map((chapter) => ({ workId: work.id, chapterKey: chapter.key, chapterNumber: chapter.number, thumbnailUrl: chapter.thumbnailUrl, detectedAt: checkedAt, publishedAt: checkedAt })));
         await tx.insert(monitorActivityTable).values({ workId: work.id, chapterCount: fresh.length, status: "Published" });
         await tx.update(monitoredWorksTable).set({ chaptersSeen: existing.length + fresh.length, lastCheckedAt: checkedAt, lastPublishedAt: checkedAt, lastStatus: `${fresh.length} new chapter${fresh.length === 1 ? "" : "s"} published`, updatedAt: checkedAt }).where(eq(monitoredWorksTable.id, work.id));
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      failures.push({ workId: work.id, title: work.title, message });
-      logger.warn(
-        { err: error, workId: work.id, title: work.title, listingUrl: work.listingUrl },
-        "Work monitor failed",
-      );
-      await db
-        .update(monitoredWorksTable)
-        .set({
-          lastCheckedAt: new Date(),
-          lastStatus: `Check failed: ${message.slice(0, 300)}`,
-          updatedAt: new Date(),
-        })
-        .where(eq(monitoredWorksTable.id, work.id));
+      logger.warn({ err: error, workId: work.id }, "Work monitor failed");
+      await db.update(monitoredWorksTable).set({ lastCheckedAt: new Date(), lastStatus: "Check failed", updatedAt: new Date() }).where(eq(monitoredWorksTable.id, work.id));
     }
   }
-
-  if (!failures.length) {
-    lastFailureAlertKey = null;
-  } else {
-    const failureAlertKey = failures.map((failure) => failure.workId).sort((a, b) => a - b).join(",");
-    if (config?.discordChannelId && failureAlertKey !== lastFailureAlertKey) {
-      try {
-        await postFailureAlert(config.discordChannelId, failures, config.intervalMinutes);
-        lastFailureAlertKey = failureAlertKey;
-      } catch (error) {
-        logger.error({ err: error }, "Could not send monitor failure alert");
-      }
-    }
-  }
-
-  logger.info(
-    {
-      worksChecked: works.length,
-      chaptersFound,
-      postsSent,
-      failures: failures.length,
-    },
-    "Monitor run completed",
-  );
-
   return { status: "completed", worksChecked: works.length, chaptersFound, postsSent };
 }
