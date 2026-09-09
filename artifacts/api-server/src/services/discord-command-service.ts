@@ -10,7 +10,7 @@ import { desc, eq, like } from "drizzle-orm";
 import { db } from "@workspace/db";
 import { monitoredWorksTable } from "@workspace/db/schema";
 import { logger } from "../lib/logger";
-import { runMonitor } from "./monitor-service.js";
+import { runMonitor, runTestNotification } from "./monitor-service.js";
 
 export const monitorCommandDefinition = new SlashCommandBuilder()
     .setName("monitor")
@@ -49,6 +49,11 @@ export const monitorCommandDefinition = new SlashCommandBuilder()
     )
     .addSubcommand((command) =>
       command.setName("verificar").setDescription("Executa uma verificação agora"),
+    )
+    .addSubcommand((command) =>
+      command
+        .setName("teste")
+        .setDescription("Envia uma notificação falsa com um título aleatório"),
     )
     .addSubcommand((command) =>
       command
@@ -198,6 +203,25 @@ export async function executeManhwaCommand(interaction: ChatInputCommandInteract
         `Publicações enviadas: ${result.postsSent}`,
       ].join("\n"),
     });
+    return;
+  }
+  if (subcommand === "teste") {
+    try {
+      const result = await runTestNotification();
+      await interaction.editReply({
+        content: [
+          "🧪 Notificação de teste enviada no canal do monitor.",
+          `Título escolhido: **${result.title}**`,
+          `Capítulo/imagem: ${result.chapter}`,
+          `Parser usado: ${result.parser}`,
+        ].join("\n"),
+      });
+    } catch (error) {
+      await replyError(
+        interaction,
+        error instanceof Error ? error.message : "Não foi possível enviar a notificação de teste.",
+      );
+    }
     return;
   }
   if (subcommand === "remover") {
