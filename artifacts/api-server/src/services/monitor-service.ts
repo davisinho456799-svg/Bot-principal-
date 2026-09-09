@@ -139,23 +139,61 @@ function escapeXml(value: string) {
   return value.replace(/[<>&'"]/g, (character) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", "'": "&apos;", "\"": "&quot;" })[character] ?? character);
 }
 
-async function postStrip(channelId: string, title: string, chapters: ChapterCandidate[], part: number, total: number) {
+async function postStrip(
+  channelId: string,
+  title: string,
+  chapters: ChapterCandidate[],
+  part: number,
+  total: number,
+  isTest = false,
+) {
   const token = process.env.DISCORD_BOT_TOKEN;
   if (!token) throw new Error("DISCORD_BOT_TOKEN is not configured");
   const svg = await buildStrip(title, chapters);
   const png = await sharp(Buffer.from(svg)).png().toBuffer();
   const form = new FormData();
   form.append("payload_json", JSON.stringify({
-    content: `**${title}** · ${chapters.length} capítulo${chapters.length === 1 ? "" : "s"} novo${chapters.length === 1 ? "" : "s"}${total > 1 ? ` · parte ${part}/${total}` : ""}`,
+    content: `${isTest ? "🧪 **TESTE** · " : ""}**${title}** · ${chapters.length} capítulo${chapters.length === 1 ? "" : "s"} novo${chapters.length === 1 ? "" : "s"}${total > 1 ? ` · parte ${part}/${total}` : ""}`,
     allowed_mentions: { parse: [] },
   }));
-  form.append("files[0]", new Blob([png], { type: "image/png" }), `chapter-release-${Date.now()}-${part}.png`);
+  form.append("files[0]", new Blob([png], { type: "image/png" }), `chapter-release-${isTest ? "test-" : ""}${Date.now()}-${part}.png`);
   const response = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
     method: "POST",
     headers: { Authorization: `Bot ${token}` },
     body: form,
   });
   if (!response.ok) throw new Error(`Discord returned ${response.status}`);
+}
+
+export async function runTestNotification() {
+  const [config] = await db.select().from(monitorConfigTable).limit(1);
+  if (!config?.discordChannelId) {
+    throw new Error("Nenhum canal do Discord foi configurado para o monitor.");
+  }
+
+  const works = await db
+    .select()
+    .from(monitoredWorksTable)
+    .where(eq(monitoredWorksTable.active, true));
+  if (!works.length) {
+    throw new Error("Não há nenhum título ativo no monitor para usar no teste.");
+  }
+
+  const work = works[Math.floor(Math.random() * works.length)];
+  const { parser, candidates } = await fetchListing(work);
+  if (!candidates.length) {
+    throw new Error(`Não encontrei capítulos com imagem para o título "${work.title}".`);
+  }
+
+  const chapter = candidates[Math.floor(Math.random() * candidates.length)];
+  await postStrip(config.discordChannelId, work.title, [chapter], 1, 1, true);
+
+  return {
+    title: work.title,
+    chapter: chapter.number,
+    parser,
+    channelId: config.discordChannelId,
+  };
 }
 
 export async function runMonitor() {
