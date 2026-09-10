@@ -146,7 +146,7 @@ async function findRenderedChapters(
         ? ["data-episode", "data-episode-no", "data-episode-number"]
         : platform === "toomics"
           ? ["data-episode", "data-episode-no", "data-ep", "data-episode-number"]
-          : ["data-episode", "data-episode-no", "data-chapter", "data-chapter-number", "data-ep"];
+          : ["data-episode", "data-episode-no", "data-episode-id", "data-chapter", "data-chapter-number", "data-ep"];
       const slash = String.fromCharCode(92);
       const digit = slash + "d";
       const whitespace = slash + "s";
@@ -168,6 +168,11 @@ async function findRenderedChapters(
         "(?:^|" + whitespace + ")#(" + digit + "{1,5}(?:[.,]" + digit + "+)?)(?=" +
           whitespace + "|$)",
         "g",
+      );
+      const koreanChapterPatternFixed = new RegExp(
+        "제" + whitespace + "*(" + digit + "{1,5}(?:[.,]" + digit + "+)?)" +
+          whitespace + "*화",
+        "ig",
       );
       const numberFromHrefFixed = new RegExp(
         "(?:chapter|episode|episodio|ep|ch|cap)[/_=-](" + digit +
@@ -237,6 +242,8 @@ async function findRenderedChapters(
           chapterPatternFixed.lastIndex = 0;
           while ((match = hashPatternFixed.exec(source))) add(match[1]);
           hashPatternFixed.lastIndex = 0;
+          while ((match = koreanChapterPatternFixed.exec(source))) add(match[1]);
+          koreanChapterPatternFixed.lastIndex = 0;
         }
         return values;
       };
@@ -299,7 +306,7 @@ async function findRenderedChapters(
         const hasLink = cardElement.tagName.toLowerCase() === "a" || Boolean(cardElement.querySelector("a[href]"));
         const hasChapterText = chapterLabelFixed.test(cardText);
         const hasCardDimensions = rect.width >= 240 && rect.height >= 90;
-        const mediaElements = Array.from(cardElement.querySelectorAll("img, source"));
+        const mediaElements = [cardElement, ...Array.from(cardElement.querySelectorAll("img, source"))];
         const mediaContext = (media) => [
           media.currentSrc || "",
           media.getAttribute("src") || "",
@@ -307,22 +314,31 @@ async function findRenderedChapters(
           media.getAttribute("data-original") || "",
           media.getAttribute("data-lazy-src") || "",
           media.getAttribute("data-image") || "",
+          media.getAttribute("data-ep_thumb2") || "",
+          media.getAttribute("data-ep_thumb3") || "",
+          media.getAttribute("data-thumbnail") || "",
+          media.getAttribute("data-thumb") || "",
           media.getAttribute("alt") || "",
           media.getAttribute("title") || "",
           media.getAttribute("class") || "",
+          media.getAttribute("style") || "",
         ].join(" ");
         const thumbnail = mediaElements.find((media) =>
           !blockedWords.test(mediaContext(media)),
         ) ?? mediaElements[0];
         const thumbnailContext = thumbnail ? mediaContext(thumbnail) : "";
-        const thumbnailValue = thumbnail && !blockedWords.test(thumbnailContext)
-          ? (thumbnail.currentSrc ||
-            thumbnail.getAttribute("src") ||
-            thumbnail.getAttribute("data-src") ||
-            thumbnail.getAttribute("data-original") ||
-            thumbnail.getAttribute("data-lazy-src") ||
-            thumbnail.getAttribute("data-image") ||
-            "")
+         const thumbnailValue = thumbnail && !blockedWords.test(thumbnailContext)
+           ? (thumbnail.currentSrc ||
+             thumbnail.getAttribute("src") ||
+             thumbnail.getAttribute("data-src") ||
+             thumbnail.getAttribute("data-original") ||
+             thumbnail.getAttribute("data-lazy-src") ||
+             thumbnail.getAttribute("data-image") ||
+             thumbnail.getAttribute("data-ep_thumb2") ||
+             thumbnail.getAttribute("data-ep_thumb3") ||
+             thumbnail.getAttribute("data-thumbnail") ||
+             thumbnail.getAttribute("data-thumb") ||
+             "")
           : "";
 
         // Schedule/status labels such as "Atualizado toda Sex" can carry a
