@@ -34,7 +34,11 @@ import { data as limparData } from "./commands/limpar.js";
 import { logger } from "../lib/logger.js";
 import { monitorCommandDefinition } from "../services/discord-command-service.js";
 
-export async function deployCommands(clientId: string, token: string) {
+export async function deployCommands(
+  clientId: string,
+  token: string,
+  guildIds: string[] = [],
+) {
   const commands = [
     searchData.toJSON(), topData.toJSON(), recomendarData.toJSON(), ajudaData.toJSON(),
     aleatorioData.toJSON(), lancamentosData.toJSON(), favoritosData.toJSON(), compararData.toJSON(),
@@ -51,7 +55,12 @@ export async function deployCommands(clientId: string, token: string) {
   try {
     logger.info({ count: commands.length }, "Registrando slash commands...");
     await rest.put(Routes.applicationCommands(clientId), { body: commands });
-    logger.info("Slash commands registrados com sucesso.");
+    await Promise.all(
+      guildIds.map((guildId) =>
+        rest.put(Routes.applicationGuildCommands(clientId, guildId), { body: commands }),
+      ),
+    );
+    logger.info({ guildCount: guildIds.length }, "Slash commands registrados com sucesso.");
   } catch (err) {
     logger.error({ err }, "Erro ao registrar slash commands");
     throw err;
