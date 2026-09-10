@@ -189,7 +189,11 @@ async function downloadThumbnail(url: string): Promise<Buffer | null> {
   }
 }
 
-async function buildStrip(title: string, chapters: ChapterCandidate[]): Promise<Buffer> {
+async function buildStrip(
+  title: string,
+  chapters: ChapterCandidate[],
+  thumbnailImages?: Array<Buffer | undefined>,
+): Promise<Buffer> {
   const rowHeight = 164;
   const width = 920;
   const headerHeight = 92;
@@ -198,6 +202,10 @@ async function buildStrip(title: string, chapters: ChapterCandidate[]): Promise<
     chapter,
     data: await downloadThumbnail(chapter.thumbnailUrl),
   })));
+  for (let index = 0; index < images.length; index++) {
+    const captured = thumbnailImages?.[index];
+    if (captured) images[index]!.data = captured;
+  }
   const imageRows = images.map(({ chapter, data }, index) => {
     const y = headerHeight + index * rowHeight;
     return `<rect x="24" y="${y}" width="872" height="140" rx="14" fill="#f5f0e8" stroke="#ded5c8"/><text x="52" y="${y + 78}" fill="#132b3f" font-family="Arial,sans-serif" font-size="25" font-weight="700">EP ${escapeXml(chapter.number)}</text>${data ? "" : `<text x="185" y="${y + 78}" fill="#7a746c" font-family="Arial,sans-serif" font-size="18">Thumbnail unavailable</text>`}`;
@@ -240,6 +248,7 @@ async function postStrip(
   total: number,
   isTest = false,
   capturedImage?: Buffer,
+  capturedThumbnails?: Array<Buffer | undefined>,
 ) {
   const token = process.env.DISCORD_BOT_TOKEN;
   if (!token) throw new Error("DISCORD_BOT_TOKEN is not configured");
@@ -247,8 +256,9 @@ async function postStrip(
   // renderer remains as a last-resort compatibility fallback when a browser
   // is unavailable or a page does not expose a stable card.
   const png =
-    capturedImage ??
-    await buildStrip(title, chapters);
+    capturedThumbnails?.some(Boolean)
+      ? await buildStrip(title, chapters, capturedThumbnails)
+      : capturedImage ?? await buildStrip(title, chapters);
   const form = new FormData();
   const chapterSummary = chapters.length === 1
     ? `1 capítulo novo · capítulo ${chapters[0].number}`
@@ -301,11 +311,14 @@ export async function runTestNotification() {
 
     const chapter = candidates[Math.floor(Math.random() * candidates.length)]!;
     let capturedImage: Buffer | undefined;
+    let capturedThumbnails: Array<Buffer | undefined> | undefined;
     if (listing.captureSession && chapter.captureId) {
       try {
         const [group] = await listing.captureSession.captureGroups([chapter.captureId]);
-        if (await isUsableBrowserCapture(group?.image)) {
+        const hasThumbnailCapture = Boolean(group?.thumbnailImages?.some(Boolean));
+        if (hasThumbnailCapture || await isUsableBrowserCapture(group?.image)) {
           capturedImage = group?.image;
+          capturedThumbnails = group?.thumbnailImages;
         } else {
           logger.warn(
             { title: work.title, chapter: chapter.number },
@@ -327,6 +340,7 @@ export async function runTestNotification() {
       1,
       true,
       capturedImage,
+      capturedThumbnails,
     );
 
     return {
@@ -464,7 +478,8 @@ export async function runMonitor() {
       }
       const validCapturedGroups: CapturedChapterGroup[] = [];
       for (const group of capturedGroups) {
-        if (await isUsableBrowserCapture(group.image)) {
+        const hasThumbnailCapture = group.thumbnailImages.some(Boolean);
+        if (hasThumbnailCapture || await isUsableBrowserCapture(group.image)) {
           validCapturedGroups.push(group);
         } else {
           logger.warn(
@@ -482,9 +497,14 @@ export async function runMonitor() {
             .map((number) => freshByNumber.get(number))
             .filter(Boolean) as ChapterCandidate[],
           image: group.image,
+          thumbnailImages: group.thumbnailImages,
         }))
         .filter((group) => group.chapters.length > 0);
-      const groups: Array<{ chapters: ChapterCandidate[]; image?: Buffer }> =
+      const groups: Array<{
+        chapters: ChapterCandidate[];
+        image?: Buffer;
+        thumbnailImages?: Array<Buffer | undefined>;
+      }> =
         browserGroups.length
           ? browserGroups
           : Array.from(
@@ -504,6 +524,7 @@ export async function runMonitor() {
           groups.length,
           false,
           group.image,
+          group.thumbnailImages,
         );
         postsSent++;
       }
