@@ -30,8 +30,17 @@ export type CapturedChapterGroup = {
   image: Buffer;
 };
 
+export type BrowserListingDiagnostics = {
+  finalUrl: string;
+  pageTitle: string;
+  bodyTextLength: number;
+  visibleImageCount: number;
+  signals: string[];
+};
+
 export type BrowserListingSession = {
   candidates: BrowserChapter[];
+  diagnostics: BrowserListingDiagnostics;
   captureGroups(chapterIds: string[]): Promise<CapturedChapterGroup[]>;
   close(): Promise<void>;
 };
@@ -554,10 +563,39 @@ export async function openBrowserListing(
       timeout: PAGE_TIMEOUT_MS,
     });
     await waitForRenderedPage(page);
+    const diagnostics = await page.evaluate(() => {
+      const bodyText = (document.body?.innerText || "").replace(/\s+/g, " ").trim();
+      const lowerText = bodyText.toLocaleLowerCase();
+      const signals = [
+        ["login", /login|sign in|entrar|conectar/.test(lowerText)],
+        ["captcha", /captcha|recaptcha|verifique que eres humano|are you human/.test(lowerText)],
+        ["cloudflare", /cloudflare|just a moment|checking your browser/.test(lowerText)],
+        ["access-denied", /access denied|forbidden|acesso negado/.test(lowerText)],
+      ]
+        .filter(([, present]) => present)
+        .map(([name]) => name);
+      const visibleImageCount = Array.from(document.images).filter((image) => {
+        const style = getComputedStyle(image);
+        const rect = image.getBoundingClientRect();
+        return style.display !== "none" &&
+          style.visibility !== "hidden" &&
+          Number.parseFloat(style.opacity || "1") > 0 &&
+          rect.width > 2 &&
+          rect.height > 2;
+      }).length;
+      return {
+        finalUrl: location.href,
+        pageTitle: document.title,
+        bodyTextLength: bodyText.length,
+        visibleImageCount,
+        signals,
+      };
+    });
     const candidates = await findRenderedChapters(page, platform);
 
     return {
       candidates: candidates.map(({ box: _box, ...chapter }) => chapter),
+      diagnostics,
       async captureGroups(chapterIds) {
         const selected = candidates
           .filter((chapter) => chapterIds.includes(chapter.captureId))
