@@ -221,10 +221,7 @@ async function postStrip(
     content: `${isTest ? "🧪 **TESTE** · " : ""}**${title}** · ${chapterSummary}${total > 1 ? ` · parte ${part}/${total}` : ""}`,
     allowed_mentions: { parse: [] },
   }));
-  const pngBlob = new Blob(
-    [png.buffer.slice(png.byteOffset, png.byteOffset + png.byteLength) as ArrayBuffer],
-    { type: "image/png" },
-  );
+  const pngBlob = new Blob([png], { type: "image/png" });
   form.append("files[0]", pngBlob, `chapter-release-${isTest ? "test-" : ""}${Date.now()}-${part}.png`);
   const response = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
     method: "POST",
