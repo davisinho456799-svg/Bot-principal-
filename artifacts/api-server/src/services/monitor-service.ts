@@ -335,6 +335,7 @@ export async function runTestNotification() {
       title: work.title,
       chapter: chapter.number,
       parser,
+      captureMode: capturedImage ? "captura direta do card" : "fallback SVG/Sharp",
       channelId: config.discordChannelId,
     };
   } finally {
