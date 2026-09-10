@@ -164,32 +164,53 @@ async function fetchListing(
   };
 }
 
-async function downloadAsDataUri(url: string) {
+async function downloadThumbnail(url: string): Promise<Buffer | null> {
   try {
     const response = await fetch(url, { headers: { "User-Agent": "ChapterMonitor/1.0" } });
     if (!response.ok) return null;
     const bytes = Buffer.from(await response.arrayBuffer());
-    const type = response.headers.get("content-type")?.split(";")[0] ?? "image/jpeg";
-    return `data:${type};base64,${bytes.toString("base64")}`;
+    const metadata = await sharp(bytes).metadata();
+    if (!metadata.width || !metadata.height) return null;
+    return bytes;
   } catch {
     return null;
   }
 }
 
-async function buildStrip(title: string, chapters: ChapterCandidate[]) {
+async function buildStrip(title: string, chapters: ChapterCandidate[]): Promise<Buffer> {
   const rowHeight = 164;
   const width = 920;
   const headerHeight = 92;
   const height = headerHeight + chapters.length * rowHeight + 24;
   const images = await Promise.all(chapters.map(async (chapter) => ({
     chapter,
-    data: await downloadAsDataUri(chapter.thumbnailUrl),
+    data: await downloadThumbnail(chapter.thumbnailUrl),
   })));
   const imageRows = images.map(({ chapter, data }, index) => {
     const y = headerHeight + index * rowHeight;
-    return `<rect x="24" y="${y}" width="872" height="140" rx="14" fill="#f5f0e8" stroke="#ded5c8"/><text x="52" y="${y + 78}" fill="#132b3f" font-family="Arial,sans-serif" font-size="25" font-weight="700">EP ${escapeXml(chapter.number)}</text>${data ? `<image href="${data}" x="185" y="${y + 10}" width="690" height="120" preserveAspectRatio="xMidYMid slice" clip-path="inset(0 round 10px)"/>` : `<text x="185" y="${y + 78}" fill="#7a746c" font-family="Arial,sans-serif" font-size="18">Thumbnail unavailable</text>`}`;
+    return `<rect x="24" y="${y}" width="872" height="140" rx="14" fill="#f5f0e8" stroke="#ded5c8"/><text x="52" y="${y + 78}" fill="#132b3f" font-family="Arial,sans-serif" font-size="25" font-weight="700">EP ${escapeXml(chapter.number)}</text>${data ? "" : `<text x="185" y="${y + 78}" fill="#7a746c" font-family="Arial,sans-serif" font-size="18">Thumbnail unavailable</text>`}`;
   }).join("");
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="100%" height="100%" fill="#fffaf3"/><text x="34" y="44" fill="#132b3f" font-family="Arial,sans-serif" font-size="25" font-weight="700">${escapeXml(title)}</text><text x="34" y="70" fill="#d8624c" font-family="Arial,sans-serif" font-size="13" letter-spacing="2">NEW CHAPTERS · ${chapters.length}</text>${imageRows}</svg>`;
+  const baseSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="100%" height="100%" fill="#fffaf3"/><text x="34" y="44" fill="#132b3f" font-family="Arial,sans-serif" font-size="25" font-weight="700">${escapeXml(title)}</text><text x="34" y="70" fill="#d8624c" font-family="Arial,sans-serif" font-size="13" letter-spacing="2">NEW CHAPTERS · ${chapters.length}</text>${imageRows}</svg>`;
+  let output = await sharp(Buffer.from(baseSvg)).png().toBuffer();
+  const composites = await Promise.all(images.map(async ({ data }, index) => {
+    if (!data) return null;
+    const thumbnail = await sharp(data)
+      .resize(690, 120, { fit: "cover", position: "centre" })
+      .png()
+      .toBuffer();
+    return {
+      input: thumbnail,
+      left: 185,
+      top: headerHeight + index * rowHeight + 10,
+    };
+  }));
+  if (composites.length) {
+    output = await sharp(output)
+      .composite(composites.filter((item): item is NonNullable<typeof item> => item !== null))
+      .png()
+      .toBuffer();
+  }
+  return output;
 }
 
 function escapeXml(value: string) {
@@ -212,7 +233,7 @@ async function postStrip(
   // is unavailable or a page does not expose a stable card.
   const png =
     capturedImage ??
-    (await sharp(Buffer.from(await buildStrip(title, chapters))).png().toBuffer());
+    await buildStrip(title, chapters);
   const form = new FormData();
   const chapterSummary = chapters.length === 1
     ? `1 capítulo novo · capítulo ${chapters[0].number}`
