@@ -66,7 +66,13 @@ export const monitorCommandDefinition = new SlashCommandBuilder()
     .addSubcommand((command) =>
       command
         .setName("teste")
-        .setDescription("Envia uma notificação falsa com um título aleatório"),
+        .setDescription("Testa uma obra específica ou escolhe uma aleatória")
+        .addIntegerOption((option) =>
+          option
+            .setName("obra")
+            .setDescription("ID da obra exibido pelo /monitor listar")
+            .setRequired(false),
+        ),
     )
     .addSubcommand((command) =>
       command
@@ -266,6 +272,7 @@ export async function executeManhwaCommand(interaction: ChatInputCommandInteract
     return;
   }
   if (subcommand === "teste") {
+    const workId = interaction.options.getInteger("obra") ?? undefined;
     const progress: string[] = [];
     const updateProgress = async (message: string) => {
       progress.push(message);
@@ -278,7 +285,7 @@ export async function executeManhwaCommand(interaction: ChatInputCommandInteract
     };
 
     try {
-      const result = await runTestNotification(updateProgress);
+      const result = await runTestNotification(updateProgress, workId);
       await interaction.editReply({
         content: [
           "✅ **Resultado do teste**",
