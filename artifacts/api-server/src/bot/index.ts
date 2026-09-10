@@ -38,6 +38,7 @@ import * as verificarCommand from "./commands/verificar.js";
 import * as assinarCommand from "./commands/assinar.js";
 import * as assinar18Command from "./commands/assinar18.js";
 import * as adminCommand from "./commands/admin.js";
+import * as limparCommand from "./commands/limpar.js";
 import { startNotificacaoService, startWeeklyService } from "./notificacao-service.js";
 import { cleanupDuplicateAliases } from "./unified.js";
 import { logUsage } from "./usage-logger.js";
@@ -91,6 +92,7 @@ const commands = new Map<string, Command>([
   [assinarCommand.data.name, assinarCommand],
   [assinar18Command.data.name, assinar18Command],
   [adminCommand.data.name, adminCommand],
+  [limparCommand.data.name, limparCommand],
   [monitorCommandDefinition.name, { data: monitorCommandDefinition, execute: executeManhwaCommand }],
 ]);
 
