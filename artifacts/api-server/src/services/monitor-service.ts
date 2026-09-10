@@ -159,9 +159,12 @@ async function fetchListing(
     const signals = diagnostics.signals.length
       ? ` Sinais detectados: ${diagnostics.signals.join(", ")}.`
       : "";
+    const authentication = diagnostics.authentication !== "não aplicável"
+      ? ` Autenticação: ${diagnostics.authentication}.`
+      : "";
     await reportProgress(
       progress,
-      `O navegador não encontrou cards; URL final: ${diagnostics.finalUrl}; título: "${diagnostics.pageTitle || "sem título"}"; texto: ${diagnostics.bodyTextLength} caracteres; imagens visíveis: ${diagnostics.visibleImageCount}.${signals}`,
+      `O navegador não encontrou cards; URL final: ${diagnostics.finalUrl}; título: "${diagnostics.pageTitle || "sem título"}"; texto: ${diagnostics.bodyTextLength} caracteres; imagens visíveis: ${diagnostics.visibleImageCount}.${authentication}${signals}`,
     );
     await reportProgress(progress, "Tentando o parser da plataforma.");
   } catch (error) {
