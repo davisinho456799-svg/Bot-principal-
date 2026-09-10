@@ -165,9 +165,30 @@ async function findRenderedChapters(
           "{1,5}(?:[.,]" + digit + "+)?)",
         "i",
       );
+      const datePattern = new RegExp(
+        "(^|[^0-9])((?:20)?[0-9]{2})[./-]([0-9]{1,2})[./-]([0-9]{1,2})(?=[^0-9]|$)",
+        "g",
+      );
 
       const normalizeNumber = (value) =>
         String(value).replace(",", ".").trim().replace(/^0+/, "") || "0";
+
+      const releaseDateFrom = (source) => {
+        const match = datePattern.exec(source);
+        datePattern.lastIndex = 0;
+        if (!match) return "";
+        const rawYear = Number(match[2]);
+        const year = rawYear < 100 ? 2_000 + rawYear : rawYear;
+        const month = Number(match[3]);
+        const day = Number(match[4]);
+        const date = new Date(Date.UTC(year, month - 1, day, 12));
+        return Number.isNaN(date.getTime()) ||
+          date.getUTCFullYear() !== year ||
+          date.getUTCMonth() !== month - 1 ||
+          date.getUTCDate() !== day
+          ? ""
+          : date.toISOString().slice(0, 10);
+      };
 
       const visible = (element) => {
         const style = getComputedStyle(element);
@@ -291,6 +312,9 @@ async function findRenderedChapters(
         return {
           number: record.number,
           thumbnailUrl: record.thumbnailUrl,
+          releaseDate: releaseDateFrom(
+            record.element.innerText || record.element.textContent || "",
+          ),
           captureId,
           captureOrder: index,
           box: record.rect

@@ -39,6 +39,23 @@ type ExistingChapter = {
   number: string;
 };
 
+const HISTORICAL_RELEASE_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1_000;
+
+function numericChapterNumber(value: string): number | null {
+  const number = Number(value.replace(",", ".").trim());
+  return Number.isFinite(number) ? number : null;
+}
+
+function isHistoricalRelease(
+  chapter: ChapterCandidate,
+  checkedAt: Date,
+): boolean {
+  if (!chapter.releaseDate) return false;
+  const releaseTime = Date.parse(`${chapter.releaseDate}T12:00:00Z`);
+  return Number.isFinite(releaseTime) &&
+    checkedAt.getTime() - releaseTime > HISTORICAL_RELEASE_MAX_AGE_MS;
+}
+
 async function migrateLegacyKeys(
   tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
   work: typeof monitoredWorksTable.$inferSelect,
@@ -288,13 +305,48 @@ export async function runMonitor() {
         })
         .from(detectedChaptersTable)
         .where(eq(detectedChaptersTable.workId, work.id));
+      const checkedAt = new Date();
       const seenKeys = new Set(existing.map((item) => item.key));
       const seenNumbers = new Set(existing.map((item) => chapterNumberIdentity(item.number)));
-      const fresh = candidates.filter((candidate) =>
+      const previouslyUnseen = candidates.filter((candidate) =>
         !seenKeys.has(candidate.key) &&
         !seenNumbers.has(chapterNumberIdentity(candidate.number)),
       );
-      const checkedAt = new Date();
+      const historical = previouslyUnseen.filter((candidate) =>
+        isHistoricalRelease(candidate, checkedAt),
+      );
+      let fresh = previouslyUnseen.filter((candidate) =>
+        !isHistoricalRelease(candidate, checkedAt),
+      );
+
+      // HTML fallback parsers do not have the card date. If a migration
+      // suddenly exposes a large historical range, do not publish the whole
+      // backlog; record the older entries and only publish the newest one.
+      const existingNumbers = existing
+        .map((chapter) => numericChapterNumber(chapter.number))
+        .filter((number): number is number => number !== null);
+      const freshNumbers = fresh
+        .map((chapter) => numericChapterNumber(chapter.number))
+        .filter((number): number is number => number !== null);
+      const highestExisting = existingNumbers.length ? Math.max(...existingNumbers) : null;
+      const highestFresh = freshNumbers.length ? Math.max(...freshNumbers) : null;
+      if (
+        fresh.length >= 5 &&
+        fresh.every((chapter) => !chapter.releaseDate) &&
+        highestExisting !== null &&
+        highestFresh !== null &&
+        highestFresh - highestExisting >= 5
+      ) {
+        const newest = fresh.reduce((current, candidate) =>
+          (numericChapterNumber(candidate.number) ?? -Infinity) >
+          (numericChapterNumber(current.number) ?? -Infinity)
+            ? candidate
+            : current,
+        );
+        historical.push(...fresh.filter((candidate) => candidate !== newest));
+        fresh = [newest];
+      }
+
       if (existing.length === 0) {
         await db.transaction(async (tx) => {
           if (candidates.length) await tx.insert(detectedChaptersTable).values(candidates.map((chapter) => ({ workId: work.id, chapterKey: chapter.key, chapterNumber: chapter.number, thumbnailUrl: chapter.thumbnailUrl, detectedAt: checkedAt })));
@@ -305,13 +357,43 @@ export async function runMonitor() {
       if (!fresh.length) {
         await db.transaction(async (tx) => {
           await migrateLegacyKeys(tx, work, existing);
-          await tx.update(monitoredWorksTable).set({ lastCheckedAt: checkedAt, lastStatus: `${parser}: no new chapters`, updatedAt: checkedAt }).where(eq(monitoredWorksTable.id, work.id));
+          if (historical.length) {
+            await tx.insert(detectedChaptersTable).values(historical.map((chapter) => ({
+              workId: work.id,
+              chapterKey: chapter.key,
+              chapterNumber: chapter.number,
+              thumbnailUrl: chapter.thumbnailUrl,
+              detectedAt: checkedAt,
+            })));
+          }
+          await tx.update(monitoredWorksTable).set({
+            chaptersSeen: existing.length + historical.length,
+            lastCheckedAt: checkedAt,
+            lastStatus: historical.length
+              ? `${parser}: historical chapters ignored`
+              : `${parser}: no new chapters`,
+            updatedAt: checkedAt,
+          }).where(eq(monitoredWorksTable.id, work.id));
         });
         continue;
       }
       chaptersFound += fresh.length;
+      if (historical.length) {
+        await db.insert(detectedChaptersTable).values(historical.map((chapter) => ({
+          workId: work.id,
+          chapterKey: chapter.key,
+          chapterNumber: chapter.number,
+          thumbnailUrl: chapter.thumbnailUrl,
+          detectedAt: checkedAt,
+        })));
+      }
       if (!config?.discordChannelId) {
-        await db.update(monitoredWorksTable).set({ lastCheckedAt: checkedAt, lastStatus: `${parser}: new chapters found — choose a Discord channel`, updatedAt: checkedAt }).where(eq(monitoredWorksTable.id, work.id));
+        await db.update(monitoredWorksTable).set({
+          chaptersSeen: existing.length + historical.length,
+          lastCheckedAt: checkedAt,
+          lastStatus: `${parser}: new chapters found — choose a Discord channel`,
+          updatedAt: checkedAt,
+        }).where(eq(monitoredWorksTable.id, work.id));
         continue;
       }
       let capturedGroups: CapturedChapterGroup[] = [];
@@ -365,7 +447,7 @@ export async function runMonitor() {
         await migrateLegacyKeys(tx, work, existing);
         await tx.insert(detectedChaptersTable).values(fresh.map((chapter) => ({ workId: work.id, chapterKey: chapter.key, chapterNumber: chapter.number, thumbnailUrl: chapter.thumbnailUrl, detectedAt: checkedAt, publishedAt: checkedAt })));
         await tx.insert(monitorActivityTable).values({ workId: work.id, chapterCount: fresh.length, status: "Published" });
-        await tx.update(monitoredWorksTable).set({ chaptersSeen: existing.length + fresh.length, lastCheckedAt: checkedAt, lastPublishedAt: checkedAt, lastStatus: `${fresh.length} new chapter${fresh.length === 1 ? "" : "s"} published`, updatedAt: checkedAt }).where(eq(monitoredWorksTable.id, work.id));
+        await tx.update(monitoredWorksTable).set({ chaptersSeen: existing.length + historical.length + fresh.length, lastCheckedAt: checkedAt, lastPublishedAt: checkedAt, lastStatus: `${fresh.length} new chapter${fresh.length === 1 ? "" : "s"} published`, updatedAt: checkedAt }).where(eq(monitoredWorksTable.id, work.id));
       });
     } catch (error) {
       logger.warn({ err: error, workId: work.id }, "Work monitor failed");
