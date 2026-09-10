@@ -128,7 +128,7 @@ async function findRenderedChapters(
         "[id*='chapter']",
         "div"
       ].join(",");
-      const blockedWords = /fullversion|full version|download app|app version|promotion|promo/i;
+      const blockedWords = /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)/i;
       const chapterLabel = /(?:chapter|episode|episodio|epis[oó]dio|ep(?:isode)?|ch(?:apter)?|cap(?:itulo|ítulo)?|cap\\\\.)/i;
       const chapterPattern = /(?:chapter|episode|episodio|epis[oó]dio|ep(?:isode)?|ch(?:apter)?|cap(?:itulo|ítulo)?|cap\\\\.)\\\\s*(?:#|[-_:])?\\\\s*(\\\\d{1,5}(?:[.,]\\\\d+)?)/ig;
       const hashPattern = /(?:^|\\\\s)#(\\\\d{1,5}(?:[.,]\\\\d+)?)(?=\\\\s|$)/g;
@@ -256,12 +256,31 @@ async function findRenderedChapters(
         const hasLink = element.tagName.toLowerCase() === "a" || Boolean(element.querySelector("a[href]"));
         const hasChapterText = chapterLabelFixed.test(text);
         const hasCardDimensions = rect.width >= 240 && rect.height >= 90;
+        const thumbnail = element.querySelector("img, source");
+        const thumbnailValue = thumbnail
+          ? (thumbnail.currentSrc ||
+            thumbnail.getAttribute("src") ||
+            thumbnail.getAttribute("data-src") ||
+            thumbnail.getAttribute("data-original") ||
+            thumbnail.getAttribute("data-lazy-src") ||
+            thumbnail.getAttribute("data-image") ||
+            "")
+          : "";
+        const thumbnailContext = thumbnail
+          ? [
+              thumbnailValue,
+              thumbnail.getAttribute("alt") || "",
+              thumbnail.getAttribute("title") || "",
+              thumbnail.getAttribute("class") || "",
+            ].join(" ")
+          : "";
 
         // Schedule/status labels such as "Atualizado toda Sex" can carry a
         // chapter-related attribute without being the visual card. A real
         // card must contain media or have dimensions large enough to render
         // the chapter metadata and thumbnail area.
         if (!hasImage && !hasCardDimensions) continue;
+        if (blockedWords.test(thumbnailContext)) continue;
 
         // A platform chapter card is expected to have a marker, link, or
         // image. This rejects the page wrapper and promotional banners.
@@ -275,17 +294,6 @@ async function findRenderedChapters(
           Math.max(0, numbers.length - 1) * 45 -
           Math.min(text.length, 1_000) / 35 -
           Math.min(rect.width * rect.height / 100_000, 20);
-
-        const thumbnail = element.querySelector("img, source");
-        const thumbnailValue = thumbnail
-          ? (thumbnail.currentSrc ||
-            thumbnail.getAttribute("src") ||
-            thumbnail.getAttribute("data-src") ||
-            thumbnail.getAttribute("data-original") ||
-            thumbnail.getAttribute("data-lazy-src") ||
-            thumbnail.getAttribute("data-image") ||
-            "")
-          : "";
 
         for (const number of numbers) {
           const previous = bestByNumber.get(number);
@@ -430,6 +438,34 @@ async function captureGroup(
     .scrollIntoViewIfNeeded()
     .catch(() => undefined);
   await page.waitForTimeout(100);
+
+  await page
+    .evaluate(
+      `((ids) => {
+        const blockedWords = /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)/i;
+        for (const id of ids) {
+          const card = document.querySelector('[data-monitor-capture-card="' + id + '"]');
+          if (!card) continue;
+          for (const media of card.querySelectorAll("img, picture, source")) {
+            const context = [
+              media.currentSrc || "",
+              media.getAttribute("src") || "",
+              media.getAttribute("data-src") || "",
+              media.getAttribute("data-original") || "",
+              media.getAttribute("data-lazy-src") || "",
+              media.getAttribute("data-image") || "",
+              media.getAttribute("alt") || "",
+              media.getAttribute("title") || "",
+              media.getAttribute("class") || "",
+            ].join(" ");
+            if (!blockedWords.test(context)) continue;
+            const target = media instanceof HTMLElement ? media : media.parentElement;
+            target?.style.setProperty("display", "none", "important");
+          }
+        }
+      })(${JSON.stringify(chapters.map((chapter) => chapter.captureId))})`,
+    )
+    .catch(() => undefined);
 
   const boxes = (
     await Promise.all(
