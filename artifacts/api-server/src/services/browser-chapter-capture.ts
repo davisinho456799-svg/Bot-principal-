@@ -36,6 +36,7 @@ export type BrowserListingDiagnostics = {
   bodyTextLength: number;
   visibleImageCount: number;
   signals: string[];
+  authentication: string;
 };
 
 export type BrowserListingSession = {
@@ -109,6 +110,55 @@ async function waitForRenderedPage(page: Page): Promise<void> {
       })()`,
     )
     .catch(() => undefined);
+}
+
+async function loginToomics(page: Page): Promise<string> {
+  const email = process.env.TOOMICS_EMAIL?.trim();
+  const password = process.env.TOOMICS_PASSWORD;
+  if (!email || !password) return "credenciais não configuradas";
+
+  const emailInput = page.locator(
+    'input[type="email"], input[name*="email" i], input[name*="user" i], input[name*="login" i], input[name*="id" i]',
+  ).first();
+  const passwordInput = page.locator('input[type="password"]').first();
+
+  if (!(await passwordInput.count())) {
+    const loginLink = page.locator(
+      'a[href*="login" i], a[href*="signin" i], button:has-text("Login"), button:has-text("Entrar"), button:has-text("로그인")',
+    ).first();
+    if (await loginLink.count()) {
+      await loginLink.click().catch(() => undefined);
+      await page.waitForTimeout(500);
+    }
+  }
+
+  if (!(await emailInput.count()) || !(await passwordInput.count())) {
+    return "formulário de login não encontrado";
+  }
+
+  await emailInput.fill(email);
+  await passwordInput.fill(password);
+  const submit = page.locator(
+    'button[type="submit"], input[type="submit"], button:has-text("Login"), button:has-text("Entrar"), button:has-text("로그인")',
+  ).last();
+  if (!(await submit.count())) return "botão de login não encontrado";
+
+  await Promise.all([
+    submit.click().catch(() => undefined),
+    page.waitForLoadState("domcontentloaded", { timeout: 15_000 }).catch(() => undefined),
+  ]);
+  await page.waitForTimeout(1_000);
+
+  const state = await page.evaluate(() => {
+    const text = (document.body?.innerText || "").replace(/\s+/g, " ").toLocaleLowerCase();
+    const hasPassword = Boolean(document.querySelector('input[type="password"]'));
+    const hasCaptcha = /captcha|recaptcha|are you human|verifique que/.test(text);
+    const hasError = /invalid password|incorrect|senha inválida|email inválido|로그인 실패/.test(text);
+    return { hasPassword, hasCaptcha, hasError };
+  });
+  if (state.hasCaptcha) return "captcha ou verificação manual necessária";
+  if (state.hasError || state.hasPassword) return "login rejeitado";
+  return "login concluído";
 }
 
 /**
@@ -579,6 +629,16 @@ export async function openBrowserListing(
       timeout: PAGE_TIMEOUT_MS,
     });
     await waitForRenderedPage(page);
+    const authentication = platform === "toomics"
+      ? await loginToomics(page)
+      : "não aplicável";
+    if (platform === "toomics" && authentication === "login concluído") {
+      await page.goto(listingUrl, {
+        waitUntil: "domcontentloaded",
+        timeout: PAGE_TIMEOUT_MS,
+      });
+      await waitForRenderedPage(page);
+    }
     const diagnostics = await page.evaluate(() => {
       const bodyText = (document.body?.innerText || "").replace(/\s+/g, " ").trim();
       const lowerText = bodyText.toLocaleLowerCase();
@@ -605,8 +665,10 @@ export async function openBrowserListing(
         bodyTextLength: bodyText.length,
         visibleImageCount,
         signals,
+        authentication: "",
       };
     });
+    diagnostics.authentication = authentication;
     const candidates = await findRenderedChapters(page, platform);
 
     return {
