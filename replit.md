@@ -24,7 +24,8 @@ Panel Watch monitors public chapter listings for Lezhin, Toomics, and Toptoon an
 
 - `artifacts/chapter-monitor` — responsive configuration dashboard for watchlist, manual runs, channel selection, and health.
 - `artifacts/api-server/src/routes/monitor.ts` — monitor API endpoints, Discord channel discovery, and persisted configuration.
-- `artifacts/api-server/src/services/monitor-service.ts` — public listing polling, thumbnail extraction, deduplication, grouped strip generation, and Discord publishing.
+- `artifacts/api-server/src/services/monitor-service.ts` — public listing polling, deduplication, grouped capture publishing, and Discord delivery.
+- `artifacts/api-server/src/services/browser-chapter-capture.ts` — singleton Playwright browser/context, chapter-card detection, region screenshots, and adaptive grouping.
 - `lib/db/src/schema/monitor.ts` — works, detected chapters, activity, and monitor configuration tables.
 - `lib/api-spec/openapi.yaml` — source of truth for generated monitor API clients and Zod schemas.
 
@@ -33,7 +34,7 @@ Panel Watch monitors public chapter listings for Lezhin, Toomics, and Toptoon an
 - The app uses the Discord bot token for channel listing and message delivery; the user OAuth connection is not sufficient for channel writes.
 - The first check for a newly added work captures a baseline without publishing the existing backlog.
 - Chapter identity is stored per work using platform, chapter number, and thumbnail URL so old releases are never reposted.
-- Release strips are generated as thumbnail-only SVG attachments and split into groups of up to five chapters for legibility.
+- The normal release path uses Playwright to render the real platform page and captures only the region containing the detected chapter cards. Adjacent new chapters are grouped into the largest reliable screenshot; the legacy SVG/Sharp strip remains a fallback when browser rendering or capture is unavailable.
 - When no destination is configured, the first accessible channel named `previw` is selected automatically.
 
 ## Product

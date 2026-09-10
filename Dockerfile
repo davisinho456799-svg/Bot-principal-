@@ -1,6 +1,7 @@
 FROM node:22-bookworm-slim AS builder
 
 WORKDIR /app
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 
 RUN corepack enable && corepack prepare pnpm@10.26.1 --activate
 
@@ -20,9 +21,13 @@ FROM node:22-bookworm-slim
 WORKDIR /app
 
 RUN corepack enable && corepack prepare pnpm@10.26.1 --activate
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends chromium \
+  && rm -rf /var/lib/apt/lists/*
 
 ENV NODE_ENV=production
 ENV SERVE_FRONTEND=true
+ENV PLAYWRIGHT_EXECUTABLE_PATH=/usr/bin/chromium
 
 COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/node_modules ./node_modules

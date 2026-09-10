@@ -197,7 +197,12 @@ async function handleList(interaction: ChatInputCommandInteraction) {
 
 async function handleSetChannel(interaction: ChatInputCommandInteraction) {
   const channel = interaction.options.getChannel("canal", true);
-  if (!channel.isTextBased() || !("name" in channel)) {
+  if (
+    !("isTextBased" in channel) ||
+    typeof channel.isTextBased !== "function" ||
+    !channel.isTextBased() ||
+    !("name" in channel)
+  ) {
     await replyError(interaction, "Escolha um canal de texto válido.");
     return;
   }

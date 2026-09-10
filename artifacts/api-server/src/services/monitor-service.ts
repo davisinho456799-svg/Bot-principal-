@@ -16,10 +16,17 @@ import {
   type ParsedChapter,
   type ParserContext,
 } from "./parsers/index";
+import {
+  openBrowserListing,
+  type BrowserChapter,
+  type BrowserListingSession,
+  type CapturedChapterGroup,
+} from "./browser-chapter-capture";
 
 type ChapterCandidate = ParsedChapter & {
   key: string;
   parser: string;
+  captureId?: string;
 };
 
 function chapterNumberIdentity(value: string): string {
@@ -76,13 +83,46 @@ function withChapterKeys(
     });
 }
 
-async function fetchListing(work: typeof monitoredWorksTable.$inferSelect) {
+type ListingSession = {
+  parser: string;
+  candidates: ChapterCandidate[];
+  captureSession?: BrowserListingSession;
+};
+
+async function fetchListing(
+  work: typeof monitoredWorksTable.$inferSelect,
+): Promise<ListingSession> {
   const platform = work.platform as MonitorPlatform;
   const context: ParserContext = {
     listingUrl: work.listingUrl,
     platform,
     workTitle: work.title,
   };
+
+  try {
+    const browserListing = await openBrowserListing(work.listingUrl, platform);
+    if (browserListing.candidates.length) {
+      const browserCandidates = browserListing.candidates as BrowserChapter[];
+      return {
+        parser: "Playwright browser",
+        candidates: withChapterKeys(
+          browserCandidates,
+          platform,
+          work.title,
+          "Playwright browser",
+        ),
+        captureSession: browserListing,
+      };
+    }
+    await browserListing.close();
+    logger.debug({ workId: work.id }, "Playwright encontrou a página, mas não encontrou capítulos");
+  } catch (error) {
+    logger.warn(
+      { err: error, workId: work.id, platform },
+      "Playwright falhou; usando parser HTML como fallback",
+    );
+  }
+
   const specificParser = parserForPlatform(work.platform);
 
   if (specificParser) {
@@ -146,17 +186,26 @@ async function postStrip(
   part: number,
   total: number,
   isTest = false,
+  capturedImage?: Buffer,
 ) {
   const token = process.env.DISCORD_BOT_TOKEN;
   if (!token) throw new Error("DISCORD_BOT_TOKEN is not configured");
-  const svg = await buildStrip(title, chapters);
-  const png = await sharp(Buffer.from(svg)).png().toBuffer();
+  // The browser path sends the pixels rendered by the platform. The SVG/Sharp
+  // renderer remains as a last-resort compatibility fallback when a browser
+  // is unavailable or a page does not expose a stable card.
+  const png =
+    capturedImage ??
+    (await sharp(Buffer.from(await buildStrip(title, chapters))).png().toBuffer());
   const form = new FormData();
   form.append("payload_json", JSON.stringify({
     content: `${isTest ? "🧪 **TESTE** · " : ""}**${title}** · ${chapters.length} capítulo${chapters.length === 1 ? "" : "s"} novo${chapters.length === 1 ? "" : "s"}${total > 1 ? ` · parte ${part}/${total}` : ""}`,
     allowed_mentions: { parse: [] },
   }));
-  form.append("files[0]", new Blob([png], { type: "image/png" }), `chapter-release-${isTest ? "test-" : ""}${Date.now()}-${part}.png`);
+  const pngBlob = new Blob(
+    [png.buffer.slice(png.byteOffset, png.byteOffset + png.byteLength) as ArrayBuffer],
+    { type: "image/png" },
+  );
+  form.append("files[0]", pngBlob, `chapter-release-${isTest ? "test-" : ""}${Date.now()}-${part}.png`);
   const response = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
     method: "POST",
     headers: { Authorization: `Bot ${token}` },
@@ -180,20 +229,45 @@ export async function runTestNotification() {
   }
 
   const work = works[Math.floor(Math.random() * works.length)];
-  const { parser, candidates } = await fetchListing(work);
-  if (!candidates.length) {
-    throw new Error(`Não encontrei capítulos com imagem para o título "${work.title}".`);
+  const listing = await fetchListing(work);
+  try {
+    const { parser, candidates } = listing;
+    if (!candidates.length) {
+      throw new Error(`Não encontrei capítulos para o título "${work.title}".`);
+    }
+
+    const chapter = candidates[Math.floor(Math.random() * candidates.length)]!;
+    let capturedImage: Buffer | undefined;
+    if (listing.captureSession && chapter.captureId) {
+      try {
+        const [group] = await listing.captureSession.captureGroups([chapter.captureId]);
+        capturedImage = group?.image;
+      } catch (error) {
+        logger.warn(
+          { err: error, title: work.title, chapter: chapter.number },
+          "Captura Playwright falhou no teste; usando fallback legado",
+        );
+      }
+    }
+    await postStrip(
+      config.discordChannelId,
+      work.title,
+      [chapter],
+      1,
+      1,
+      true,
+      capturedImage,
+    );
+
+    return {
+      title: work.title,
+      chapter: chapter.number,
+      parser,
+      channelId: config.discordChannelId,
+    };
+  } finally {
+    await listing.captureSession?.close();
   }
-
-  const chapter = candidates[Math.floor(Math.random() * candidates.length)];
-  await postStrip(config.discordChannelId, work.title, [chapter], 1, 1, true);
-
-  return {
-    title: work.title,
-    chapter: chapter.number,
-    parser,
-    channelId: config.discordChannelId,
-  };
 }
 
 export async function runMonitor() {
@@ -202,8 +276,10 @@ export async function runMonitor() {
   let chaptersFound = 0;
   let postsSent = 0;
   for (const work of works) {
+    let listing: ListingSession | undefined;
     try {
-      const { parser, candidates } = await fetchListing(work);
+      listing = await fetchListing(work);
+      const { parser, candidates } = listing;
       const existing = await db
         .select({
           id: detectedChaptersTable.id,
@@ -238,9 +314,51 @@ export async function runMonitor() {
         await db.update(monitoredWorksTable).set({ lastCheckedAt: checkedAt, lastStatus: `${parser}: new chapters found — choose a Discord channel`, updatedAt: checkedAt }).where(eq(monitoredWorksTable.id, work.id));
         continue;
       }
-      const chunks = Array.from({ length: Math.ceil(fresh.length / 5) }, (_, index) => fresh.slice(index * 5, index * 5 + 5));
-      for (let index = 0; index < chunks.length; index++) {
-        await postStrip(config.discordChannelId, work.title, chunks[index], index + 1, chunks.length);
+      let capturedGroups: CapturedChapterGroup[] = [];
+      if (listing.captureSession) {
+        try {
+          capturedGroups = await listing.captureSession.captureGroups(
+            fresh.map((chapter) => chapter.captureId).filter(Boolean) as string[],
+          );
+        } catch (error) {
+          logger.warn(
+            { err: error, workId: work.id },
+            "Captura agrupada falhou; usando fallback SVG/Sharp",
+          );
+        }
+      }
+      const freshByNumber = new Map(
+        fresh.map((chapter) => [chapter.number, chapter]),
+      );
+      const browserGroups = capturedGroups
+        .map((group) => ({
+          chapters: group.chapterNumbers
+            .map((number) => freshByNumber.get(number))
+            .filter(Boolean) as ChapterCandidate[],
+          image: group.image,
+        }))
+        .filter((group) => group.chapters.length > 0);
+      const groups: Array<{ chapters: ChapterCandidate[]; image?: Buffer }> =
+        browserGroups.length
+          ? browserGroups
+          : Array.from(
+              { length: Math.ceil(fresh.length / 5) },
+              (_, index) => ({
+                chapters: fresh.slice(index * 5, index * 5 + 5),
+              }),
+            );
+
+      for (let index = 0; index < groups.length; index++) {
+        const group = groups[index]!;
+        await postStrip(
+          config.discordChannelId,
+          work.title,
+          group.chapters,
+          index + 1,
+          groups.length,
+          false,
+          group.image,
+        );
         postsSent++;
       }
       await db.transaction(async (tx) => {
@@ -252,6 +370,8 @@ export async function runMonitor() {
     } catch (error) {
       logger.warn({ err: error, workId: work.id }, "Work monitor failed");
       await db.update(monitoredWorksTable).set({ lastCheckedAt: new Date(), lastStatus: "Check failed", updatedAt: new Date() }).where(eq(monitoredWorksTable.id, work.id));
+    } finally {
+      await listing?.captureSession?.close();
     }
   }
   return { status: "completed", worksChecked: works.length, chaptersFound, postsSent };
