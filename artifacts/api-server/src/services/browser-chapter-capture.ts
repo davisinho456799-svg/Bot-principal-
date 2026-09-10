@@ -136,6 +136,17 @@ async function loginToomics(page: Page): Promise<string> {
       }
     }
 
+    if (!(await passwordInput.count())) {
+      const loginUrl = new URL("/por/login", page.url()).toString();
+      await page.goto(loginUrl, {
+        waitUntil: "domcontentloaded",
+        timeout: PAGE_TIMEOUT_MS,
+      });
+      await waitForRenderedPage(page);
+      emailInput = page.locator("#user_id").filter({ visible: true }).first();
+      passwordInput = page.locator("#user_pw").filter({ visible: true }).first();
+    }
+
     if (!(await emailInput.count()) || !(await passwordInput.count())) {
       return "formulário de login não encontrado";
     }
@@ -143,7 +154,7 @@ async function loginToomics(page: Page): Promise<string> {
     await emailInput.fill(email);
     await passwordInput.fill(password);
     const submit = page.locator(
-      'button[type="submit"], input[type="submit"], button:has-text("Login"), button:has-text("Entrar"), button:has-text("로그인")',
+      'form:has(#user_id) button[type="submit"], form:has(#user_id) input[type="submit"], button:has-text("Login"), button:has-text("Entrar"), button:has-text("로그인")',
     ).filter({ visible: true }).last();
     if (!(await submit.count())) return "botão de login não encontrado";
 
