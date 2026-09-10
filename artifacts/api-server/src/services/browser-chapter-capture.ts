@@ -286,8 +286,23 @@ async function findRenderedChapters(
         const hasLink = cardElement.tagName.toLowerCase() === "a" || Boolean(cardElement.querySelector("a[href]"));
         const hasChapterText = chapterLabelFixed.test(cardText);
         const hasCardDimensions = rect.width >= 240 && rect.height >= 90;
-        const thumbnail = cardElement.querySelector("img, source");
-        const thumbnailValue = thumbnail
+        const mediaElements = Array.from(cardElement.querySelectorAll("img, source"));
+        const mediaContext = (media) => [
+          media.currentSrc || "",
+          media.getAttribute("src") || "",
+          media.getAttribute("data-src") || "",
+          media.getAttribute("data-original") || "",
+          media.getAttribute("data-lazy-src") || "",
+          media.getAttribute("data-image") || "",
+          media.getAttribute("alt") || "",
+          media.getAttribute("title") || "",
+          media.getAttribute("class") || "",
+        ].join(" ");
+        const thumbnail = mediaElements.find((media) =>
+          !blockedWords.test(mediaContext(media)),
+        ) ?? mediaElements[0];
+        const thumbnailContext = thumbnail ? mediaContext(thumbnail) : "";
+        const thumbnailValue = thumbnail && !blockedWords.test(thumbnailContext)
           ? (thumbnail.currentSrc ||
             thumbnail.getAttribute("src") ||
             thumbnail.getAttribute("data-src") ||
@@ -296,21 +311,12 @@ async function findRenderedChapters(
             thumbnail.getAttribute("data-image") ||
             "")
           : "";
-        const thumbnailContext = thumbnail
-          ? [
-              thumbnailValue,
-              thumbnail.getAttribute("alt") || "",
-              thumbnail.getAttribute("title") || "",
-              thumbnail.getAttribute("class") || "",
-            ].join(" ")
-          : "";
 
         // Schedule/status labels such as "Atualizado toda Sex" can carry a
         // chapter-related attribute without being the visual card. A real
         // card must contain media or have dimensions large enough to render
         // the chapter metadata and thumbnail area.
         if (!hasImage && !hasCardDimensions) continue;
-        if (blockedWords.test(thumbnailContext)) continue;
 
         // A platform chapter card is expected to have a marker, link, or
         // image. This rejects the page wrapper and promotional banners.
