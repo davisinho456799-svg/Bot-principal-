@@ -106,8 +106,22 @@ type ListingSession = {
   captureSession?: BrowserListingSession;
 };
 
+export type MonitorProgressReporter = (message: string) => Promise<void> | void;
+
+async function reportProgress(
+  progress: MonitorProgressReporter | undefined,
+  message: string,
+): Promise<void> {
+  try {
+    await progress?.(message);
+  } catch (error) {
+    logger.debug({ err: error }, "Não foi possível atualizar o progresso do monitor");
+  }
+}
+
 async function fetchListing(
   work: typeof monitoredWorksTable.$inferSelect,
+  progress?: MonitorProgressReporter,
 ): Promise<ListingSession> {
   const platform = work.platform as MonitorPlatform;
   const context: ParserContext = {
@@ -117,9 +131,14 @@ async function fetchListing(
   };
 
   try {
+    await reportProgress(progress, "Abrindo a página com o navegador e procurando os cards de capítulos.");
     const browserListing = await openBrowserListing(work.listingUrl, platform);
     if (browserListing.candidates.length) {
       const browserCandidates = browserListing.candidates as BrowserChapter[];
+      await reportProgress(
+        progress,
+        `O navegador encontrou ${browserCandidates.length} capítulo(s) renderizado(s).`,
+      );
       return {
         parser: "Playwright browser",
         candidates: withChapterKeys(
@@ -133,31 +152,42 @@ async function fetchListing(
     }
     await browserListing.close();
     logger.debug({ workId: work.id }, "Playwright encontrou a página, mas não encontrou capítulos");
+    await reportProgress(progress, "O navegador não encontrou cards; tentando o parser da plataforma.");
   } catch (error) {
     logger.warn(
       { err: error, workId: work.id, platform },
       "Playwright falhou; usando parser HTML como fallback",
     );
+    await reportProgress(progress, "A captura do navegador falhou; tentando o parser da plataforma.");
   }
 
   const specificParser = parserForPlatform(work.platform);
 
   if (specificParser) {
     try {
+      await reportProgress(progress, `Lendo a página com ${specificParser.name}.`);
       const specificChapters = await specificParser.parse(context);
       if (specificChapters.length) {
+        await reportProgress(
+          progress,
+          `${specificParser.name} encontrou ${specificChapters.length} capítulo(s).`,
+        );
         return {
           parser: specificParser.name,
           candidates: withChapterKeys(specificChapters, platform, work.title, specificParser.name),
         };
       }
       logger.debug({ workId: work.id, parser: specificParser.name }, "Specific parser found no chapters; using generic parser");
+      await reportProgress(progress, "O parser específico não encontrou capítulos; tentando o parser genérico.");
     } catch (error) {
       logger.warn({ err: error, workId: work.id, parser: specificParser.name }, "Specific parser failed; using generic parser");
+      await reportProgress(progress, "O parser específico falhou; tentando o parser genérico.");
     }
   }
 
+  await reportProgress(progress, "Lendo a página com o parser genérico.");
   const genericChapters = await genericParser.parse(context);
+  await reportProgress(progress, `Parser genérico encontrou ${genericChapters.length} capítulo(s).`);
   return {
     parser: specificParser ? `${genericParser.name} (fallback)` : genericParser.name,
     candidates: withChapterKeys(genericChapters, platform, work.title, genericParser.name),
@@ -279,7 +309,8 @@ async function isUsableBrowserCapture(image: Buffer | undefined): Promise<boolea
   }
 }
 
-export async function runTestNotification() {
+export async function runTestNotification(progress?: MonitorProgressReporter) {
+  await reportProgress(progress, "Iniciando o teste da notificação.");
   const [config] = await db.select().from(monitorConfigTable).limit(1);
   if (!config?.discordChannelId) {
     throw new Error("Nenhum canal do Discord foi configurado para o monitor.");
@@ -294,7 +325,8 @@ export async function runTestNotification() {
   }
 
   const work = works[Math.floor(Math.random() * works.length)];
-  const listing = await fetchListing(work);
+  await reportProgress(progress, `Obra escolhida: ${work.title}.`);
+  const listing = await fetchListing(work, progress);
   try {
     const { parser, candidates } = listing;
     if (!candidates.length) {
@@ -302,25 +334,33 @@ export async function runTestNotification() {
     }
 
     const chapter = candidates[Math.floor(Math.random() * candidates.length)]!;
+    await reportProgress(progress, `Capítulo escolhido: ${chapter.number}. Parser final: ${parser}.`);
     let capturedImage: Buffer | undefined;
     if (listing.captureSession && chapter.captureId) {
+      await reportProgress(progress, "Tentando capturar o card real renderizado pelo site.");
       try {
         const [group] = await listing.captureSession.captureGroups([chapter.captureId]);
         if (await isUsableBrowserCapture(group?.image)) {
           capturedImage = group?.image;
+          await reportProgress(progress, "Captura direta do card concluída.");
         } else {
           logger.warn(
             { title: work.title, chapter: chapter.number },
             "Captura Playwright descartada por dimensões incompatíveis com um card",
           );
+          await reportProgress(progress, "A captura direta ficou inválida; usando fallback SVG/Sharp.");
         }
       } catch (error) {
         logger.warn(
           { err: error, title: work.title, chapter: chapter.number },
           "Captura Playwright falhou no teste; usando fallback legado",
         );
+        await reportProgress(progress, "A captura direta falhou; usando fallback SVG/Sharp.");
       }
+    } else {
+      await reportProgress(progress, "Não houve sessão de captura; usando fallback SVG/Sharp.");
     }
+    await reportProgress(progress, "Montando e enviando a imagem para o canal do monitor.");
     await postStrip(
       config.discordChannelId,
       work.title,
@@ -330,6 +370,7 @@ export async function runTestNotification() {
       true,
       capturedImage,
     );
+    await reportProgress(progress, "Mensagem enviada ao Discord.");
 
     return {
       title: work.title,
