@@ -199,6 +199,30 @@ function getSendableChannel(
   return null;
 }
 
+type NotificationErrorContext = {
+  channelId: string;
+  title: string;
+  discordGuildId?: string | null;
+  [key: string]: unknown;
+};
+
+function logNotificationError(
+  errorCode: string,
+  message: string,
+  error: unknown,
+  context: NotificationErrorContext,
+): void {
+  const { discordGuildId, ...logContext } = context;
+  logger.error({ err: error, ...logContext }, message);
+  void recordBotError({
+    source: "notification",
+    errorCode,
+    error,
+    discordGuildId,
+    context: logContext,
+  });
+}
+
 const CHAPTERS_QUERY = `
 query GetChapters($id: Int!) {
   Media(id: $id, type: MANGA) {
@@ -1301,6 +1325,16 @@ function addDiagnosisToSummary(
     if (attempt.status === "ok") continue;
     const kind = attempt.errorKind ?? "no_data";
     const httpInfo = attempt.httpStatus ? ` (HTTP ${attempt.httpStatus})` : "";
+    logger.warn(
+      {
+        title,
+        primarySource,
+        attemptedSource: attempt.source,
+        errorKind: kind,
+        ...(attempt.httpStatus ? { httpStatus: attempt.httpStatus } : {}),
+      },
+      "Falha ao consultar fonte de notificação — tentando fallback",
+    );
     void recordBotError({
       source: "notification_source",
       errorCode: `SOURCE_${kind.toUpperCase().replace(/-/g, "_")}`,
@@ -1327,13 +1361,16 @@ async function sendNotification(
   mentions: string[] = [],
   source?: string,
   isProxy = false,
+  discordGuildId?: string | null,
 ): Promise<boolean> {
   try {
     const channel = getSendableChannel(
       await client.channels.fetch(channelId),
       channelId,
     );
-    if (!channel) return false;
+    if (!channel) {
+      throw new Error("Canal de notificação não é enviável");
+    }
 
     const isAnime = source === "anilist-anime";
     const unidade = isAnime ? "episódio(s)" : "capítulo(s)";
@@ -1382,12 +1419,12 @@ async function sendNotification(
     await channel.send({ content, embeds: [embed] });
     return true;
   } catch (err) {
-    logger.error({ err, channelId }, "Erro ao enviar notificação");
-    void recordBotError({
-      source: "notification",
-      errorCode: "NOTIFICATION_SEND_FAILED",
-      error: err,
-      context: { channelId, title },
+    logNotificationError("NOTIFICATION_SEND_FAILED", "Erro ao enviar notificação", err, {
+      channelId,
+      title,
+      discordGuildId,
+      source,
+      subscriberCount: mentions.length,
     });
     return false;
   }
@@ -1410,6 +1447,7 @@ async function sendMetadataNotification(
     status: string | null;
   },
   changedFields: string[],
+  discordGuildId?: string | null,
 ): Promise<boolean> {
   const metadataFields = changedFields.filter((field) => field !== "chapters");
   if (!metadataFields.length) return false;
@@ -1419,7 +1457,9 @@ async function sendMetadataNotification(
       await client.channels.fetch(channelId),
       channelId,
     );
-    if (!channel) return false;
+    if (!channel) {
+      throw new Error("Canal de alteração não é enviável");
+    }
 
     const labels: Record<string, string> = {
       synopsis: "Sinopse",
@@ -1457,13 +1497,12 @@ async function sendMetadataNotification(
     await channel.send({ embeds: [embed], allowedMentions: { parse: [] } });
     return true;
   } catch (err) {
-    logger.error({ err, channelId }, "Erro ao enviar notificação de alteração");
-    void recordBotError({
-      source: "notification",
-      errorCode: "METADATA_NOTIFICATION_SEND_FAILED",
-      error: err,
-      context: { channelId, title, changedFields: metadataFields },
-    });
+    logNotificationError(
+      "METADATA_NOTIFICATION_SEND_FAILED",
+      "Erro ao enviar notificação de alteração",
+      err,
+      { channelId, title, discordGuildId, changedFields: metadataFields },
+    );
     return false;
   }
 }
@@ -1496,13 +1535,16 @@ async function sendStatusChangeNotification(
   coverUrl: string | null,
   mentions: string[],
   kind: "hiatus" | "return",
+  discordGuildId?: string | null,
 ): Promise<boolean> {
   try {
     const channel = getSendableChannel(
       await client.channels.fetch(channelId),
       channelId,
     );
-    if (!channel) return false;
+    if (!channel) {
+      throw new Error("Canal de status não é enviável");
+    }
 
     const hourBrasilia = new Date(
       new Date().toLocaleString("en-US", { timeZone: "America/Sao_Paulo" })
@@ -1538,7 +1580,12 @@ async function sendStatusChangeNotification(
     await channel.send({ content, embeds: [embed] });
     return true;
   } catch (err) {
-    logger.error({ err, channelId, title, kind }, "Erro ao enviar notificação de status");
+    logNotificationError(
+      "STATUS_NOTIFICATION_SEND_FAILED",
+      "Erro ao enviar notificação de status",
+      err,
+      { channelId, title, discordGuildId, kind, subscriberCount: mentions.length },
+    );
     return false;
   }
 }
@@ -1565,13 +1612,16 @@ async function sendFinishedNotification(
   siteUrl: string,
   coverUrl: string | null,
   mentions: string[],
+  discordGuildId?: string | null,
 ): Promise<boolean> {
   try {
     const channel = getSendableChannel(
       await client.channels.fetch(channelId),
       channelId,
     );
-    if (!channel) return false;
+    if (!channel) {
+      throw new Error("Canal de obra finalizada não é enviável");
+    }
 
     const hourBrasilia = new Date(
       new Date().toLocaleString("en-US", { timeZone: "America/Sao_Paulo" })
@@ -1596,7 +1646,12 @@ async function sendFinishedNotification(
     await channel.send({ content, embeds: [embed] });
     return true;
   } catch (err) {
-    logger.error({ err, channelId, title }, "Erro ao enviar notificação de obra finalizada");
+    logNotificationError(
+      "FINISHED_NOTIFICATION_SEND_FAILED",
+      "Erro ao enviar notificação de obra finalizada",
+      err,
+      { channelId, title, discordGuildId, subscriberCount: mentions.length },
+    );
     return false;
   }
 }
@@ -1783,6 +1838,8 @@ async function runCheckLocked(
                 m.coverUrl ?? null,
                 mentions,
                 m.source,
+                false,
+                canal.guildId,
               );
               if (sent) {
                 sentEvents.add(eventKey);
@@ -1832,6 +1889,7 @@ async function runCheckLocked(
                 },
                 snapshot,
                 metadataChanged,
+                canal.guildId,
               );
               if (sent) summary.notificationsSent++;
             }
@@ -1864,6 +1922,7 @@ async function runCheckLocked(
               const mentions = [...new Set(subscribers.map((s) => `<@${s.discordUserId}>`))];
               const sent = await sendStatusChangeNotification(
                 client, canal.channelId, m.title, m.siteUrl, m.coverUrl ?? null, mentions, kind,
+                canal.guildId,
               );
               if (sent) summary.notificationsSent++;
             }
@@ -1896,6 +1955,7 @@ async function runCheckLocked(
                 m.siteUrl,
                 m.coverUrl ?? null,
                 mentions,
+                canal.guildId,
               );
               if (sent) summary.notificationsSent++;
             }
@@ -2069,7 +2129,19 @@ async function runCheckLocked(
               atLeastOneSent = true;
               continue;
             }
-            const sent = await sendNotification(client, canal.channelId, m.title, newChapters, lastChapters, m.siteUrl, m.coverUrl ?? null, mentions, diagnosis.selectedSource ?? m.source, isProxy);
+            const sent = await sendNotification(
+              client,
+              canal.channelId,
+              m.title,
+              newChapters,
+              lastChapters,
+              m.siteUrl,
+              m.coverUrl ?? null,
+              mentions,
+              diagnosis.selectedSource ?? m.source,
+              isProxy,
+              canal.guildId,
+            );
             if (sent) {
               sentEvents.add(eventKey);
               await markNotificationEventSent(eventKey).catch((err) => {
