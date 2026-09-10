@@ -117,7 +117,11 @@ export async function startBot() {
 
     const clientId = readyClient.user.id;
     try {
-      await deployCommands(clientId, token);
+      await deployCommands(
+        clientId,
+        token,
+        [...readyClient.guilds.cache.keys()],
+      );
     } catch (err) {
       logger.error({ err }, "Falha ao registrar comandos");
       void recordBotError({
