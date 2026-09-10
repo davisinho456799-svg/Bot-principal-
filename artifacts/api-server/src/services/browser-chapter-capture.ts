@@ -137,29 +137,50 @@ async function loginToomics(page: Page): Promise<string> {
     }
 
     if (!(await passwordInput.count())) {
-      const loginUrl = new URL("/por/login", page.url()).toString();
-      await page.goto(loginUrl, {
-        waitUntil: "domcontentloaded",
-        timeout: PAGE_TIMEOUT_MS,
-      });
-      await waitForRenderedPage(page);
-      emailInput = page.locator("#user_id").filter({ visible: true }).first();
-      passwordInput = page.locator("#user_pw").filter({ visible: true }).first();
+      const currentOrigin = new URL(page.url()).origin;
+      const loginUrls = [
+        `${currentOrigin}/por/login`,
+        "https://global.toomics.com/por/login",
+      ].filter((url, index, urls) => urls.indexOf(url) === index);
+
+      for (const loginUrl of loginUrls) {
+        await page.goto(loginUrl, {
+          waitUntil: "domcontentloaded",
+          timeout: PAGE_TIMEOUT_MS,
+        });
+        await waitForRenderedPage(page);
+        await page
+          .locator("#user_id, #user_pw")
+          .first()
+          .waitFor({ state: "attached", timeout: 8_000 })
+          .catch(() => undefined);
+
+        const loginEmail = page.locator("#user_id").first();
+        const loginPassword = page.locator("#user_pw").first();
+        if (await loginEmail.count() && await loginPassword.count()) {
+          emailInput = loginEmail;
+          passwordInput = loginPassword;
+          break;
+        }
+      }
     }
 
     if (!(await emailInput.count()) || !(await passwordInput.count())) {
       return "formulário de login não encontrado";
     }
 
-    await emailInput.fill(email);
-    await passwordInput.fill(password);
+    await emailInput.fill(email, { force: true });
+    await passwordInput.fill(password, { force: true });
     const submit = page.locator(
       'form:has(#user_id) button[type="submit"], form:has(#user_id) input[type="submit"], button:has-text("Login"), button:has-text("Entrar"), button:has-text("로그인")',
     ).filter({ visible: true }).last();
-    if (!(await submit.count())) return "botão de login não encontrado";
+    const submitButton = await submit.count()
+      ? submit
+      : page.locator('form:has(#user_id) button[type="submit"], form:has(#user_id) input[type="submit"]').last();
+    if (!(await submitButton.count())) return "botão de login não encontrado";
 
     await Promise.all([
-      submit.click().catch(() => undefined),
+      submitButton.click({ force: true }).catch(() => undefined),
       page.waitForLoadState("domcontentloaded", { timeout: 15_000 }).catch(() => undefined),
     ]);
     await page.waitForTimeout(1_000);
