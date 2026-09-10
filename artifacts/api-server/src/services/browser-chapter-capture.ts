@@ -117,48 +117,62 @@ async function loginToomics(page: Page): Promise<string> {
   const password = process.env.TOOMICS_PASSWORD;
   if (!email || !password) return "credenciais não configuradas";
 
-  const emailInput = page.locator(
-    'input[type="email"], input[name*="email" i], input[name*="user" i], input[name*="login" i], input[name*="id" i]',
-  ).first();
-  const passwordInput = page.locator('input[type="password"]').first();
+  try {
+    const emailSelector =
+      'input[type="email"], input[name*="email" i], input[name*="user" i], input[name*="login" i], input[name*="id" i]';
+    const passwordSelector = 'input[type="password"]';
+    let emailInput = page.locator(emailSelector).filter({ visible: true }).first();
+    let passwordInput = page.locator(passwordSelector).filter({ visible: true }).first();
 
-  if (!(await passwordInput.count())) {
-    const loginLink = page.locator(
-      'a[href*="login" i], a[href*="signin" i], button:has-text("Login"), button:has-text("Entrar"), button:has-text("로그인")',
-    ).first();
-    if (await loginLink.count()) {
-      await loginLink.click().catch(() => undefined);
-      await page.waitForTimeout(500);
+    if (!(await passwordInput.count())) {
+      const loginLink = page.locator(
+        'a[href*="login" i], a[href*="signin" i], button:has-text("Login"), button:has-text("Entrar"), button:has-text("로그인")',
+      ).filter({ visible: true }).first();
+      if (await loginLink.count()) {
+        await loginLink.click().catch(() => undefined);
+        await page.waitForTimeout(500);
+        emailInput = page.locator(emailSelector).filter({ visible: true }).first();
+        passwordInput = page.locator(passwordSelector).filter({ visible: true }).first();
+      }
     }
+
+    if (!(await emailInput.count()) || !(await passwordInput.count())) {
+      return "formulário de login não encontrado";
+    }
+
+    await emailInput.fill(email);
+    await passwordInput.fill(password);
+    const submit = page.locator(
+      'button[type="submit"], input[type="submit"], button:has-text("Login"), button:has-text("Entrar"), button:has-text("로그인")',
+    ).filter({ visible: true }).last();
+    if (!(await submit.count())) return "botão de login não encontrado";
+
+    await Promise.all([
+      submit.click().catch(() => undefined),
+      page.waitForLoadState("domcontentloaded", { timeout: 15_000 }).catch(() => undefined),
+    ]);
+    await page.waitForTimeout(1_000);
+
+    const state = await page.evaluate(() => {
+      const text = (document.body?.innerText || "").replace(/\s+/g, " ").toLocaleLowerCase();
+      const hasPassword = Array.from(document.querySelectorAll('input[type="password"]'))
+        .some((input) => {
+          const style = getComputedStyle(input);
+          const rect = input.getBoundingClientRect();
+          return style.display !== "none" && style.visibility !== "hidden" &&
+            Number.parseFloat(style.opacity || "1") > 0 && rect.width > 2 && rect.height > 2;
+        });
+      const hasCaptcha = /captcha|recaptcha|are you human|verifique que/.test(text);
+      const hasError = /invalid password|incorrect|senha inválida|email inválido|로그인 실패/.test(text);
+      return { hasPassword, hasCaptcha, hasError };
+    });
+    if (state.hasCaptcha) return "captcha ou verificação manual necessária";
+    if (state.hasError || state.hasPassword) return "login rejeitado";
+    return "login concluído";
+  } catch (error) {
+    const message = error instanceof Error ? error.message.split("\n")[0].slice(0, 160) : "erro desconhecido";
+    return `erro no login (${message})`;
   }
-
-  if (!(await emailInput.count()) || !(await passwordInput.count())) {
-    return "formulário de login não encontrado";
-  }
-
-  await emailInput.fill(email);
-  await passwordInput.fill(password);
-  const submit = page.locator(
-    'button[type="submit"], input[type="submit"], button:has-text("Login"), button:has-text("Entrar"), button:has-text("로그인")',
-  ).last();
-  if (!(await submit.count())) return "botão de login não encontrado";
-
-  await Promise.all([
-    submit.click().catch(() => undefined),
-    page.waitForLoadState("domcontentloaded", { timeout: 15_000 }).catch(() => undefined),
-  ]);
-  await page.waitForTimeout(1_000);
-
-  const state = await page.evaluate(() => {
-    const text = (document.body?.innerText || "").replace(/\s+/g, " ").toLocaleLowerCase();
-    const hasPassword = Boolean(document.querySelector('input[type="password"]'));
-    const hasCaptcha = /captcha|recaptcha|are you human|verifique que/.test(text);
-    const hasError = /invalid password|incorrect|senha inválida|email inválido|로그인 실패/.test(text);
-    return { hasPassword, hasCaptcha, hasError };
-  });
-  if (state.hasCaptcha) return "captcha ou verificação manual necessária";
-  if (state.hasError || state.hasPassword) return "login rejeitado";
-  return "login concluído";
 }
 
 /**
