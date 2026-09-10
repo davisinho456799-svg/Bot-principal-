@@ -2,6 +2,13 @@ import {
   ChatInputCommandInteraction,
   SlashCommandBuilder,
   EmbedBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  ComponentType,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
 } from "discord.js";
 import {
   db,
@@ -14,6 +21,135 @@ import { and, eq, desc, sql } from "drizzle-orm";
 import { requireAdmin } from "../admin-guard.js";
 import { runCheck } from "../notificacao-service.js";
 import { extractHttpStatus } from "../error-log.js";
+
+const ERROR_PAGE_SIZE = 5;
+const ERROR_PAGE_TIME = 15 * 60 * 1000;
+
+type ErrorRow = typeof errorLogsTable.$inferSelect;
+
+function contextValue(row: ErrorRow, key: string): string | null {
+  const value = row.context?.[key];
+  return typeof value === "string" || typeof value === "number" ? String(value) : null;
+}
+
+function sourceLabel(source: string | null): string {
+  const labels: Record<string, string> = {
+    "anilist-anime": "AniList Anime",
+    anilist: "AniList",
+    comick: "Comick",
+    mangadex: "MangaDex",
+    mangaupdates: "MangaUpdates",
+    jikan: "Jikan",
+    notification_source: "fonte de notificação",
+    notification: "envio de notificação",
+  };
+  return source ? labels[source] ?? source : "desconhecida";
+}
+
+function describeErrorRow(row: ErrorRow): string {
+  const attemptedSource = contextValue(row, "attemptedSource");
+  const source = contextValue(row, "source") ?? attemptedSource;
+  const title = contextValue(row, "title");
+  const channelId = contextValue(row, "channelId");
+  const httpStatus = row.httpStatus ?? extractHttpStatus(row.message);
+
+  if (row.errorCode.startsWith("SOURCE_HTTP_")) {
+    return `🌐 **Fonte recusou a consulta:** ${sourceLabel(source)}${httpStatus ? ` — HTTP \`${httpStatus}\`` : ""}${title ? `\n↳ obra: **${title}**` : ""}`;
+  }
+  if (row.errorCode === "SOURCE_NO_DATA") {
+    return `🔎 **Fonte não retornou dados:** ${sourceLabel(source)}${title ? `\n↳ obra: **${title}**` : ""}`;
+  }
+  if (row.errorCode.includes("NOTIFICATION") || row.errorCode.includes("STATUS_NOTIFICATION")) {
+    return `📤 **Falha ao enviar notificação:** ${title ? `**${title}**` : "obra não identificada"}${source ? `\n↳ fonte: ${sourceLabel(source)}` : ""}${channelId ? ` • canal \`${channelId}\`` : ""}`;
+  }
+  if (row.errorCode.includes("DATABASE") || row.errorCode.includes("SUBSCRIPTION_")) {
+    return `🗄️ **Falha no banco ao processar assinatura:** ${row.command ? `\`/${row.command}\`` : "comando não identificado"}`;
+  }
+  if (row.errorCode === "TITLE_CHECK_FAILED") {
+    return `⚙️ **Falha ao verificar obra:** ${title ? `**${title}**` : "obra não identificada"}${source ? ` • fonte: ${sourceLabel(source)}` : ""}`;
+  }
+
+  const message = row.message.replace(/\s+/g, " ").slice(0, 220);
+  return `⚠️ **${row.errorCode}** — ${message}`;
+}
+
+function buildErrorEmbed(
+  rows: ErrorRow[],
+  page: number,
+  totalPages: number,
+  guildId: string | null,
+): EmbedBuilder {
+  const start = page * ERROR_PAGE_SIZE;
+  const pageRows = rows.slice(start, start + ERROR_PAGE_SIZE);
+  const lines = pageRows.map((row) => {
+    const when = new Date(row.createdAt).toLocaleString("pt-BR", {
+      timeZone: "America/Sao_Paulo",
+    });
+    const location = row.discordGuildId
+      ? `servidor \`${row.discordGuildId}\``
+      : "servidor não informado";
+    const command = row.command ? ` • \`/${row.command}\`` : "";
+    return `\`${when}\`\n${describeErrorRow(row)}\n↳ ${location}${command} • registro \`${row.id}\``;
+  });
+
+  const statusCounts = new Map<string, number>();
+  for (const row of rows) {
+    const status = row.httpStatus ?? extractHttpStatus(row.message);
+    const bucket = status ? `HTTP ${status}` : row.errorCode;
+    statusCounts.set(bucket, (statusCounts.get(bucket) ?? 0) + 1);
+  }
+  const summary = [...statusCounts.entries()]
+    .slice(0, 6)
+    .map(([label, count]) => `**${label}:** ${count}`)
+    .join(" • ");
+
+  return new EmbedBuilder()
+    .setTitle(`🧾 Erros de notificações — página ${page + 1}/${totalPages}`)
+    .setDescription(
+      `**Total:** ${rows.length} registro(s)${guildId ? ` • servidor filtrado: \`${guildId}\`` : ""}\n` +
+      `${summary || "Nenhuma classificação disponível"}\n\n` +
+      lines.join("\n\n"),
+    )
+    .setColor(0xe74c3c)
+    .setFooter({ text: "Retenção automática: 30 dias • Use «Ir para página» para navegar" });
+}
+
+function buildErrorPageButtons(
+  page: number,
+  totalPages: number,
+  disabled = false,
+): ActionRowBuilder<ButtonBuilder>[] {
+  if (totalPages <= 1) return [];
+
+  const buttons: ButtonBuilder[] = [];
+  if (page > 0) {
+    buttons.push(
+      new ButtonBuilder()
+        .setCustomId("admin_errors_prev")
+        .setLabel("⬅️ Anterior")
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(disabled),
+    );
+  }
+  buttons.push(
+    new ButtonBuilder()
+      .setCustomId("admin_errors_jump")
+      .setLabel("⏩ Ir para página")
+      .setStyle(ButtonStyle.Primary)
+      .setDisabled(disabled),
+  );
+  if (page < totalPages - 1) {
+    buttons.push(
+      new ButtonBuilder()
+        .setCustomId("admin_errors_next")
+        .setLabel("Próxima ➡️")
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(disabled),
+    );
+  }
+
+  return [new ActionRowBuilder<ButtonBuilder>().addComponents(buttons)];
+}
 
 export const data = new SlashCommandBuilder()
   .setName("admin")
@@ -185,44 +321,91 @@ async function handleErros(interaction: ChatInputCommandInteraction) {
     .from(errorLogsTable)
     .where(conditions.length ? and(...conditions) : undefined)
     .orderBy(desc(errorLogsTable.createdAt))
-    .limit(15);
+    .limit(100);
 
   if (rows.length === 0) {
     await interaction.editReply("✅ Nenhum erro registrado no histórico.");
     return;
   }
 
-  const statusCounts = new Map<string, number>();
-  for (const row of rows) {
-    const status = row.httpStatus ?? extractHttpStatus(row.message);
-    const bucket = status === 403 || status === 404 || status === 504 ? String(status) : "outros";
-    statusCounts.set(bucket, (statusCounts.get(bucket) ?? 0) + 1);
-  }
-  const statusSummary = ["403", "404", "504", "outros"]
-    .map((status) => `${status}: **${statusCounts.get(status) ?? 0}**`)
-    .join(" • ");
-
-  const lines = rows.map((row) => {
-    const when = new Date(row.createdAt).toLocaleString("pt-BR", {
-      timeZone: "America/Sao_Paulo",
-    });
-    const command = row.command ? ` \`/${row.command}\`` : "";
-    const guild = row.discordGuildId ? ` • servidor \`${row.discordGuildId}\`` : "";
-    const httpStatus = row.httpStatus ?? extractHttpStatus(row.message);
-    const statusLabel = httpStatus ? ` • HTTP \`${httpStatus}\`` : "";
-    return (
-      `\`${when}\` **${row.errorCode}** — ${row.message.slice(0, 180)}` +
-      `\n↳ origem: \`${row.source}\`${command}${guild}${statusLabel} • ID \`${row.id}\``
-    );
+  const totalPages = Math.ceil(rows.length / ERROR_PAGE_SIZE);
+  let currentPage = 0;
+  const pagePayload = (page: number, disabled = false) => ({
+    embeds: [buildErrorEmbed(rows, page, totalPages, guildId)],
+    components: buildErrorPageButtons(page, totalPages, disabled),
   });
 
-  const embed = new EmbedBuilder()
-    .setTitle(`🧾 Histórico de erros — ${rows.length} registro(s)`)
-    .setDescription(`**Por classe:** ${statusSummary}\n\n${lines.join("\n\n")}`.slice(0, 4096))
-    .setColor(0xe74c3c)
-    .setFooter({ text: "Retenção automática: 30 dias • máximo de 500 por servidor" });
+  const message = await interaction.editReply(pagePayload(currentPage));
+  if (totalPages <= 1) return;
 
-  await interaction.editReply({ embeds: [embed] });
+  const collector = message.createMessageComponentCollector({
+    componentType: ComponentType.Button,
+    time: ERROR_PAGE_TIME,
+  });
+
+  collector.on("collect", async (button) => {
+    if (button.user.id !== interaction.user.id) {
+      await button.reply({
+        content: "❌ Apenas o administrador que abriu este histórico pode navegar nele.",
+        ephemeral: true,
+      }).catch(() => {});
+      return;
+    }
+
+    if (button.customId === "admin_errors_jump") {
+      const modal = new ModalBuilder()
+        .setCustomId(`admin_errors_jump_modal_${interaction.id}`)
+        .setTitle("Ir para página");
+      const pageInput = new TextInputBuilder()
+        .setCustomId("page")
+        .setLabel(`Página desejada (1-${totalPages})`)
+        .setPlaceholder(`Digite um número de 1 a ${totalPages}`)
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+        .setMaxLength(3);
+      modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(pageInput));
+
+      try {
+        await button.showModal(modal);
+        const submitted = await button.awaitModalSubmit({
+          time: 60_000,
+          filter: (modalInteraction) =>
+            modalInteraction.customId === `admin_errors_jump_modal_${interaction.id}` &&
+            modalInteraction.user.id === interaction.user.id,
+        });
+        const requestedPage = Number(submitted.fields.getTextInputValue("page"));
+        if (!Number.isInteger(requestedPage) || requestedPage < 1 || requestedPage > totalPages) {
+          await submitted.reply({
+            content: `❌ Digite uma página entre 1 e ${totalPages}.`,
+            ephemeral: true,
+          });
+          return;
+        }
+        currentPage = requestedPage - 1;
+        await submitted.update(pagePayload(currentPage));
+      } catch (err) {
+        // O usuário pode fechar o modal ou o Discord pode expirar a interação.
+        if (err instanceof Error && !err.message.includes("time")) {
+          console.warn("Erro ao navegar no histórico de erros", err);
+        }
+      }
+      return;
+    }
+
+    if (button.customId === "admin_errors_prev") {
+      currentPage = Math.max(0, currentPage - 1);
+    } else if (button.customId === "admin_errors_next") {
+      currentPage = Math.min(totalPages - 1, currentPage + 1);
+    } else {
+      return;
+    }
+
+    await button.update(pagePayload(currentPage)).catch(() => {});
+  });
+
+  collector.on("end", () => {
+    interaction.editReply(pagePayload(currentPage, true)).catch(() => {});
+  });
 }
 
 async function handleUsuarios(interaction: ChatInputCommandInteraction) {
