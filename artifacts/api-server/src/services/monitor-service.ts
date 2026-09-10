@@ -151,8 +151,19 @@ async function fetchListing(
       };
     }
     await browserListing.close();
-    logger.debug({ workId: work.id }, "Playwright encontrou a página, mas não encontrou capítulos");
-    await reportProgress(progress, "O navegador não encontrou cards; tentando o parser da plataforma.");
+    logger.debug(
+      { workId: work.id, diagnostics: browserListing.diagnostics },
+      "Playwright encontrou a página, mas não encontrou capítulos",
+    );
+    const diagnostics = browserListing.diagnostics;
+    const signals = diagnostics.signals.length
+      ? ` Sinais detectados: ${diagnostics.signals.join(", ")}.`
+      : "";
+    await reportProgress(
+      progress,
+      `O navegador não encontrou cards; URL final: ${diagnostics.finalUrl}; título: "${diagnostics.pageTitle || "sem título"}"; texto: ${diagnostics.bodyTextLength} caracteres; imagens visíveis: ${diagnostics.visibleImageCount}.${signals}`,
+    );
+    await reportProgress(progress, "Tentando o parser da plataforma.");
   } catch (error) {
     logger.warn(
       { err: error, workId: work.id, platform },
