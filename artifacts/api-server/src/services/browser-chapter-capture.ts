@@ -23,11 +23,13 @@ type ChapterBox = {
 export type BrowserChapter = ParsedChapter & {
   captureId: string;
   captureOrder: number;
+  thumbnailCaptureId?: string;
 };
 
 export type CapturedChapterGroup = {
   chapterNumbers: string[];
   image: Buffer;
+  thumbnailImages: Array<Buffer | undefined>;
 };
 
 export type BrowserListingSession = {
@@ -114,6 +116,7 @@ async function findRenderedChapters(
   const snapshot = (await page.evaluate(
     `(({ platform }) => {
       const CARD_ATTRIBUTE = "data-monitor-capture-card";
+        const IMAGE_ATTRIBUTE = "data-monitor-capture-image";
       const selector = [
         "a[href]",
         "li",
@@ -324,6 +327,13 @@ async function findRenderedChapters(
       return records.map((record, index) => {
         const captureId = "monitor-card-" + index;
         record.element.setAttribute(CARD_ATTRIBUTE, captureId);
+        const thumbnailElement = record.element.querySelector("img");
+        const thumbnailCaptureId = thumbnailElement
+          ? "monitor-image-" + index
+          : "";
+        if (thumbnailElement) {
+          thumbnailElement.setAttribute(IMAGE_ATTRIBUTE, thumbnailCaptureId);
+        }
         return {
           number: record.number,
           thumbnailUrl: record.thumbnailUrl,
@@ -332,6 +342,7 @@ async function findRenderedChapters(
           ),
           captureId,
           captureOrder: index,
+          thumbnailCaptureId: thumbnailCaptureId || undefined,
           box: record.rect
         };
       });
@@ -496,6 +507,30 @@ async function captureGroup(
   });
 }
 
+async function captureThumbnails(
+  page: Page,
+  chapters: BrowserChapterSnapshot[],
+): Promise<Array<Buffer | undefined>> {
+  return Promise.all(
+    chapters.map(async (chapter) => {
+      if (!chapter.thumbnailCaptureId) return undefined;
+      try {
+        const locator = page
+          .locator(`[data-monitor-capture-image="${chapter.thumbnailCaptureId}"]`)
+          .first();
+        await locator.scrollIntoViewIfNeeded();
+        await page.waitForTimeout(40);
+        return await locator.screenshot({
+          type: "png",
+          animations: "disabled",
+        });
+      } catch {
+        return undefined;
+      }
+    }),
+  );
+}
+
 export async function openBrowserListing(
   listingUrl: string,
   platform: MonitorPlatform,
@@ -526,6 +561,7 @@ export async function openBrowserListing(
             captured.push({
               chapterNumbers: group.map((chapter) => chapter.number),
               image: await captureGroup(page, group),
+              thumbnailImages: await captureThumbnails(page, group),
             });
           } catch (error) {
             if (group.length === 1) throw error;
@@ -541,6 +577,7 @@ export async function openBrowserListing(
               captured.push({
                 chapterNumbers: smallerGroup.map((chapter) => chapter.number),
                 image: await captureGroup(page, smallerGroup),
+                thumbnailImages: await captureThumbnails(page, smallerGroup),
               });
             }
           }
