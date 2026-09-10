@@ -56,6 +56,22 @@ function isHistoricalRelease(
     checkedAt.getTime() - releaseTime > HISTORICAL_RELEASE_MAX_AGE_MS;
 }
 
+function isReleasedBeforePreviousCheck(
+  chapter: ChapterCandidate,
+  previousCheckAt: Date | null,
+): boolean {
+  if (!chapter.releaseDate || !previousCheckAt) return false;
+  const previousCheckDate = previousCheckAt.toISOString().slice(0, 10);
+  return chapter.releaseDate < previousCheckDate;
+}
+
+function isReleasedBeforeMonitorCreation(
+  chapter: ChapterCandidate,
+  createdAt: Date,
+): boolean {
+  if (!chapter.releaseDate) return false;
+  return chapter.releaseDate < createdAt.toISOString().slice(0, 10);
+}
 async function migrateLegacyKeys(
   tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
   work: typeof monitoredWorksTable.$inferSelect,
@@ -436,11 +452,25 @@ export async function runMonitor() {
         !seenKeys.has(candidate.key) &&
         !seenNumbers.has(chapterNumberIdentity(candidate.number)),
       );
+      const knownChapterNumbers = existing
+        .map((chapter) => numericChapterNumber(chapter.number))
+        .filter((number): number is number => number !== null);
+      const highestKnownChapter = knownChapterNumbers.length ? Math.max(...knownChapterNumbers) : null;
+      const isAtOrBelowKnownChapter = (chapter: ChapterCandidate) => {
+        const number = numericChapterNumber(chapter.number);
+        return highestKnownChapter !== null && number !== null && number <= highestKnownChapter;
+      };
       const historical = previouslyUnseen.filter((candidate) =>
-        isHistoricalRelease(candidate, checkedAt),
+        isHistoricalRelease(candidate, checkedAt) ||
+        isReleasedBeforePreviousCheck(candidate, work.lastCheckedAt) ||
+        isReleasedBeforeMonitorCreation(candidate, work.createdAt) ||
+        isAtOrBelowKnownChapter(candidate),
       );
       let fresh = previouslyUnseen.filter((candidate) =>
-        !isHistoricalRelease(candidate, checkedAt),
+        !isHistoricalRelease(candidate, checkedAt) &&
+        !isReleasedBeforePreviousCheck(candidate, work.lastCheckedAt) &&
+        !isReleasedBeforeMonitorCreation(candidate, work.createdAt) &&
+        !isAtOrBelowKnownChapter(candidate),
       );
 
       // HTML fallback parsers do not have the card date. If a migration
@@ -471,7 +501,7 @@ export async function runMonitor() {
         fresh = [newest];
       }
 
-      if (existing.length === 0) {
+      if (existing.length === 0 && work.lastCheckedAt == null) {
         await db.transaction(async (tx) => {
           if (candidates.length) await tx.insert(detectedChaptersTable).values(candidates.map((chapter) => ({ workId: work.id, chapterKey: chapter.key, chapterNumber: chapter.number, thumbnailUrl: chapter.thumbnailUrl, detectedAt: checkedAt })));
           await tx.update(monitoredWorksTable).set({ chaptersSeen: candidates.length, lastCheckedAt: checkedAt, lastStatus: candidates.length ? `${parser}: baseline captured` : `${parser}: no chapters found`, updatedAt: checkedAt }).where(eq(monitoredWorksTable.id, work.id));
@@ -555,16 +585,41 @@ export async function runMonitor() {
           image: group.image,
         }))
         .filter((group) => group.chapters.length > 0);
-      const groups: Array<{ chapters: ChapterCandidate[]; image?: Buffer }> =
-        browserGroups.length
-          ? browserGroups
-          : Array.from(
-              { length: Math.ceil(fresh.length / 5) },
-              (_, index) => ({
-                chapters: fresh.slice(index * 5, index * 5 + 5),
-              }),
-            );
-
+      const directByKey = new Map<string, { chapters: ChapterCandidate[]; image: Buffer }>();
+      for (const group of browserGroups) {
+        for (const chapter of group.chapters) {
+          directByKey.set(chapter.key, group);
+        }
+      }
+      const groups: Array<{ chapters: ChapterCandidate[]; image?: Buffer }> = [];
+      const emittedDirectKeys = new Set<string>();
+      let fallbackChapters: ChapterCandidate[] = [];
+      const flushFallback = () => {
+        for (let index = 0; index < fallbackChapters.length; index += 5) {
+          groups.push({ chapters: fallbackChapters.slice(index, index + 5) });
+        }
+        fallbackChapters = [];
+      };
+      if (directByKey.size < fresh.length) {
+        logger.warn(
+          { workId: work.id, freshCount: fresh.length, capturedCount: directByKey.size },
+          "Captura do monitor ficou parcial — capítulos restantes irão para o fallback",
+        );
+      }
+      for (const chapter of fresh) {
+        const direct = directByKey.get(chapter.key);
+        if (!direct) {
+          fallbackChapters.push(chapter);
+          continue;
+        }
+        if (emittedDirectKeys.has(chapter.key)) continue;
+        flushFallback();
+        groups.push(direct);
+        for (const capturedChapter of direct.chapters) {
+          emittedDirectKeys.add(capturedChapter.key);
+        }
+      }
+      flushFallback();
       for (let index = 0; index < groups.length; index++) {
         const group = groups[index]!;
         await postStrip(
