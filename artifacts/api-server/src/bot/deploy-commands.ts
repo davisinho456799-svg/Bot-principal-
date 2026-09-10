@@ -30,6 +30,7 @@ import { data as verificarData } from "./commands/verificar.js";
 import { data as assinarData } from "./commands/assinar.js";
 import { data as assinar18Data } from "./commands/assinar18.js";
 import { data as adminData } from "./commands/admin.js";
+import { data as limparData } from "./commands/limpar.js";
 import { logger } from "../lib/logger.js";
 import { monitorCommandDefinition } from "../services/discord-command-service.js";
 
@@ -43,7 +44,7 @@ export async function deployCommands(clientId: string, token: string) {
     mangaData.toJSON(), calendarioData.toJSON(), calendario18Data.toJSON(), temporadaData.toJSON(),
     configurarData.toJSON(), atualizarData.toJSON(), temporadaStatusData.toJSON(), statusData.toJSON(),
     historicoData.toJSON(), verificarData.toJSON(), assinarData.toJSON(), assinar18Data.toJSON(),
-    adminData.toJSON(), monitorCommandDefinition,
+    adminData.toJSON(), limparData.toJSON(), monitorCommandDefinition,
   ];
   const rest = new REST().setToken(token);
 
