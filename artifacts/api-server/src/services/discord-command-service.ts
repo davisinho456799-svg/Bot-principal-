@@ -266,10 +266,24 @@ export async function executeManhwaCommand(interaction: ChatInputCommandInteract
     return;
   }
   if (subcommand === "teste") {
-    try {
-      const result = await runTestNotification();
+    const progress: string[] = [];
+    const updateProgress = async (message: string) => {
+      progress.push(message);
       await interaction.editReply({
         content: [
+          "🧭 **Caminho do teste**",
+          ...progress.map((step, index) => `${index + 1}. ${step}`),
+        ].join("\n"),
+      });
+    };
+
+    try {
+      const result = await runTestNotification(updateProgress);
+      await interaction.editReply({
+        content: [
+          "✅ **Resultado do teste**",
+          ...progress.map((step, index) => `${index + 1}. ${step}`),
+          "",
           "🧪 Notificação de teste enviada no canal do monitor.",
           `Título escolhido: **${result.title}**`,
           `Capítulo/imagem: ${result.chapter}`,
