@@ -60,7 +60,16 @@ function normalizeNumber(value: string): string {
 
 function extractChapterNumber(markup: string, href: string | null, specific: boolean): string | null {
   const text = cleanText(markup);
-  const sources = [markup, href ?? "", text];
+  const hasInternalChapterId = /\bdata-(?:episode|chapter)-(?:id|key)\s*=/i.test(markup);
+  const markupWithoutInternalId = markup.replace(
+    /\s+data-(?:episode|chapter)-(?:id|key)\s*=\s*["'][^"']*["']/gi,
+    " ",
+  );
+  const sources = [
+    markupWithoutInternalId,
+    hasInternalChapterId ? "" : href ?? "",
+    text,
+  ];
   const patterns = specific
     ? [
         /data-(?:episode|chapter)(?:[-_](?:number|no))?\s*=\s*["']#?(\d+(?:\.\d+)?)/i,

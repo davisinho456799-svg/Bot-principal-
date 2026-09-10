@@ -307,6 +307,7 @@ async function findRenderedChapters(
           "{1,5}(?:[.,]" + digit + "+)?)",
         "i",
       );
+      const internalChapterIdSelector = "[data-episode-id], [data-chapter-id], [data-episode-key], [data-chapter-key]";
       const datePattern = new RegExp(
         "(^|[^0-9])((?:20)?[0-9]{2})[./-]([0-9]{1,2})[./-]([0-9]{1,2})(?=[^0-9]|$)",
         "g",
@@ -366,9 +367,14 @@ async function findRenderedChapters(
           if (numberCell) add(numberCell.textContent || "");
         }
 
+        const hasInternalChapterId = Boolean(
+          element.closest(internalChapterIdSelector),
+        );
         const href = element.getAttribute("href") || "";
-        const hrefMatch = href.match(numberFromHrefFixed);
-        if (hrefMatch) add(hrefMatch[1]);
+        if (!hasInternalChapterId) {
+          const hrefMatch = href.match(numberFromHrefFixed);
+          if (hrefMatch) add(hrefMatch[1]);
+        }
 
         const text = (element.innerText || element.textContent || " ").replace(whitespacePattern, " ").trim();
         for (const source of [text, ...Array.from(element.attributes).map((attribute) => attribute.value)]) {
