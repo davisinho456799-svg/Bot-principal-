@@ -691,28 +691,43 @@ export async function openBrowserListing(
   retryAfterCrash = true,
 ): Promise<BrowserListingSession> {
   const context = await getBrowserContext();
-  const page = await context.newPage();
-  page.setDefaultTimeout(8_000);
+  let page = await context.newPage();
   let pageCrashed = false;
-  page.on("crash", () => {
-    pageCrashed = true;
-  });
-
-  try {
-    await prepareCapturePage(page);
-    await page.setExtraHTTPHeaders({
+  const setupPage = async (nextPage: Page) => {
+    nextPage.setDefaultTimeout(8_000);
+    nextPage.on("crash", () => {
+      pageCrashed = true;
+    });
+    await prepareCapturePage(nextPage);
+    await nextPage.setExtraHTTPHeaders({
       "Cache-Control": "no-cache, no-store",
       Pragma: "no-cache",
     });
+  };
+
+  try {
+    await setupPage(page);
     await page.goto(listingUrl, {
       waitUntil: "domcontentloaded",
       timeout: PAGE_TIMEOUT_MS,
     });
     await waitForRenderedPage(page);
-    const authentication = platform === "toomics"
-      ? await loginToomics(page)
-      : "não aplicável";
-    if (platform === "toomics" && authentication === "login concluído") {
+
+    let authentication = "não aplicável";
+    if (platform === "toomics") {
+      // Do not navigate the image-heavy listing page to the login flow.
+      // Closing it first avoids keeping all chapter thumbnails alive while
+      // Toomics creates the authentication page.
+      await page.close().catch(() => undefined);
+      pageCrashed = false;
+      const loginPage = await context.newPage();
+      await setupPage(loginPage);
+      authentication = await loginToomics(loginPage);
+      await loginPage.close().catch(() => undefined);
+
+      pageCrashed = false;
+      page = await context.newPage();
+      await setupPage(page);
       await page.goto(listingUrl, {
         waitUntil: "domcontentloaded",
         timeout: PAGE_TIMEOUT_MS,
