@@ -326,7 +326,10 @@ async function isUsableBrowserCapture(image: Buffer | undefined): Promise<boolea
   }
 }
 
-export async function runTestNotification(progress?: MonitorProgressReporter) {
+export async function runTestNotification(
+  progress?: MonitorProgressReporter,
+  workId?: number,
+) {
   await reportProgress(progress, "Iniciando o teste da notificação.");
   const [config] = await db.select().from(monitorConfigTable).limit(1);
   if (!config?.discordChannelId) {
@@ -341,7 +344,14 @@ export async function runTestNotification(progress?: MonitorProgressReporter) {
     throw new Error("Não há nenhum título ativo no monitor para usar no teste.");
   }
 
-  const work = works[Math.floor(Math.random() * works.length)];
+  const work = workId === undefined
+    ? works[Math.floor(Math.random() * works.length)]
+    : works.find((candidate) => candidate.id === workId);
+  if (!work) {
+    throw new Error(
+      `Não encontrei uma obra ativa com o ID ${workId}. Use /monitor listar para conferir os IDs.`,
+    );
+  }
   await reportProgress(progress, `Obra escolhida: ${work.title}.`);
   const listing = await fetchListing(work, progress);
   try {
