@@ -165,7 +165,10 @@ async function loginToomics(page: Page): Promise<string> {
     }
 
     if (!(await passwordInput.count())) {
-      const currentOrigin = new URL(page.url()).origin;
+      const currentPageUrl = page.url();
+      const currentOrigin = /^https?:\/\//i.test(currentPageUrl)
+        ? new URL(currentPageUrl).origin
+        : "https://toomics.com";
       const loginUrls = [
         `${currentOrigin}/por/login`,
         "https://global.toomics.com/por/login",
