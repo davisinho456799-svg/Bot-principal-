@@ -9,7 +9,9 @@ import type { MonitorPlatform, ParsedChapter } from "./parsers/index";
 const PAGE_TIMEOUT_MS = 30_000;
 const MAX_CAPTURE_WIDTH = 2_400;
 const MAX_CAPTURE_HEIGHT = 4_800;
-const CARD_PADDING = 12;
+// Keep the pixels of the real platform card. Padding here would make the
+// Discord attachment look like a reconstructed strip instead of the source UI.
+const CARD_PADDING = 0;
 
 type ChapterBox = {
   x: number;
@@ -378,16 +380,52 @@ async function captureGroup(
   const first = chapters[0];
   if (!first) throw new Error("Cannot capture an empty chapter group");
 
+  // Playwright clip coordinates are viewport-relative, while detection stores
+  // document-relative boxes. Make the whole selected run fit in the viewport
+  // before resolving the final clip; otherwise cards below the fold would
+  // produce an "outside the resulting image" screenshot error.
+  const documentBox = unionBox(chapters);
+  const currentViewport = page.viewportSize();
+  await page.setViewportSize({
+    width: currentViewport?.width ?? 1_440,
+    height: Math.min(
+      MAX_CAPTURE_HEIGHT,
+      Math.max(1_200, Math.ceil(documentBox.height + 24)),
+    ),
+  });
+
   await page
     .locator(`[data-monitor-capture-card="${first.captureId}"]`)
     .scrollIntoViewIfNeeded()
     .catch(() => undefined);
   await page.waitForTimeout(100);
 
+  const boxes = (
+    await Promise.all(
+      chapters.map((chapter) =>
+        page
+          .locator(`[data-monitor-capture-card="${chapter.captureId}"]`)
+          .boundingBox(),
+      ),
+    )
+  ).filter((box): box is ChapterBox => Boolean(box));
+
+  if (!boxes.length) throw new Error("The selected chapter cards are no longer rendered");
+  const left = Math.min(...boxes.map((box) => box.x));
+  const top = Math.min(...boxes.map((box) => box.y));
+  const right = Math.max(...boxes.map((box) => box.x + box.width));
+  const bottom = Math.max(...boxes.map((box) => box.y + box.height));
+  const clip = {
+    x: Math.max(0, left),
+    y: Math.max(0, top),
+    width: right - left,
+    height: bottom - top,
+  };
+
   return page.screenshot({
     type: "png",
     animations: "disabled",
-    clip: unionBox(chapters),
+    clip,
   });
 }
 
