@@ -291,7 +291,10 @@ export async function startBot() {
         ?? interaction.options.getString("busca")
         ?? interaction.options.getString("nome")
         ?? interaction.options.getString("query")
-        ?? interaction.options.getString("obra")
+        ?? (() => {
+          const obraId = interaction.options.getInteger("obra");
+          return obraId === null ? null : String(obraId);
+        })()
         ?? null,
     });
 
