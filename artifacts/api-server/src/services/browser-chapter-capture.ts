@@ -252,6 +252,7 @@ async function findRenderedChapters(
       const CARD_ATTRIBUTE = "data-monitor-capture-card";
       const selector = [
         "a[href]",
+        "a.js-episode-link",
         "li",
         "article",
         "[data-episode]",
@@ -358,12 +359,23 @@ async function findRenderedChapters(
           }
         }
 
+        if (platform === "toomics") {
+          const numberCell = element.querySelector(
+            ".cell-num .num, .episode-number, .episode-num, .chapter-number",
+          );
+          if (numberCell) add(numberCell.textContent || "");
+        }
+
         const href = element.getAttribute("href") || "";
         const hrefMatch = href.match(numberFromHrefFixed);
         if (hrefMatch) add(hrefMatch[1]);
 
         const text = (element.innerText || element.textContent || " ").replace(whitespacePattern, " ").trim();
         for (const source of [text, ...Array.from(element.attributes).map((attribute) => attribute.value)]) {
+          if (platform === "toomics") {
+            const toomicsEpisodeMatch = source.match(/\/ep\/(\d{1,5})(?:\/|['"]|$)/i);
+            if (toomicsEpisodeMatch) add(toomicsEpisodeMatch[1]);
+          }
           let match;
           while ((match = chapterPatternFixed.exec(source))) add(match[1]);
           chapterPatternFixed.lastIndex = 0;
