@@ -274,6 +274,7 @@ export async function executeManhwaCommand(interaction: ChatInputCommandInteract
           `Título escolhido: **${result.title}**`,
           `Capítulo/imagem: ${result.chapter}`,
           `Parser usado: ${result.parser}`,
+          `Modo da captura: ${result.captureMode}`,
         ].join("\n"),
       });
     } catch (error) {
