@@ -214,8 +214,11 @@ async function postStrip(
     capturedImage ??
     (await sharp(Buffer.from(await buildStrip(title, chapters))).png().toBuffer());
   const form = new FormData();
+  const chapterSummary = chapters.length === 1
+    ? `1 capítulo novo · capítulo ${chapters[0].number}`
+    : `${chapters.length} capítulos novos · capítulos ${chapters.map((chapter) => chapter.number).join(", ")}`;
   form.append("payload_json", JSON.stringify({
-    content: `${isTest ? "🧪 **TESTE** · " : ""}**${title}** · ${chapters.length} capítulo${chapters.length === 1 ? "" : "s"} novo${chapters.length === 1 ? "" : "s"}${total > 1 ? ` · parte ${part}/${total}` : ""}`,
+    content: `${isTest ? "🧪 **TESTE** · " : ""}**${title}** · ${chapterSummary}${total > 1 ? ` · parte ${part}/${total}` : ""}`,
     allowed_mentions: { parse: [] },
   }));
   const pngBlob = new Blob(
