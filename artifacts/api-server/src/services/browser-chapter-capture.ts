@@ -255,6 +255,13 @@ async function findRenderedChapters(
         const hasImage = Boolean(element.querySelector("img, picture, source"));
         const hasLink = element.tagName.toLowerCase() === "a" || Boolean(element.querySelector("a[href]"));
         const hasChapterText = chapterLabelFixed.test(text);
+        const hasCardDimensions = rect.width >= 240 && rect.height >= 90;
+
+        // Schedule/status labels such as "Atualizado toda Sex" can carry a
+        // chapter-related attribute without being the visual card. A real
+        // card must contain media or have dimensions large enough to render
+        // the chapter metadata and thumbnail area.
+        if (!hasImage && !hasCardDimensions) continue;
 
         // A platform chapter card is expected to have a marker, link, or
         // image. This rejects the page wrapper and promotional banners.
