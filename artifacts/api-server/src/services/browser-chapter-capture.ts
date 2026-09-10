@@ -274,7 +274,7 @@ async function findRenderedChapters(
         ? ["data-episode", "data-episode-no", "data-episode-number"]
         : platform === "toomics"
           ? ["data-episode", "data-episode-no", "data-ep", "data-episode-number"]
-          : ["data-episode", "data-episode-no", "data-episode-id", "data-chapter", "data-chapter-number", "data-ep"];
+          : ["data-episode", "data-episode-no", "data-chapter", "data-chapter-number", "data-ep"];
       const slash = String.fromCharCode(92);
       const digit = slash + "d";
       const whitespace = slash + "s";
@@ -486,7 +486,7 @@ async function findRenderedChapters(
         // chapter-related attribute without being the visual card. A real
         // card must contain media or have dimensions large enough to render
         // the chapter metadata and thumbnail area.
-        if (!hasImage && !hasCardDimensions) continue;
+        if (!hasImage || !hasCardDimensions) continue;
 
         // A platform chapter card is expected to have a marker, link, or
         // image. This rejects the page wrapper and promotional banners.
