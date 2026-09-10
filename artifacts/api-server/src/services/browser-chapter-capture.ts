@@ -62,6 +62,10 @@ async function getBrowser(): Promise<Browser> {
         args: [
           "--disable-dev-shm-usage",
           "--disable-gpu",
+          "--disable-background-networking",
+          "--disable-background-timer-throttling",
+          "--disable-renderer-backgrounding",
+          "--disable-extensions",
           "--no-sandbox",
           "--disable-setuid-sandbox",
         ],
@@ -110,6 +114,30 @@ async function waitForRenderedPage(page: Page): Promise<void> {
       })()`,
     )
     .catch(() => undefined);
+}
+
+async function prepareCapturePage(page: Page): Promise<void> {
+  await page.route("**/*", async (route) => {
+    const resourceType = route.request().resourceType();
+    const url = route.request().url().toLocaleLowerCase();
+    if (
+      resourceType === "font" ||
+      resourceType === "media" ||
+      resourceType === "websocket" ||
+      /doubleclick|googlesyndication|google-analytics|facebook\\.net|hotjar/.test(url)
+    ) {
+      await route.abort();
+      return;
+    }
+    await route.continue();
+  });
+}
+
+async function resetBrowserAfterCrash(): Promise<void> {
+  const browser = await browserPromise?.catch(() => null);
+  browserPromise = null;
+  contextPromise = null;
+  await browser?.close().catch(() => undefined);
 }
 
 async function loginToomics(page: Page): Promise<string> {
@@ -660,12 +688,18 @@ async function captureGroup(
 export async function openBrowserListing(
   listingUrl: string,
   platform: MonitorPlatform,
+  retryAfterCrash = true,
 ): Promise<BrowserListingSession> {
   const context = await getBrowserContext();
   const page = await context.newPage();
   page.setDefaultTimeout(8_000);
+  let pageCrashed = false;
+  page.on("crash", () => {
+    pageCrashed = true;
+  });
 
   try {
+    await prepareCapturePage(page);
     await page.setExtraHTTPHeaders({
       "Cache-Control": "no-cache, no-store",
       Pragma: "no-cache",
@@ -759,6 +793,13 @@ export async function openBrowserListing(
     };
   } catch (error) {
     await page.close().catch(() => undefined);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    if (pageCrashed || /page crashed|target page, context or browser has been closed/i.test(errorMessage)) {
+      await resetBrowserAfterCrash();
+      if (retryAfterCrash) {
+        return openBrowserListing(listingUrl, platform, false);
+      }
+    }
     throw error;
   }
 }
