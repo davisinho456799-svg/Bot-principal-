@@ -166,11 +166,23 @@ async function fetchListing(
 
 async function downloadThumbnail(url: string): Promise<Buffer | null> {
   try {
+    if (/fullversion|full[-_ ]?version|download[-_ ]?app|app[-_ ]?version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)/i.test(url)) {
+      return null;
+    }
     const response = await fetch(url, { headers: { "User-Agent": "ChapterMonitor/1.0" } });
     if (!response.ok) return null;
     const bytes = Buffer.from(await response.arrayBuffer());
     const metadata = await sharp(bytes).metadata();
     if (!metadata.width || !metadata.height) return null;
+    const stats = await sharp(bytes).stats();
+    const colorChannels = stats.channels.slice(0, 3);
+    const alpha = stats.channels[3];
+    const isFullyTransparent = Boolean(alpha && alpha.max < 8);
+    const isNearlyBlank = colorChannels.length > 0 &&
+      colorChannels.every((channel) =>
+        channel.mean > 248 && channel.stdev < 4 && channel.max - channel.min < 12,
+      );
+    if (isFullyTransparent || isNearlyBlank) return null;
     return bytes;
   } catch {
     return null;
@@ -204,9 +216,12 @@ async function buildStrip(title: string, chapters: ChapterCandidate[]): Promise<
       top: headerHeight + index * rowHeight + 10,
     };
   }));
-  if (composites.length) {
+  const validComposites = composites.filter(
+    (item): item is NonNullable<typeof item> => item !== null,
+  );
+  if (validComposites.length) {
     output = await sharp(output)
-      .composite(composites.filter((item): item is NonNullable<typeof item> => item !== null))
+      .composite(validComposites)
       .png()
       .toBuffer();
   }
