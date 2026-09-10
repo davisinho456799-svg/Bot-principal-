@@ -172,7 +172,10 @@ async function fetchListing(
       { err: error, workId: work.id, platform },
       "Playwright falhou; usando parser HTML como fallback",
     );
-    await reportProgress(progress, "A captura do navegador falhou; tentando o parser da plataforma.");
+    const reason = error instanceof Error
+      ? ` (${error.message.split("\n")[0].slice(0, 160)})`
+      : "";
+    await reportProgress(progress, `A captura do navegador falhou${reason}; tentando o parser da plataforma.`);
   }
 
   const specificParser = parserForPlatform(work.platform);
