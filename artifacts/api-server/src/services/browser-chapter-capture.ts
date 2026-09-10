@@ -23,13 +23,11 @@ type ChapterBox = {
 export type BrowserChapter = ParsedChapter & {
   captureId: string;
   captureOrder: number;
-  thumbnailCaptureId?: string;
 };
 
 export type CapturedChapterGroup = {
   chapterNumbers: string[];
   image: Buffer;
-  thumbnailImages: Array<Buffer | undefined>;
 };
 
 export type BrowserListingSession = {
@@ -116,7 +114,6 @@ async function findRenderedChapters(
   const snapshot = (await page.evaluate(
     `(({ platform }) => {
       const CARD_ATTRIBUTE = "data-monitor-capture-card";
-        const IMAGE_ATTRIBUTE = "data-monitor-capture-image";
       const selector = [
         "a[href]",
         "li",
@@ -246,20 +243,50 @@ async function findRenderedChapters(
         const numbers = chapterNumbers(element);
         if (!numbers.length || numbers.length > 3) continue;
 
-        const rect = element.getBoundingClientRect();
+        let cardElement = element;
+        for (
+          let parent = element.parentElement;
+          parent;
+          parent = parent.parentElement
+        ) {
+          const parentRect = parent.getBoundingClientRect();
+          const parentText = (parent.innerText || parent.textContent || " ")
+            .replace(whitespacePattern, " ")
+            .trim();
+          const parentNumbers = chapterNumbers(parent);
+          const parentHasImage = Boolean(parent.querySelector("img, picture, source"));
+          if (
+            parentNumbers.length !== 1 ||
+            !parentHasImage ||
+            parentRect.width < 240 ||
+            parentRect.height < 90 ||
+            parentRect.width > 1_400 ||
+            parentRect.height > 600 ||
+            parentText.length > 1_200
+          ) {
+            if (parentRect.height > 600 || parentRect.width > 1_400) break;
+            continue;
+          }
+          cardElement = parent;
+        }
+
+        const rect = cardElement.getBoundingClientRect();
+        const cardText = (cardElement.innerText || cardElement.textContent || " ")
+          .replace(whitespacePattern, " ")
+          .trim();
         const classText = [
-          element.id || "",
-          element.className && typeof element.className === "string" ? element.className : "",
-          ...Array.from(element.attributes).map((attribute) => attribute.name)
+          cardElement.id || "",
+          cardElement.className && typeof cardElement.className === "string" ? cardElement.className : "",
+          ...Array.from(cardElement.attributes).map((attribute) => attribute.name)
         ].join(" ");
         const hasMarker = chapterLabelFixed.test(classText) ||
-          platformAttributes.some((attribute) => element.hasAttribute(attribute)) ||
-          chapterLabelFixed.test(element.getAttribute("href") || "");
-        const hasImage = Boolean(element.querySelector("img, picture, source"));
-        const hasLink = element.tagName.toLowerCase() === "a" || Boolean(element.querySelector("a[href]"));
-        const hasChapterText = chapterLabelFixed.test(text);
+          platformAttributes.some((attribute) => cardElement.hasAttribute(attribute)) ||
+          chapterLabelFixed.test(cardElement.getAttribute("href") || "");
+        const hasImage = Boolean(cardElement.querySelector("img, picture, source"));
+        const hasLink = cardElement.tagName.toLowerCase() === "a" || Boolean(cardElement.querySelector("a[href]"));
+        const hasChapterText = chapterLabelFixed.test(cardText);
         const hasCardDimensions = rect.width >= 240 && rect.height >= 90;
-        const thumbnail = element.querySelector("img, source");
+        const thumbnail = cardElement.querySelector("img, source");
         const thumbnailValue = thumbnail
           ? (thumbnail.currentSrc ||
             thumbnail.getAttribute("src") ||
@@ -327,13 +354,6 @@ async function findRenderedChapters(
       return records.map((record, index) => {
         const captureId = "monitor-card-" + index;
         record.element.setAttribute(CARD_ATTRIBUTE, captureId);
-        const thumbnailElement = record.element.querySelector("img");
-        const thumbnailCaptureId = thumbnailElement
-          ? "monitor-image-" + index
-          : "";
-        if (thumbnailElement) {
-          thumbnailElement.setAttribute(IMAGE_ATTRIBUTE, thumbnailCaptureId);
-        }
         return {
           number: record.number,
           thumbnailUrl: record.thumbnailUrl,
@@ -342,7 +362,6 @@ async function findRenderedChapters(
           ),
           captureId,
           captureOrder: index,
-          thumbnailCaptureId: thumbnailCaptureId || undefined,
           box: record.rect
         };
       });
@@ -507,30 +526,6 @@ async function captureGroup(
   });
 }
 
-async function captureThumbnails(
-  page: Page,
-  chapters: BrowserChapterSnapshot[],
-): Promise<Array<Buffer | undefined>> {
-  return Promise.all(
-    chapters.map(async (chapter) => {
-      if (!chapter.thumbnailCaptureId) return undefined;
-      try {
-        const locator = page
-          .locator(`[data-monitor-capture-image="${chapter.thumbnailCaptureId}"]`)
-          .first();
-        await locator.scrollIntoViewIfNeeded();
-        await page.waitForTimeout(40);
-        return await locator.screenshot({
-          type: "png",
-          animations: "disabled",
-        });
-      } catch {
-        return undefined;
-      }
-    }),
-  );
-}
-
 export async function openBrowserListing(
   listingUrl: string,
   platform: MonitorPlatform,
@@ -561,7 +556,6 @@ export async function openBrowserListing(
             captured.push({
               chapterNumbers: group.map((chapter) => chapter.number),
               image: await captureGroup(page, group),
-              thumbnailImages: await captureThumbnails(page, group),
             });
           } catch (error) {
             if (group.length === 1) throw error;
@@ -577,7 +571,6 @@ export async function openBrowserListing(
               captured.push({
                 chapterNumbers: smallerGroup.map((chapter) => chapter.number),
                 image: await captureGroup(page, smallerGroup),
-                thumbnailImages: await captureThumbnails(page, smallerGroup),
               });
             }
           }
