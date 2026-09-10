@@ -535,6 +535,10 @@ export async function openBrowserListing(
   page.setDefaultTimeout(8_000);
 
   try {
+    await page.setExtraHTTPHeaders({
+      "Cache-Control": "no-cache, no-store",
+      Pragma: "no-cache",
+    });
     await page.goto(listingUrl, {
       waitUntil: "domcontentloaded",
       timeout: PAGE_TIMEOUT_MS,
