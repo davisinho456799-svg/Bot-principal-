@@ -329,7 +329,7 @@ async function findRenderedChapters(
           const previous = bestByNumber.get(number);
           if (!previous || score > previous.score) {
             bestByNumber.set(number, {
-              element,
+              element: cardElement,
               number,
               score,
               thumbnailUrl: thumbnailValue ? new URL(thumbnailValue, location.href).toString() : "",
