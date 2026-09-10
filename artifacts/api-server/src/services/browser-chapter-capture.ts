@@ -373,7 +373,9 @@ async function findRenderedChapters(
         const text = (element.innerText || element.textContent || " ").replace(whitespacePattern, " ").trim();
         for (const source of [text, ...Array.from(element.attributes).map((attribute) => attribute.value)]) {
           if (platform === "toomics") {
-            const toomicsEpisodeMatch = source.match(/\/ep\/(\d{1,5})(?:\/|['"]|$)/i);
+            const toomicsEpisodeMatch = source.match(
+              new RegExp("/ep/(" + digit + "{1,5})(?:/|$)", "i"),
+            );
             if (toomicsEpisodeMatch) add(toomicsEpisodeMatch[1]);
           }
           let match;
