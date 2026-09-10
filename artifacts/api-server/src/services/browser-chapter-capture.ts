@@ -238,7 +238,11 @@ async function findRenderedChapters(
       for (const element of nodes) {
         if (!visible(element)) continue;
         const text = (element.innerText || element.textContent || " ").replace(whitespacePattern, " ").trim();
-        if (!text || text.length > 1_200 || blockedWords.test(text)) continue;
+        // A real chapter card can contain a promotional banner inside it
+        // (Toptoon commonly renders "FULLVERSION APP" in the same card).
+        // Rejecting the whole element here prevents the later media-level
+        // filtering from preserving the actual chapter card.
+        if (!text || text.length > 1_200) continue;
 
         const numbers = chapterNumbers(element);
         if (!numbers.length || numbers.length > 3) continue;
