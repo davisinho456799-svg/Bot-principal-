@@ -231,6 +231,16 @@ async function postStrip(
   if (!response.ok) throw new Error(`Discord returned ${response.status}`);
 }
 
+async function isUsableBrowserCapture(image: Buffer | undefined): Promise<boolean> {
+  if (!image) return false;
+  try {
+    const metadata = await sharp(image).metadata();
+    return (metadata.width ?? 0) >= 240 && (metadata.height ?? 0) >= 90;
+  } catch {
+    return false;
+  }
+}
+
 export async function runTestNotification() {
   const [config] = await db.select().from(monitorConfigTable).limit(1);
   if (!config?.discordChannelId) {
@@ -258,7 +268,14 @@ export async function runTestNotification() {
     if (listing.captureSession && chapter.captureId) {
       try {
         const [group] = await listing.captureSession.captureGroups([chapter.captureId]);
-        capturedImage = group?.image;
+        if (await isUsableBrowserCapture(group?.image)) {
+          capturedImage = group?.image;
+        } else {
+          logger.warn(
+            { title: work.title, chapter: chapter.number },
+            "Captura Playwright descartada por dimensões incompatíveis com um card",
+          );
+        }
       } catch (error) {
         logger.warn(
           { err: error, title: work.title, chapter: chapter.number },
@@ -409,10 +426,21 @@ export async function runMonitor() {
           );
         }
       }
+      const validCapturedGroups: CapturedChapterGroup[] = [];
+      for (const group of capturedGroups) {
+        if (await isUsableBrowserCapture(group.image)) {
+          validCapturedGroups.push(group);
+        } else {
+          logger.warn(
+            { workId: work.id, chapterNumbers: group.chapterNumbers },
+            "Captura Playwright descartada por dimensões incompatíveis com um card",
+          );
+        }
+      }
       const freshByNumber = new Map(
         fresh.map((chapter) => [chapter.number, chapter]),
       );
-      const browserGroups = capturedGroups
+      const browserGroups = validCapturedGroups
         .map((group) => ({
           chapters: group.chapterNumbers
             .map((number) => freshByNumber.get(number))
