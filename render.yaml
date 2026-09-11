@@ -2,7 +2,7 @@ services:
   - type: worker
     name: panel-watch-discord-bot
     runtime: docker
-    dockerfilePath: ./Dockerfile
+    dockerfilePath: ./Dockerfile.discord
     dockerContext: .
     branch: bot
     autoDeploy: true
