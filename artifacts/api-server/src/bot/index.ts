@@ -13,10 +13,7 @@ export async function startBot() {
     return;
   }
 
-  logger.info(
-    { tokenLen: token.length, tokenPrefix: token.slice(0, 10) },
-    "Token encontrado, criando client Discord",
-  );
+  logger.info({ tokenConfigured: true }, "Token do Discord encontrado, criando client Discord");
 
   const client = new Client({
     intents: [GatewayIntentBits.Guilds],
