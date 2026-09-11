@@ -1,0 +1,21 @@
+services:
+  - type: worker
+    name: panel-watch-discord-bot
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    branch: bot
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DISCORD_BOT_ENABLED
+        value: "true"
+      - key: DISCORD_GUILD_ID
+        value: "1003727988346601572"
+      - key: DATABASE_URL
+        sync: false
+      - key: DISCORD_BOT_TOKEN
+        sync: false
+      - key: SESSION_SECRET
+        sync: false
