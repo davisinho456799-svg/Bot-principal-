@@ -326,7 +326,9 @@ export async function getCurrentSeasonData(): Promise<SeasonCatalog> {
     anime = animeResult.value.map(mapSeasonAnime);
   } else {
     logger.warn({ err: animeResult.reason, season, year }, "Catálogo de anime indisponível");
-    anime = [];
+    throw new Error("AniList e Tenrai indisponíveis para o catálogo de anime", {
+      cause: animeResult.reason,
+    });
   }
 
   if (mangaResult.status === "fulfilled") {
@@ -338,7 +340,9 @@ export async function getCurrentSeasonData(): Promise<SeasonCatalog> {
       manga = fallbackManga.map(mapTenraiManga);
     } catch (mangaError) {
       logger.warn({ err: mangaError }, "Catálogo reserva de mangás indisponível");
-      manga = [];
+      throw new Error("AniList e Tenrai indisponíveis para o catálogo de mangás", {
+        cause: mangaError,
+      });
     }
   }
 
