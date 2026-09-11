@@ -1054,7 +1054,10 @@ function detectAdultContent(
  * Para obras +18 ou obscuras (detectadas automaticamente), a prioridade vira:
  *   VNDB → Erogamescape → AniList → AniDB → Kitsu → AniSearch → Jikan
  */
-export async function searchAllAnimeSources(query: string): Promise<UnifiedResult[]> {
+export async function searchAllAnimeSources(
+  query: string,
+  expandQuery = true,
+): Promise<UnifiedResult[]> {
   // Atalho: query já conhecida como sem resultado
   if (isKnownEmpty(query)) return [];
 
@@ -1103,13 +1106,16 @@ export async function searchAllAnimeSources(query: string): Promise<UnifiedResul
     ? { vndb: 0, erogamescape: 1, "anilist-anime": 2, anidb: 3, kitsu: 4, tenrai: 5, anisearch: 6, jikan: 7 }
     : { "anilist-anime": 0, jikan: 1, tenrai: 2, kitsu: 3, anisearch: 4, anidb: 5, vndb: 6, erogamescape: 7 };
 
-  // Flatten todos os resultados, ordenar por prioridade de fonte → score
+  // A relevância do título vem antes da fonte. Assim, uma correspondência exata
+  // do Tenrai/MAL não perde para um resultado genérico do AniList.
   const allFlat: UnifiedResult[] = [
     ...vndbResults, ...erogeResults,
     ...anilistResults, ...jikanResults, ...tenraiResults, ...kitsuResults,
     ...anisearchResults, ...anidbResults,
   ];
   allFlat.sort((a, b) => {
+    const relevanceDelta = scoreResult(query, b) - scoreResult(query, a);
+    if (Math.abs(relevanceDelta) > 0.08) return relevanceDelta;
     const so = (srcOrder[a.source] ?? 9) - (srcOrder[b.source] ?? 9);
     if (so !== 0) return so;
     return (b.score ?? 0) - (a.score ?? 0);
@@ -1123,7 +1129,39 @@ export async function searchAllAnimeSources(query: string): Promise<UnifiedResul
     }
   }
 
-  const final = raw.slice(0, 10);
+  let final = raw.slice(0, 10);
+
+  // Se a busca inicial foi fraca, tenta uma versão traduzida ou partes
+  // significativas do título. A segunda rodada é limitada e não se expande
+  // novamente para evitar multiplicar chamadas externas.
+  const bestRelevance = final.reduce(
+    (best, result) => Math.max(best, scoreResult(query, result)),
+    0,
+  );
+  if (expandQuery && (final.length === 0 || bestRelevance < 0.68)) {
+    const variants = new Set<string>(partialQueries(query));
+    const translated = await translateToEnglish(query);
+    if (translated && translated.toLowerCase() !== query.toLowerCase()) {
+      variants.add(translated);
+    }
+
+    for (const variant of [...variants].slice(0, 2)) {
+      if (variant.toLowerCase() === query.toLowerCase()) continue;
+      const expandedResults = await searchAllAnimeSources(variant, false);
+      for (const result of expandedResults) {
+        if (!raw.some((existing) => titleOverlap(existing.mainTitle, result.mainTitle))) {
+          raw.push(result);
+        }
+      }
+    }
+
+    raw.sort((a, b) => {
+      const relevanceDelta = scoreResult(query, b) - scoreResult(query, a);
+      if (Math.abs(relevanceDelta) > 0.08) return relevanceDelta;
+      return (b.score ?? 0) - (a.score ?? 0);
+    });
+    final = raw.slice(0, 10);
+  }
 
   // Cache de "sem resultado" — evita re-chamar todas as APIs para queries sem saída
   if (final.length === 0) {
