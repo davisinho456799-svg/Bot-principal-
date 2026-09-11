@@ -11,8 +11,6 @@ services:
         value: production
       - key: DISCORD_BOT_ENABLED
         value: "true"
-      - key: DISCORD_GUILD_ID
-        value: "1003727988346601572"
       - key: DATABASE_URL
         sync: false
       - key: DISCORD_BOT_TOKEN
