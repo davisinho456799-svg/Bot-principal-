@@ -27,14 +27,6 @@ import * as temasCommand from "./commands/temas.js";
 import * as filmeCommand from "./commands/filme.js";
 import * as calendarioCommand from "./commands/calendario.js";
 import * as calendario18Command from "./commands/calendario18.js";
-import {
-  configurarCommand,
-  configurarData,
-  atualizarCommand,
-  atualizarData,
-  statusCommand as temporadaStatusCommand,
-  statusData as temporadaStatusData,
-} from "./season-management.js";
 import * as historicoCommand from "./commands/historico.js";
 import * as verificarCommand from "./commands/verificar.js";
 import * as assinarCommand from "./commands/assinar.js";
@@ -82,9 +74,9 @@ const commandModules: BotCommand[] = [
   calendarioCommand,
   calendario18Command,
   temporadaCommand,
-  configurarCommand,
-  atualizarCommand,
-  temporadaStatusCommand,
+  { data: temporadaCommand.configurarData, execute: temporadaCommand.configurarCommand.execute },
+  { data: temporadaCommand.atualizarData, execute: temporadaCommand.atualizarCommand.execute },
+  { data: temporadaCommand.temporadaStatusData, execute: temporadaCommand.temporadaStatusCommand.execute },
   statusCommand,
   historicoCommand,
   verificarCommand,
@@ -102,9 +94,3 @@ export const commandRegistry = new Map<string, BotCommand>(
 export const commandDefinitions: CommandDefinition[] = commandModules.map(({ data }) =>
   (typeof data.toJSON === "function" ? data.toJSON() : data) as CommandDefinition,
 );
-
-export {
-  configurarData,
-  atualizarData,
-  temporadaStatusData,
-};
