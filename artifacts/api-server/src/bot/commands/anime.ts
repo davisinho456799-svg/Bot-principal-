@@ -32,6 +32,7 @@ import { cleanDescription, translateToPtBr, statusLabel, searchAnime } from "../
 import { searchKitsu } from "../kitsu.js";
 import { searchAniSearch } from "../anisearch.js";
 import { searchJikanAnimeAny } from "../jikan.js";
+import { jikanAnimeToUnified } from "../unified.js";
 import { logger } from "../../lib/logger.js";
 
 export const data = new SlashCommandBuilder()
@@ -396,6 +397,13 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
       logger.error({ err, descricao }, "Erro ao buscar anime por descrição");
       await interaction.editReply("❌ Erro ao buscar por descrição. Tente novamente.");
       return;
+    }
+    // O índice semântico usa AniList como uma de suas fontes. Se ele estiver
+    // indisponível, ainda oferecemos resultados concretos do MAL em vez de
+    // encerrar a busca de descrição sem resposta.
+    if (!results.length) {
+      const malResults = await searchJikanAnimeAny(descricao);
+      results = malResults.map(jikanAnimeToUnified);
     }
     if (!results.length) {
       await interaction.editReply(
