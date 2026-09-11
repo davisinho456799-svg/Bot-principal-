@@ -33,6 +33,7 @@ import { searchKitsu } from "../kitsu.js";
 import { searchAniSearch } from "../anisearch.js";
 import { searchJikanAnimeAny } from "../jikan.js";
 import { jikanAnimeToUnified } from "../unified.js";
+import { searchTenraiAnime } from "../tenrai-fallback.js";
 import { logger } from "../../lib/logger.js";
 
 export const data = new SlashCommandBuilder()
@@ -72,11 +73,12 @@ export async function autocomplete(interaction: AutocompleteInteraction): Promis
   }
 
   try {
-    const [anilistResults, kitsuResults, anisearchResults, malResults] = await Promise.allSettled([
+    const [anilistResults, kitsuResults, anisearchResults, malResults, tenraiResults] = await Promise.allSettled([
       searchAnime(focused),
       searchKitsu(focused),
       searchAniSearch(focused),
       searchJikanAnimeAny(focused),
+      searchTenraiAnime(focused),
     ]);
 
     const seen = new Set<string>();
@@ -111,6 +113,16 @@ export async function autocomplete(interaction: AutocompleteInteraction): Promis
         }
       }
     }
+    // Tenrai/MAL: value = "tenrai:<malId>"
+    if (tenraiResults.status === "fulfilled") {
+      for (const r of tenraiResults.value) {
+        const t = r.title_english ?? r.title;
+        if (t && !seen.has(t.toLowerCase())) {
+          seen.add(t.toLowerCase());
+          options.push({ name: `${t.slice(0, 90)} · Tenrai`, value: `tenrai:${r.mal_id}` });
+        }
+      }
+    }
 
     // AniSearch: value = "anisearch:<id>"
     if (anisearchResults.status === "fulfilled") {
@@ -135,6 +147,7 @@ export async function autocomplete(interaction: AutocompleteInteraction): Promis
 const SOURCE_LABELS: Record<string, string> = {
   "anilist-anime": "AniList",
   jikan: "MyAnimeList",
+  tenrai: "Tenrai/MAL",
   kitsu: "Kitsu",
   anidb: "AniDB",
   anisearch: "AniSearch",
@@ -143,6 +156,7 @@ const SOURCE_LABELS: Record<string, string> = {
 const SOURCE_ICONS: Record<string, string> = {
   "anilist-anime": "🟣",
   jikan: "🔴",
+  tenrai: "🔵",
   kitsu: "🔵",
   anidb: "🟤",
   anisearch: "🔵",
