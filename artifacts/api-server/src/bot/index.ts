@@ -51,6 +51,10 @@ import {
   executeManhwaCommand,
   monitorCommandDefinition,
 } from "../services/discord-command-service.js";
+import {
+  config as getDiscordConfig,
+  getConfiguredSeasonPage,
+} from "../routes/discord.js";
 
 type Command = {
   data: { name: string };
@@ -258,6 +262,40 @@ export async function startBot() {
       } catch (err) {
         logger.error({ err }, "Erro ao salvar status do anime");
         await interaction.reply({ content: "❌ Erro ao salvar. Tente novamente.", ephemeral: true });
+      }
+      return;
+    }
+
+    if (
+      interaction.isButton() &&
+      (interaction.customId.startsWith("season_page_prev_") ||
+        interaction.customId.startsWith("season_page_next_"))
+    ) {
+      const configured = await getDiscordConfig();
+      if (configured.messageId && interaction.message.id !== configured.messageId) {
+        await interaction.reply({
+          content: "Esta tabela já foi substituída pela versão mais recente.",
+          ephemeral: true,
+        });
+        return;
+      }
+
+      const currentPage = Number(interaction.customId.split("_").pop());
+      const direction = interaction.customId.startsWith("season_page_next_") ? 1 : -1;
+      const targetPage = Number.isFinite(currentPage) ? Math.max(0, currentPage + direction) : 0;
+
+      await interaction.deferUpdate();
+      try {
+        const payload = await getConfiguredSeasonPage(targetPage);
+        await interaction.editReply(payload);
+      } catch (err) {
+        logger.error({ err }, "Falha ao mudar página da tabela de temporada");
+        await interaction
+          .followUp({
+            content: "Não foi possível carregar esta página agora. Tente novamente.",
+            ephemeral: true,
+          })
+          .catch(() => null);
       }
       return;
     }

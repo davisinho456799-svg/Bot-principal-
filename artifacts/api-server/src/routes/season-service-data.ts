@@ -25,6 +25,7 @@ export type SeasonDataItem = {
   volumes: number | null;
   synopsis: string | null;
   genres: string[];
+  category?: "manga" | "manhwa";
 };
 
 export type SeasonCatalog = { season: string; year: number; anime: SeasonDataItem[]; manga: SeasonDataItem[]; updatedAt: Date };
@@ -97,6 +98,20 @@ type TenraiAnime = {
   status?: string | null;
 };
 
+type TenraiManga = {
+  mal_id: number;
+  title: string;
+  title_english?: string | null;
+  type?: string | null;
+  url?: string | null;
+  images?: { jpg?: { large_image_url?: string | null; image_url?: string | null } };
+  score?: number | null;
+  chapters?: number | null;
+  volumes?: number | null;
+  synopsis?: string | null;
+  genres?: Array<{ name?: string | null }>;
+};
+
 async function fetchSeasonFromAniList(season: string, year: number) {
   let lastError: Error | undefined;
   for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -151,6 +166,39 @@ async function fetchSeasonFromTenrai(season: string, year: number): Promise<Tenr
   return anime;
 }
 
+async function fetchPublishingMangaFromTenrai(): Promise<TenraiManga[]> {
+  const types = ["manga", "manhwa"];
+  const results = await Promise.allSettled(
+    types.map(async (type) => {
+      const params = new URLSearchParams({
+        status: "publishing",
+        type,
+        limit: "10",
+        order_by: "popularity",
+        sort: "asc",
+      });
+      const response = await fetch(`https://api.tenrai.org/v1/manga?${params}`, {
+        headers: { Accept: "application/json" },
+        signal: AbortSignal.timeout(12_000),
+      });
+      if (!response.ok) throw new Error(`Tenrai manga (${type}) returned ${response.status}`);
+      const json = (await response.json()) as { data?: TenraiManga[] };
+      return json.data ?? [];
+    }),
+  );
+
+  const manga = results.flatMap((result) => (result.status === "fulfilled" ? result.value : []));
+  if (!manga.length) {
+    const errors = results
+      .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+      .map((result) => result.reason);
+    throw errors[0] instanceof Error
+      ? errors[0]
+      : new Error("Tenrai returned an empty publishing manga catalog");
+  }
+  return manga;
+}
+
 function map(item: AniListItem, kind: SeasonDataItem["kind"], status: SeasonDataItem["status"]): SeasonDataItem {
   return {
     id: item.id,
@@ -164,6 +212,7 @@ function map(item: AniListItem, kind: SeasonDataItem["kind"], status: SeasonData
     volumes: item.volumes ?? null,
     synopsis: item.description ?? null,
     genres: item.genres ?? [],
+    category: kind === "manga" ? "manga" : undefined,
   };
 }
 
@@ -186,6 +235,25 @@ function mapTenraiAnime(item: TenraiAnime): SeasonDataItem {
   };
 }
 
+function mapTenraiManga(item: TenraiManga): SeasonDataItem {
+  return {
+    id: item.mal_id,
+    title: item.title_english || item.title || "Sem título",
+    kind: "manga",
+    status: "publishing",
+    imageUrl: item.images?.jpg?.large_image_url || item.images?.jpg?.image_url || "",
+    url: item.url || `https://myanimelist.net/manga/${item.mal_id}`,
+    score: item.score == null ? null : item.score,
+    episodes: null,
+    volumes: item.volumes ?? null,
+    synopsis: item.synopsis ?? null,
+    genres: (item.genres ?? [])
+      .map((genre) => genre.name ?? "")
+      .filter(Boolean),
+    category: item.type?.toLowerCase() === "manhwa" ? "manhwa" : "manga",
+  };
+}
+
 export async function getCurrentSeasonData(): Promise<SeasonCatalog> {
   const { season, year } = currentSeason();
   let anime: SeasonDataItem[];
@@ -204,7 +272,13 @@ export async function getCurrentSeasonData(): Promise<SeasonCatalog> {
     );
     const fallbackAnime = await fetchSeasonFromTenrai(season, year);
     anime = fallbackAnime.map(mapTenraiAnime);
-    manga = [];
+    try {
+      const fallbackManga = await fetchPublishingMangaFromTenrai();
+      manga = fallbackManga.map(mapTenraiManga);
+    } catch (mangaError) {
+      logger.warn({ err: mangaError }, "Catálogo reserva de mangás indisponível");
+      manga = [];
+    }
   }
 
   return {

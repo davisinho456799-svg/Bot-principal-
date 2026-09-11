@@ -34,6 +34,19 @@ async function discordFetch(path: string, init?: RequestInit) {
   return response;
 }
 
+type SeasonButton = {
+  type: 2;
+  style: 1 | 2;
+  custom_id: string;
+  label: string;
+  disabled?: boolean;
+};
+
+type SeasonMessagePayload = {
+  embeds: Array<Record<string, unknown>>;
+  components: Array<{ type: 1; components: SeasonButton[] }>;
+};
+
 export async function config() {
   const found = await db.select().from(botConfigTable).limit(1);
   if (found[0]) return found[0];
@@ -122,29 +135,35 @@ router.get("/discord/status", async (_req, res) => {
 export async function syncConfiguredChannel() {
   const value = await config();
   if (!value.channelId) throw new Error("Escolha um canal antes de sincronizar.");
-    const catalog = await getSeasonCatalog();
-    const embed = formatDiscordEmbed(catalog, value.includeAnime, value.includeManga);
-    let messageId = value.messageId;
-    if (messageId) {
-      try {
-        await discordFetch(`/channels/${value.channelId}/messages/${messageId}`, {
-          method: "PATCH",
-          body: JSON.stringify({ content: "", embeds: [embed] }),
-        });
-      } catch {
-        messageId = null;
-      }
-    }
-    if (!messageId) {
-      const response = await discordFetch(`/channels/${value.channelId}/messages`, {
-        method: "POST",
-        body: JSON.stringify({ embeds: [embed] }),
+  const catalog = await getSeasonCatalog();
+  const message = formatSeasonMessage(catalog, value.includeAnime, value.includeManga, 0);
+  let messageId = value.messageId;
+  if (messageId) {
+    try {
+      await discordFetch(`/channels/${value.channelId}/messages/${messageId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ content: "", ...message }),
       });
-      messageId = (await response.json() as { id: string }).id;
+    } catch {
+      messageId = null;
     }
-    const syncedAt = new Date();
-    await db.update(botConfigTable).set({ messageId, lastSyncedAt: syncedAt }).where(eq(botConfigTable.id, value.id));
-    return SyncDiscordTableResponse.parse({ success: true, message: "Tabela publicada e atualizada no Discord.", updatedAt: syncedAt });
+  }
+  if (!messageId) {
+    const response = await discordFetch(`/channels/${value.channelId}/messages`, {
+      method: "POST",
+      body: JSON.stringify(message),
+    });
+    messageId = (await response.json() as { id: string }).id;
+  }
+  const syncedAt = new Date();
+  await db.update(botConfigTable).set({ messageId, lastSyncedAt: syncedAt }).where(eq(botConfigTable.id, value.id));
+  return SyncDiscordTableResponse.parse({ success: true, message: "Tabela publicada e atualizada no Discord.", updatedAt: syncedAt });
+}
+
+export async function getConfiguredSeasonPage(page: number): Promise<SeasonMessagePayload> {
+  const value = await config();
+  const catalog = await getSeasonCatalog();
+  return formatSeasonMessage(catalog, value.includeAnime, value.includeManga, page);
 }
 
 router.post("/discord/sync", async (req, res) => {
@@ -156,9 +175,11 @@ router.post("/discord/sync", async (req, res) => {
   }
 });
 
-function formatDiscordTable(catalog: Awaited<ReturnType<typeof getSeasonCatalog>>, includeAnime: boolean, includeManga: boolean) {
-  const lines: string[] = [];
-
+function buildDiscordPages(
+  catalog: Awaited<ReturnType<typeof getSeasonCatalog>>,
+  includeAnime: boolean,
+  includeManga: boolean,
+) {
   const formatItem = (item: (typeof catalog.anime)[number], statusLabel: string, icon: string) => {
     const score = item.score !== null ? ` ⭐${item.score.toFixed(1)}` : "";
     const episodes = item.episodes ? `📺 ${item.episodes} eps` : "📺 Episódios —";
@@ -170,43 +191,61 @@ function formatDiscordTable(catalog: Awaited<ReturnType<typeof getSeasonCatalog>
     ].join("\n");
   };
 
-  const blocks: string[] = [];
+  const sections: Array<{ title: string; items: string[] }> = [];
   if (includeAnime) {
-    const airing = catalog.anime.filter((item) => item.status === "airing").slice(0, 8);
-    const upcoming = catalog.anime.filter((item) => item.status === "upcoming").slice(0, 6);
+    const airing = catalog.anime.filter((item) => item.status === "airing");
+    const upcoming = catalog.anime.filter((item) => item.status === "upcoming");
     if (airing.length) {
-      blocks.push("🟢 **ANIMES NO AR**", ...airing.map((item) => formatItem(item, "No ar", "🕐")));
+      sections.push({
+        title: "🟢 **ANIMES NO AR**",
+        items: airing.map((item) => formatItem(item, "No ar", "🕐")),
+      });
     }
     if (upcoming.length) {
-      blocks.push("🔜 **ANIMES QUE VÃO ENTRAR**", ...upcoming.map((item) => formatItem(item, "Em breve", "🗓️")));
+      sections.push({
+        title: "🔜 **ANIMES QUE VÃO ENTRAR**",
+        items: upcoming.map((item) => formatItem(item, "Em breve", "🗓️")),
+      });
     }
   }
 
   if (includeManga && catalog.manga.length) {
-    blocks.push("📚 **MANGÁS EM PUBLICAÇÃO**", ...catalog.manga.slice(0, 4).map((item) => formatItem(item, "Publicando", "🇯🇵")));
+    const manga = catalog.manga.filter((item) => item.category !== "manhwa");
+    const manhwa = catalog.manga.filter((item) => item.category === "manhwa");
+    if (manga.length) {
+      sections.push({
+        title: "📚 **MANGÁS EM PUBLICAÇÃO**",
+        items: manga.map((item) => formatItem(item, "Publicando", "🇯🇵")),
+      });
+    }
+    if (manhwa.length) {
+      sections.push({
+        title: "📖 **MANHWAS EM PUBLICAÇÃO**",
+        items: manhwa.map((item) => formatItem(item, "Publicando", "🇰🇷")),
+      });
+    }
   }
 
-  const maxLength = 1990;
-  const output = [...lines, ...blocks].join("\n\n");
-  if (output.length <= maxLength) return output;
-
-  const compact = [...lines];
-  let length = compact.join("\n\n").length;
-  for (const block of blocks) {
-    const nextLength = length + 2 + block.length;
-    if (nextLength > maxLength - 45) break;
-    compact.push(block);
-    length = nextLength;
+  const pages: Array<{ sectionTitle: string; description: string }> = [];
+  for (const section of sections) {
+    for (let index = 0; index < section.items.length; index += 5) {
+      pages.push({
+        sectionTitle: section.title.replace(/\*\*/g, ""),
+        description: [section.title, ...section.items.slice(index, index + 5)].join("\n\n"),
+      });
+    }
   }
-  compact.push("…_Lista reduzida para caber no Discord._");
-  return compact.join("\n\n");
+  return pages.length
+    ? pages
+    : [{ sectionTitle: "Nenhum título", description: "_Nenhum título encontrado para esta temporada._" }];
 }
 
-function formatDiscordEmbed(
+function formatSeasonMessage(
   catalog: Awaited<ReturnType<typeof getSeasonCatalog>>,
   includeAnime: boolean,
   includeManga: boolean,
-) {
+  requestedPage: number,
+): SeasonMessagePayload {
   const seasonNames: Record<string, string> = {
     winter: "Inverno",
     spring: "Primavera",
@@ -214,16 +253,49 @@ function formatDiscordEmbed(
     fall: "Outono",
   };
   const seasonName = seasonNames[catalog.season] ?? catalog.season;
-  const description = formatDiscordTable(catalog, includeAnime, includeManga);
+  const pages = buildDiscordPages(catalog, includeAnime, includeManga);
+  const page = Math.max(0, Math.min(requestedPage, pages.length - 1));
+  const current = pages[page];
+  const components = pages.length > 1
+    ? [{
+        type: 1 as const,
+        components: [
+          {
+            type: 2 as const,
+            style: 2 as const,
+            custom_id: `season_page_prev_${page}`,
+            label: "Anterior",
+            disabled: page === 0,
+          },
+          {
+            type: 2 as const,
+            style: 2 as const,
+            custom_id: `season_page_info_${page}`,
+            label: `Página ${page + 1}/${pages.length}`,
+            disabled: true,
+          },
+          {
+            type: 2 as const,
+            style: 1 as const,
+            custom_id: `season_page_next_${page}`,
+            label: "Próxima",
+            disabled: page === pages.length - 1,
+          },
+        ],
+      }]
+    : [];
 
   return {
-    title: `📺 Calendário de Anime — ${seasonName} ${catalog.year}`,
-    description: description || "_Nenhum título encontrado para esta temporada._",
-    color: 0x2f80ed,
-    footer: {
-      text: "Atualizado automaticamente • Informações via AniList",
-    },
-    timestamp: new Date().toISOString(),
+    embeds: [{
+      title: `📺 Calendário — ${seasonName} ${catalog.year} • ${current.sectionTitle}`,
+      description: current.description,
+      color: 0x2f80ed,
+      footer: {
+        text: `Página ${page + 1}/${pages.length} • Atualizado automaticamente • AniList/Tenrai`,
+      },
+      timestamp: new Date().toISOString(),
+    }],
+    components,
   };
 }
 
