@@ -45,6 +45,13 @@ import { searchVNDB, getVNDBById, type VNDBResult } from "./vndb.js";
 import { searchErogamescape, getErogamescapeDetail, type ErogamescapeResult } from "./erogamescape.js";
 import { searchAniSearch, getAniSearchById, type AniSearchResult } from "./anisearch.js";
 import {
+  getTenraiAnimeById,
+  searchTenraiAnime,
+  genresOfTenrai,
+  titleOfTenrai,
+  type TenraiAnime,
+} from "./tenrai-fallback.js";
+import {
   searchAnimeByConceptsPtBr,
   scoreAnimeCandidate,
   extractAnimeConcepts,
@@ -59,7 +66,7 @@ import { searchCache, titleAliases } from "@workspace/db";
 import { eq, or, sql } from "drizzle-orm";
 
 export interface UnifiedResult {
-  source: "anilist" | "anilist-anime" | "mangadex" | "comick" | "mangaupdates" | "jikan" | "kitsu" | "anidb" | "vndb" | "erogamescape" | "anisearch";
+  source: "anilist" | "anilist-anime" | "mangadex" | "comick" | "mangaupdates" | "jikan" | "tenrai" | "kitsu" | "anidb" | "vndb" | "erogamescape" | "anisearch";
   id: string;
   mainTitle: string;
   nativeTitle: string | null;
@@ -270,6 +277,29 @@ export function jikanAnimeToUnified(m: JikanAnimeResult): UnifiedResult {
     animeType: m.type,
     season: m.season,
     studios: m.studios,
+  };
+}
+
+export function tenraiAnimeToUnified(m: TenraiAnime): UnifiedResult {
+  return {
+    source: "tenrai",
+    id: String(m.mal_id),
+    mainTitle: titleOfTenrai(m),
+    nativeTitle: m.title,
+    romajiTitle: null,
+    synonyms: [],
+    description: m.synopsis ?? null,
+    coverUrl: null,
+    accentColor: 0x5b8def,
+    score: m.score != null ? Math.round(m.score * 10) : null,
+    genres: genresOfTenrai(m),
+    chapters: null,
+    status: m.status?.toLowerCase().includes("airing") ? "RELEASING" : m.status,
+    siteUrl: m.url ?? `https://myanimelist.net/anime/${m.mal_id}`,
+    year: null,
+    ptBrUrl: null,
+    mediaType: "anime",
+    episodes: m.episodes ?? null,
   };
 }
 
@@ -1029,9 +1059,10 @@ export async function searchAllAnimeSources(query: string): Promise<UnifiedResul
   if (isKnownEmpty(query)) return [];
 
   // Todas as fontes em paralelo — com timeout individual por fonte
-  const [anilistRes, jikanRes, kitsuRes, anisearchRes, vndbRes, erogeRes] = await Promise.allSettled([
+  const [anilistRes, jikanRes, tenraiRes, kitsuRes, anisearchRes, vndbRes, erogeRes] = await Promise.allSettled([
     fetchSource("anilist-anime", query, () => searchAnime(query), []),
     fetchSource("jikan-anime", query, () => searchJikanAnimeAny(query), []),
+    fetchSource("tenrai-anime", query, () => searchTenraiAnime(query), []),
     fetchSource("kitsu-anime", query, () => searchKitsu(query), []),
     fetchSource("anisearch", query, () => searchAniSearch(query), []),
     fetchSource("vndb", query, () => searchVNDB(query), []),
@@ -1042,6 +1073,8 @@ export async function searchAllAnimeSources(query: string): Promise<UnifiedResul
     anilistRes.status === "fulfilled" ? anilistRes.value.map(animeResultToUnified) : [];
   const jikanResults: UnifiedResult[] =
     jikanRes.status === "fulfilled" ? jikanRes.value.map(jikanAnimeToUnified) : [];
+  const tenraiResults: UnifiedResult[] =
+    tenraiRes.status === "fulfilled" ? tenraiRes.value.map(tenraiAnimeToUnified) : [];
   const kitsuResults: UnifiedResult[] =
     kitsuRes.status === "fulfilled" ? kitsuRes.value.map(kitsuToUnified) : [];
   const anisearchResults: UnifiedResult[] =
@@ -1053,7 +1086,7 @@ export async function searchAllAnimeSources(query: string): Promise<UnifiedResul
 
   // AniDB como fallback — só busca se fontes principais retornaram pouco
   let anidbResults: UnifiedResult[] = [];
-  const mainCount = anilistResults.length + jikanResults.length + kitsuResults.length;
+  const mainCount = anilistResults.length + jikanResults.length + tenraiResults.length + kitsuResults.length;
   if (mainCount < 3) {
     anidbResults = await fetchSource("anidb", query, () =>
       searchAniDB(query).then((rs) => rs.map(anidbEntryToUnified)), []
@@ -1062,18 +1095,18 @@ export async function searchAllAnimeSources(query: string): Promise<UnifiedResul
 
   // Detectar automaticamente se o conteúdo é adulto/obscuro
   const isAdult = detectAdultContent(anilistResults, vndbResults, erogeResults, [
-    ...jikanResults, ...kitsuResults, ...anisearchResults, ...anidbResults,
+    ...jikanResults, ...tenraiResults, ...kitsuResults, ...anisearchResults, ...anidbResults,
   ]);
 
   // Prioridade por fonte conforme o tipo de conteúdo
   const srcOrder: Record<string, number> = isAdult
-    ? { vndb: 0, erogamescape: 1, "anilist-anime": 2, anidb: 3, kitsu: 4, anisearch: 5, jikan: 6 }
-    : { "anilist-anime": 0, jikan: 1, kitsu: 2, anisearch: 3, anidb: 4, vndb: 5, erogamescape: 6 };
+    ? { vndb: 0, erogamescape: 1, "anilist-anime": 2, anidb: 3, kitsu: 4, tenrai: 5, anisearch: 6, jikan: 7 }
+    : { "anilist-anime": 0, jikan: 1, tenrai: 2, kitsu: 3, anisearch: 4, anidb: 5, vndb: 6, erogamescape: 7 };
 
   // Flatten todos os resultados, ordenar por prioridade de fonte → score
   const allFlat: UnifiedResult[] = [
     ...vndbResults, ...erogeResults,
-    ...anilistResults, ...jikanResults, ...kitsuResults,
+    ...anilistResults, ...jikanResults, ...tenraiResults, ...kitsuResults,
     ...anisearchResults, ...anidbResults,
   ];
   allFlat.sort((a, b) => {
@@ -1125,7 +1158,7 @@ export async function searchAnimeByDescriptionEnhanced(
       const results = await searchAllAnimeSources(translated);
       return results.map((r) => ({
         id: r.id,
-        source: r.source as "anilist-anime" | "jikan" | "kitsu",
+        source: r.source as "anilist-anime" | "jikan" | "tenrai" | "kitsu",
         mainTitle: r.mainTitle,
         synonyms: r.synonyms,
         description: r.description,
@@ -1159,6 +1192,8 @@ export async function searchAnimeByDescriptionEnhanced(
       unified = animeResultToUnified(candidate.raw);
     } else if (candidate.source === "jikan" && candidate.raw) {
       unified = jikanAnimeToUnified(candidate.raw);
+    } else if (candidate.source === "tenrai" && candidate.raw) {
+      unified = tenraiAnimeToUnified(candidate.raw);
     } else if (candidate.source === "kitsu" && candidate.raw) {
       unified = kitsuToUnified(candidate.raw);
     }
@@ -1177,7 +1212,7 @@ export async function searchAnimeByDescriptionEnhanced(
  * Busca detalhes de um anime pelo ID de uma fonte específica.
  */
 export async function getUnifiedAnimeById(
-  source: "anilist-anime" | "jikan" | "kitsu" | "anidb" | "vndb" | "erogamescape" | "anisearch",
+  source: "anilist-anime" | "jikan" | "tenrai" | "kitsu" | "anidb" | "vndb" | "erogamescape" | "anisearch",
   id: string
 ): Promise<UnifiedResult | null> {
   if (source === "anilist-anime") {
@@ -1189,6 +1224,9 @@ export async function getUnifiedAnimeById(
   } else if (source === "jikan") {
     const m = await getJikanAnimeById(parseInt(id, 10));
     return m ? jikanAnimeToUnified(m) : null;
+  } else if (source === "tenrai") {
+    const m = await getTenraiAnimeById(parseInt(id, 10));
+    return m ? tenraiAnimeToUnified(m) : null;
   } else if (source === "anidb") {
     const detail = await getAniDBById(parseInt(id, 10));
     if (detail) return anidbDetailToUnified(detail);
