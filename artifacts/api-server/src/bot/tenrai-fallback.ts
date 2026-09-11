@@ -71,6 +71,19 @@ export async function getTenraiAnimeById(malId: number): Promise<TenraiAnime | n
   return tenraiRequestOne<TenraiAnime>(`anime/${malId}`);
 }
 
+export async function searchTenraiManga(
+  query: string,
+  type: "manga" | "manhwa",
+): Promise<TenraiManga[]> {
+  return tenraiRequest<TenraiManga>(
+    `manga?q=${encodeURIComponent(query.trim())}&type=${type}&limit=25&order_by=score&sort=desc`,
+  );
+}
+
+export async function getTenraiMangaById(malId: number): Promise<TenraiManga | null> {
+  return tenraiRequestOne<TenraiManga>(`manga/${malId}`);
+}
+
 export async function fetchTenraiSeasonAnime(): Promise<TenraiAnime[]> {
   return tenraiRequest<TenraiAnime>("seasons/now?limit=25");
 }
