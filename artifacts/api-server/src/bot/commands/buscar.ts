@@ -5,6 +5,7 @@ import {
 } from "discord.js";
 import { statusLabel } from "../anilist.js";
 import { buildScanLinksExternal } from "./search.js";
+import { fetchTenraiPublishingManga, genresOfTenrai } from "../tenrai-fallback.js";
 
 const ANILIST_API = "https://graphql.anilist.co";
 
@@ -179,6 +180,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 
   let results: MediaItem[];
   let total = 0;
+  let resultSource = "AniList";
 
   try {
     const res = await fetch(ANILIST_API, {
@@ -196,8 +198,30 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     results = json.data.Page.media ?? [];
     total = json.data.Page.pageInfo.total ?? results.length;
   } catch {
-    await interaction.editReply("❌ Erro ao buscar no AniList. Tente novamente.");
-    return;
+    const tenraiType = tipo === "KR" ? "manhwa" : "manga";
+    const fallback = await fetchTenraiPublishingManga(tenraiType);
+    const requestedGenre = genero?.toLowerCase();
+    const filtered = fallback.filter((item) => {
+      const itemGenres = genresOfTenrai(item).map((value) => value.toLowerCase());
+      const genreMatches = !requestedGenre ||
+        itemGenres.some((value) => value === requestedGenre || value.includes(requestedGenre));
+      const scoreMatches = !notaMin || (item.score ?? 0) >= notaMin;
+      return genreMatches && scoreMatches;
+    });
+    results = filtered.slice(0, 10).map((item) => ({
+      id: item.mal_id,
+      title: { romaji: item.title, english: item.title_english ?? null },
+      averageScore: item.score != null ? Math.round(item.score * 10) : null,
+      genres: genresOfTenrai(item),
+      chapters: item.chapters ?? null,
+      status: item.status?.toLowerCase().includes("publishing") ? "RELEASING" : item.status,
+      siteUrl: item.url ?? `https://myanimelist.net/manga/${item.mal_id}`,
+      startDate: { year: item.published?.from ? Number(item.published.from.slice(0, 4)) : null },
+      coverImage: { large: "", color: null },
+      countryOfOrigin: tipo,
+    }));
+    total = results.length;
+    resultSource = "Tenrai/MAL";
   }
 
   if (!results.length) {
@@ -238,7 +262,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
       inline: false,
     })
     .setFooter({
-      text: `Exibindo 10 de ${total} resultado(s) • Ordenados por nota`,
+       text: `Exibindo ${results.length} de ${total} resultado(s) • Fonte: ${resultSource} • Ordenados por nota`,
     });
 
   if (thumbnail) embed.setThumbnail(thumbnail);
