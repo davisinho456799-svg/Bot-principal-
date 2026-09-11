@@ -136,7 +136,7 @@ export async function syncConfiguredChannel() {
   const value = await config();
   if (!value.channelId) throw new Error("Escolha um canal antes de sincronizar.");
   const catalog = await getSeasonCatalog();
-  const message = formatSeasonMessage(catalog, value.includeAnime, value.includeManga, 0);
+  const message = buildSeasonMessagePayload(catalog, value.includeAnime, value.includeManga, 0);
   let messageId = value.messageId;
   if (messageId) {
     try {
@@ -163,7 +163,7 @@ export async function syncConfiguredChannel() {
 export async function getConfiguredSeasonPage(page: number): Promise<SeasonMessagePayload> {
   const value = await config();
   const catalog = await getSeasonCatalog();
-  return formatSeasonMessage(catalog, value.includeAnime, value.includeManga, page);
+  return buildSeasonMessagePayload(catalog, value.includeAnime, value.includeManga, page);
 }
 
 router.post("/discord/sync", async (req, res) => {
@@ -240,7 +240,7 @@ function buildDiscordPages(
     : [{ sectionTitle: "Nenhum título", description: "_Nenhum título encontrado para esta temporada._" }];
 }
 
-function formatSeasonMessage(
+export function buildSeasonMessagePayload(
   catalog: Awaited<ReturnType<typeof getSeasonCatalog>>,
   includeAnime: boolean,
   includeManga: boolean,
