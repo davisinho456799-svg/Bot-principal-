@@ -79,3 +79,7 @@ Para consultar as falhas atuais:
 ```
 
 Os comandos exigem a permissão **Gerenciar servidor** e gravam na mesma watchlist usada pelo painel web.
+
+## Redeploy automático
+
+Cada novo commit na branch configurada do serviço inicia uma nova build automaticamente.
