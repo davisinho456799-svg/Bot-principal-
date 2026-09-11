@@ -12,64 +12,11 @@ import {
   StringSelectMenuInteraction,
   ComponentType,
 } from "discord.js";
-import { logger } from "../../lib/logger.js";
-
-const ANILIST_API = "https://graphql.anilist.co";
-const TENRAI_API = "https://api.tenrai.org/v1";
-
-const SEASON_QUERY = `
-query SeasonAnime($season: MediaSeason!, $seasonYear: Int!, $page: Int) {
-  Page(page: $page, perPage: 20) {
-    pageInfo { hasNextPage currentPage }
-    media(
-      season: $season
-      seasonYear: $seasonYear
-      type: ANIME
-      sort: POPULARITY_DESC
-      isAdult: false
-    ) {
-      id
-      title { romaji english }
-      averageScore
-      genres
-      episodes
-      status
-      siteUrl
-      coverImage { color }
-      studios(isMain: true) { nodes { name } }
-      startDate { month day }
-      nextAiringEpisode { episode airingAt }
-    }
-  }
-}
-`;
-
-interface SeasonMedia {
-  id: number;
-  title: { romaji: string; english: string | null };
-  averageScore: number | null;
-  genres: string[];
-  episodes: number | null;
-  status: string;
-  siteUrl: string;
-  coverImage: { color: string | null };
-  studios: { nodes: { name: string }[] };
-  startDate: { month: number | null; day: number | null };
-  nextAiringEpisode: { episode: number; airingAt: number } | null;
-  source?: string;
-}
-
-interface TenraiSeasonMedia {
-  mal_id: number;
-  title: string;
-  title_english?: string | null;
-  score?: number | null;
-  genres?: { name?: string | null }[];
-  episodes?: number | null;
-  status?: string | null;
-  url?: string | null;
-  images?: { jpg?: { large_image_url?: string | null; image_url?: string | null } };
-}
+import {
+  getSeasonAnimePage,
+  getSeasonInfo,
+  type SeasonAnimeItem,
+} from "../../routes/season-service-data.js";
 
 // ─── Temporada ────────────────────────────────────────────────────────────────
 
@@ -87,19 +34,6 @@ const SEASON_EMOJI: Record<string, string> = {
   FALL: "🍂",
 };
 
-function getCurrentSeason(offsetMonths = 0): { season: string; year: number } {
-  const now = new Date();
-  const month = ((now.getMonth() + offsetMonths) % 12 + 12) % 12 + 1;
-  const yearAdj = Math.floor((now.getMonth() + offsetMonths) / 12);
-  const year = now.getFullYear() + yearAdj;
-  let season: string;
-  if (month <= 3) season = "WINTER";
-  else if (month <= 6) season = "SPRING";
-  else if (month <= 9) season = "SUMMER";
-  else season = "FALL";
-  return { season, year };
-}
-
 const STATUS_PT: Record<string, string> = {
   RELEASING: "🟢 Airing",
   FINISHED: "✅ Finalizado",
@@ -110,63 +44,9 @@ const STATUS_PT: Record<string, string> = {
 
 // ─── Busca ────────────────────────────────────────────────────────────────────
 
-async function fetchSeason(season: string, year: number, page = 1): Promise<SeasonMedia[]> {
-  try {
-    const res = await fetch(ANILIST_API, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({ query: SEASON_QUERY, variables: { season, seasonYear: year, page } }),
-      signal: AbortSignal.timeout(12000),
-    });
-    if (!res.ok) throw new Error(`AniList ${res.status}`);
-    const json = (await res.json()) as {
-      data: { Page: { media: SeasonMedia[]; pageInfo: { hasNextPage: boolean } } };
-      errors?: { message: string }[];
-    };
-    if (json.errors?.length) throw new Error(json.errors[0]!.message);
-    return (json.data.Page.media ?? []).map((media) => ({ ...media, source: "AniList" }));
-  } catch (error) {
-    logger.warn(
-      { err: error, season, year, page },
-      "AniList indisponível no comando /temporada; usando Tenrai",
-    );
-    const response = await fetch(
-      `${TENRAI_API}/seasons/${year}/${season.toLowerCase()}?limit=20&page=${page}`,
-      {
-        headers: { Accept: "application/json" },
-        signal: AbortSignal.timeout(12000),
-      },
-    );
-    if (!response.ok) throw new Error(`AniList indisponível e Tenrai ${response.status}`);
-    const json = (await response.json()) as { data?: TenraiSeasonMedia[] };
-    return (json.data ?? []).map((media) => {
-      const status = media.status?.toLowerCase() ?? "";
-      return {
-        id: media.mal_id,
-        title: {
-          romaji: media.title,
-          english: media.title_english ?? null,
-        },
-        averageScore: media.score == null ? null : media.score * 10,
-        genres: (media.genres ?? []).map((genre) => genre.name ?? "").filter(Boolean),
-        episodes: media.episodes ?? null,
-        status: status.includes("not yet") || status.includes("upcoming")
-          ? "NOT_YET_RELEASED"
-          : "RELEASING",
-        siteUrl: media.url ?? `https://myanimelist.net/anime/${media.mal_id}`,
-        coverImage: { color: null },
-        studios: { nodes: [] },
-        startDate: { month: null, day: null },
-        nextAiringEpisode: null,
-        source: "MAL/Tenrai",
-      };
-    });
-  }
-}
-
 // ─── Embed ────────────────────────────────────────────────────────────────────
 
-function buildSeasonEmbed(list: SeasonMedia[], season: string, year: number, page: number): EmbedBuilder {
+function buildSeasonEmbed(list: SeasonAnimeItem[], season: string, year: number, page: number): EmbedBuilder {
   const emoji = SEASON_EMOJI[season] ?? "🎌";
   const seasonName = SEASON_NAMES[season] ?? season;
 
@@ -225,20 +105,20 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 
   let seasonInfo: { season: string; year: number };
   if (anoOpt) {
-    const base = getCurrentSeason(0);
+    const base = getSeasonInfo(0);
     seasonInfo = { season: base.season, year: anoOpt };
   } else {
     switch (periodo) {
-      case "proxima":  seasonInfo = getCurrentSeason(3);  break;
-      case "anterior": seasonInfo = getCurrentSeason(-3); break;
-      default:         seasonInfo = getCurrentSeason(0);  break;
+      case "proxima":  seasonInfo = getSeasonInfo(3);  break;
+      case "anterior": seasonInfo = getSeasonInfo(-3); break;
+      default:         seasonInfo = getSeasonInfo(0);  break;
     }
   }
 
   const { season, year } = seasonInfo;
 
   try {
-    const list = await fetchSeason(season, year, 1);
+    const list = await getSeasonAnimePage(season, year, 1);
 
     if (!list.length) {
       const seasonName = SEASON_NAMES[season] ?? season;
@@ -276,7 +156,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
         await sel.deferUpdate();
         const pg = parseInt(sel.values[0]!, 10);
         try {
-          const nextList = await fetchSeason(season, year, pg);
+          const nextList = await getSeasonAnimePage(season, year, pg);
           const nextEmbed = buildSeasonEmbed(nextList, season, year, pg);
           await interaction.editReply({ embeds: [nextEmbed], components: [row] });
         } catch {
@@ -293,7 +173,6 @@ export async function execute(interaction: ChatInputCommandInteraction) {
       await interaction.editReply({ embeds: [embed] });
     }
   } catch (err) {
-    logger.error({ err, season, year }, "Erro ao buscar temporada em /temporada");
     const seasonName = SEASON_NAMES[season] ?? season;
     await interaction.editReply(`❌ Erro ao buscar a temporada **${seasonName} ${year}**. Tente novamente.`);
   }
