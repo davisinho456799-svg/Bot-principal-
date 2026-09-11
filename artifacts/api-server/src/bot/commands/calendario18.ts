@@ -19,6 +19,13 @@ import { db, assinaturasTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { getUnifiedById } from "../unified.js";
 import { logger } from "../../lib/logger.js";
+import {
+  fetchTenraiPublishingManga,
+  fetchTenraiSeasonAnime,
+  genresOfTenrai,
+  nextTenraiBroadcast,
+  titleOfTenrai,
+} from "../tenrai-fallback.js";
 
 const ANILIST_API = "https://graphql.anilist.co";
 const PAGE_SIZE   = 20;
@@ -139,16 +146,38 @@ async function fetchAdultAiring(): Promise<AdultMedia[]> {
         body: JSON.stringify({ query: ADULT_AIRING_QUERY, variables: { page } }),
         signal: AbortSignal.timeout(12000),
       }).then(async (r) => {
-        if (!r.ok) return [];
+        if (!r.ok) throw new Error(`AniList HTTP ${r.status}`);
         const j = (await r.json()) as {
           data: { Page: { media: AdultMedia[]; pageInfo: { hasNextPage: boolean } } };
           errors?: unknown[];
         };
-        return j.errors?.length ? [] : (j.data.Page.media ?? []);
+        if (j.errors?.length) throw new Error("AniList returned GraphQL errors");
+        return j.data.Page.media ?? [];
       }),
     ),
   );
-  return pages.flatMap((p) => (p.status === "fulfilled" ? p.value : []));
+  const result = pages.flatMap((p) => (p.status === "fulfilled" ? p.value : []));
+  if (result.length) return result;
+
+  const fallback = await fetchTenraiSeasonAnime();
+  return fallback
+    .filter((anime) => genresOfTenrai(anime).some((genre) =>
+      ["hentai", "erotica", "ecchi"].includes(genre.toLowerCase()),
+    ))
+    .map((anime) => {
+      const airingAt = nextTenraiBroadcast(anime.broadcast);
+      return {
+        id: anime.mal_id,
+        title: { romaji: anime.title, english: anime.title_english ?? null },
+        genres: genresOfTenrai(anime),
+        averageScore: anime.score ?? null,
+        siteUrl: anime.url ?? `https://myanimelist.net/anime/${anime.mal_id}`,
+        coverImage: { color: null },
+        nextAiringEpisode: airingAt ? { episode: 0, airingAt } : null,
+        startDate: { year: null },
+        studios: { nodes: [] },
+      };
+    });
 }
 
 async function fetchAdultComic(country: "JP" | "KR"): Promise<AdultComic[]> {
@@ -160,13 +189,26 @@ async function fetchAdultComic(country: "JP" | "KR"): Promise<AdultComic[]> {
         body: JSON.stringify({ query: ADULT_COMIC_QUERY, variables: { page, country } }),
         signal: AbortSignal.timeout(12000),
       }).then(async (r) => {
-        if (!r.ok) return [];
+        if (!r.ok) throw new Error(`AniList HTTP ${r.status}`);
         const j = (await r.json()) as { data: { Page: { media: AdultComic[] } }; errors?: unknown[] };
-        return j.errors?.length ? [] : (j.data.Page.media ?? []);
+        if (j.errors?.length) throw new Error("AniList returned GraphQL errors");
+        return j.data.Page.media ?? [];
       }),
     ),
   );
-  return pages.flatMap((p) => (p.status === "fulfilled" ? p.value : []));
+  const result = pages.flatMap((p) => (p.status === "fulfilled" ? p.value : []));
+  if (result.length) return result;
+
+  const fallback = await fetchTenraiPublishingManga(country === "KR" ? "manhwa" : "manga", true);
+  return fallback.map((manga) => ({
+    id: manga.mal_id,
+    title: { romaji: manga.title, english: manga.title_english ?? null },
+    genres: genresOfTenrai(manga),
+    averageScore: manga.score ?? null,
+    siteUrl: manga.url ?? `https://myanimelist.net/manga/${manga.mal_id}`,
+    coverImage: { color: null },
+    updatedAt: manga.published?.from ? Math.floor(Date.parse(manga.published.from) / 1000) : nowTs(),
+  }));
 }
 
 // ─── Builders de embed ────────────────────────────────────────────────────────
@@ -196,11 +238,11 @@ function buildAnimeEmbed(filtered: AdultMedia[], periodoLabel: string, page: num
   return new EmbedBuilder()
     .setTitle(`🔞 Calendário +18 — Anime (${periodoLabel})`)
     .setDescription(
-      `⚠️ Títulos marcados como adultos pelo **AniList**.\n\n` +
+      `⚠️ Títulos marcados como adultos pela fonte disponível.\n\n` +
       (lines.length ? lines.join("\n\n").slice(0, 3500) : "_Nenhum anime +18 encontrado para esse período._"),
     )
     .setColor(color)
-    .setFooter({ text: `Página ${page + 1}/${totalPages} • ${filtered.length} título(s) • Horários de Brasília • Fonte: AniList` });
+    .setFooter({ text: `Página ${page + 1}/${totalPages} • ${filtered.length} título(s) • Horários de Brasília • Fonte: AniList/Tenrai` });
 }
 
 function buildComicEmbed18(entries: AdultComic[], type: "manga" | "manhwa", page: number): EmbedBuilder {
@@ -227,7 +269,7 @@ function buildComicEmbed18(entries: AdultComic[], type: "manga" | "manhwa", page
   return new EmbedBuilder()
     .setTitle(`🔞 Calendário +18 — ${flag} ${label}`)
     .setDescription(
-      `⚠️ Títulos marcados como adultos pelo **AniList**.\n\n` +
+      `⚠️ Títulos marcados como adultos pela fonte disponível.\n\n` +
       (lines.length ? lines.join("\n\n").slice(0, 3500) : `_Nenhum ${label.toLowerCase()} +18 encontrado._`),
     )
     .setColor(color)
