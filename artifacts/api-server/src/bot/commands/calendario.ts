@@ -17,6 +17,13 @@ import { db, assinaturasTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { getUnifiedById } from "../unified.js";
 import { logger } from "../../lib/logger.js";
+import {
+  fetchTenraiPublishingManga,
+  fetchTenraiSeasonAnime,
+  genresOfTenrai,
+  nextTenraiBroadcast,
+  titleOfTenrai,
+} from "../tenrai-fallback.js";
 
 const ANILIST_API = "https://graphql.anilist.co";
 const PAGE_SIZE   = 20;
@@ -134,43 +141,84 @@ function formatDate(ts: number): string {
 // ─── Busca ────────────────────────────────────────────────────────────────────
 
 async function fetchAiring(start: number, end: number): Promise<AiringEntry[]> {
-  // Busca até 3 páginas em paralelo para cobrir semanas/meses com muitos episódios
-  const pages = await Promise.allSettled(
-    [1, 2, 3].map((page) =>
-      fetch(ANILIST_API, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({ query: AIRING_QUERY, variables: { page, airingAtGreater: start, airingAtLesser: end } }),
-        signal: AbortSignal.timeout(12000),
-      }).then(async (r) => {
-        if (!r.ok) return [];
-        const j = (await r.json()) as {
-          data: { Page: { airingSchedules: AiringEntry[]; pageInfo: { hasNextPage: boolean } } };
-          errors?: unknown[];
-        };
-        return j.errors?.length ? [] : (j.data.Page.airingSchedules ?? []);
-      }),
-    ),
-  );
-  return pages.flatMap((p) => (p.status === "fulfilled" ? p.value : []));
+  try {
+    const pages = await Promise.allSettled(
+      [1, 2, 3].map((page) =>
+        fetch(ANILIST_API, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify({ query: AIRING_QUERY, variables: { page, airingAtGreater: start, airingAtLesser: end } }),
+          signal: AbortSignal.timeout(12000),
+        }).then(async (r) => {
+          if (!r.ok) throw new Error(`AniList HTTP ${r.status}`);
+          const j = (await r.json()) as {
+            data: { Page: { airingSchedules: AiringEntry[]; pageInfo: { hasNextPage: boolean } } };
+            errors?: unknown[];
+          };
+          if (j.errors?.length) throw new Error("AniList returned GraphQL errors");
+          return j.data.Page.airingSchedules ?? [];
+        }),
+      ),
+    );
+    const result = pages.flatMap((p) => (p.status === "fulfilled" ? p.value : []));
+    if (result.length) return result;
+  } catch (err) {
+    logger.warn({ err }, "AniList indisponível no calendario; usando Tenrai");
+  }
+
+  const fallback = await fetchTenraiSeasonAnime();
+  return fallback.flatMap((anime) => {
+    const airingAt = nextTenraiBroadcast(anime.broadcast);
+    if (!airingAt || airingAt < start || airingAt > end) return [];
+    return [{
+      airingAt,
+      episode: 0,
+      media: {
+        id: anime.mal_id,
+        title: { romaji: anime.title, english: anime.title_english ?? null },
+        genres: genresOfTenrai(anime),
+        averageScore: anime.score ?? null,
+        siteUrl: anime.url ?? `https://myanimelist.net/anime/${anime.mal_id}`,
+        coverImage: { color: null },
+      },
+    }];
+  });
 }
 
 async function fetchMangaByCountry(country: "JP" | "KR"): Promise<MangaEntry[]> {
-  const pages = await Promise.allSettled(
-    [1, 2, 3].map((page) =>
-      fetch(ANILIST_API, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({ query: MANGA_BY_COUNTRY_QUERY, variables: { page, country } }),
-        signal: AbortSignal.timeout(12000),
-      }).then(async (r) => {
-        if (!r.ok) return [];
-        const j = (await r.json()) as { data: { Page: { media: MangaEntry[] } }; errors?: unknown[] };
-        return j.errors?.length ? [] : (j.data.Page.media ?? []);
-      }),
-    ),
-  );
-  return pages.flatMap((p) => (p.status === "fulfilled" ? p.value : []));
+  try {
+    const pages = await Promise.allSettled(
+      [1, 2, 3].map((page) =>
+        fetch(ANILIST_API, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify({ query: MANGA_BY_COUNTRY_QUERY, variables: { page, country } }),
+          signal: AbortSignal.timeout(12000),
+        }).then(async (r) => {
+          if (!r.ok) throw new Error(`AniList HTTP ${r.status}`);
+          const j = (await r.json()) as { data: { Page: { media: MangaEntry[] } }; errors?: unknown[] };
+          if (j.errors?.length) throw new Error("AniList returned GraphQL errors");
+          return j.data.Page.media ?? [];
+        }),
+      ),
+    );
+    const result = pages.flatMap((p) => (p.status === "fulfilled" ? p.value : []));
+    if (result.length) return result;
+  } catch (err) {
+    logger.warn({ err, country }, "AniList indisponível no calendario de mangas; usando Tenrai");
+  }
+
+  const type = country === "KR" ? "manhwa" : "manga";
+  const fallback = await fetchTenraiPublishingManga(type);
+  return fallback.map((manga) => ({
+    id: manga.mal_id,
+    title: { romaji: manga.title, english: manga.title_english ?? null },
+    genres: genresOfTenrai(manga),
+    averageScore: manga.score ?? null,
+    siteUrl: manga.url ?? `https://myanimelist.net/manga/${manga.mal_id}`,
+    coverImage: { color: null },
+    updatedAt: manga.published?.from ? Math.floor(Date.parse(manga.published.from) / 1000) : Math.floor(Date.now() / 1000),
+  }));
 }
 
 // ─── Builders de embed ────────────────────────────────────────────────────────
@@ -186,14 +234,15 @@ function buildAnimeEmbed(entries: AiringEntry[], titulo: string, emoji: string, 
     const name   = e.media.title.english ?? e.media.title.romaji;
     const score  = e.media.averageScore ? ` ⭐${(e.media.averageScore / 10).toFixed(1)}` : "";
     const genres = e.media.genres.slice(0, 2).join(", ");
-    return `**Ep ${e.episode}** — [${name}](${e.media.siteUrl})${score}\n> 🕐 ${formatTime(e.airingAt)} | 🏷️ ${genres || "—"}`;
+    const episode = e.episode > 0 ? `Ep ${e.episode}` : "Próxima exibição";
+    return `**${episode}** — [${name}](${e.media.siteUrl})${score}\n> 🕐 ${formatTime(e.airingAt)} | 🏷️ ${genres || "—"}`;
   });
 
   return new EmbedBuilder()
     .setTitle(`${emoji} Calendário de Anime — ${titulo}`)
     .setDescription(lines.length ? lines.join("\n\n").slice(0, 4000) : "_Nenhum episódio encontrado para esse período._")
     .setColor(color)
-    .setFooter({ text: `Página ${page + 1}/${totalPages} • ${entries.length} episódio(s) • Horários de Brasília • Fonte: AniList` });
+    .setFooter({ text: `Página ${page + 1}/${totalPages} • ${entries.length} episódio(s) • Horários de Brasília • Fonte: AniList/Tenrai` });
 }
 
 function buildComicEmbed(entries: MangaEntry[], type: "manga" | "manhwa", page: number): EmbedBuilder {
@@ -222,7 +271,7 @@ function buildComicEmbed(entries: MangaEntry[], type: "manga" | "manhwa", page: 
     .setTitle(`${flag} Calendário de ${label} — Atualizações Recentes`)
     .setDescription(lines.length ? lines.join("\n\n").slice(0, 4000) : `_Nenhum ${label.toLowerCase()} encontrado._`)
     .setColor(color)
-    .setFooter({ text: `Página ${page + 1}/${totalPages} • ${entries.length} série(s) em lançamento • Fonte: AniList` });
+    .setFooter({ text: `Página ${page + 1}/${totalPages} • ${entries.length} série(s) em lançamento • Fonte: AniList/Tenrai` });
 }
 
 // ─── Botões de aba e navegação ────────────────────────────────────────────────
