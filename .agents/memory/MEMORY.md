@@ -6,3 +6,7 @@
 - [MAL history rollout](mal-history-rollout.md) — keep the initial snapshot plus 10 changes; apply Neon schema before activation and ask before commit/push.
 - [Notification channel schema](notification-channel-schema.md) — extend the legacy channel table additively; Drizzle push may require interactive conflict resolution.
 - [Notification HTTP status logging](notification-http-status-logging.md) — classify source failures through the existing error history without interrupting Render worker fallback.
+- [Monitor fallback rendering](monitor-fallback-rendering.md) — compose downloaded thumbnails with Sharp; embedded SVG data images can silently render as white blocks.
+- [GitHub branch publishing](github-push-via-integration.md) — when terminal Git HTTPS auth fails, publish targeted commits through the connected GitHub API instead of handling tokens.
+- [Discord development isolation](discord-development-isolation.md) — never run the production Discord token against the empty development database.
+- [Workspace build environment](workspace-build-environment.md) — root builds require both PORT and BASE_PATH for the mockup artifact.

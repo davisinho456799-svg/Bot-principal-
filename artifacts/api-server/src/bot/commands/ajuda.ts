@@ -1,17 +1,18 @@
 import { ChatInputCommandInteraction, SlashCommandBuilder, EmbedBuilder } from "discord.js";
+import { createPanelWatchEmbed, PANEL_WATCH_COLORS, setPanelWatchFooter } from "../identity.js";
 
 export const data = new SlashCommandBuilder()
   .setName("ajuda")
   .setDescription("Lista todos os comandos do bot e suas funções");
 
 export async function execute(interaction: ChatInputCommandInteraction) {
-  const embed = new EmbedBuilder()
-    .setTitle("📖 Comandos do Bot")
-    .setColor(0x7b68ee)
+  const embed = createPanelWatchEmbed(PANEL_WATCH_COLORS.primary)
+    .setTitle("📖 Panel Watch · Comandos")
     .setDescription(
-      "Comandos disponíveis — use `/ajuda` para ver esta lista a qualquer momento.\n" +
+      "Radar de leitura pronto. Use `/ajuda` para ver esta lista a qualquer momento.\n" +
       "**Seções:** [📚 Manhwa/Manga](#manhwa) • [📺 Anime](#anime) • [🎮 Visual Novels](#vn) • [⚙️ Config](#config)"
     );
+  setPanelWatchFooter(embed, "Central de comandos");
 
   // ── Manhwa / Manga ──────────────────────────────────────────────────────────
   embed.addFields(

@@ -1,7 +1,7 @@
 /**
  * Adaptadores leves para a API Tenrai (compatível com os dados públicos do MAL).
- * AniList continua sendo a fonte primária; estes métodos são usados quando ele
- * está indisponível ou retorna uma resposta vazia.
+ * O Tenrai é usado pelos fluxos que precisam de um catálogo alternativo sem
+ * depender diretamente do AniList.
  */
 
 const TENRAI_API = "https://api.tenrai.org/v1";
@@ -119,6 +119,26 @@ export function genresOfTenrai(item: {
       .map((genre) => genre.name?.trim())
       .filter((name): name is string => Boolean(name)),
   )];
+}
+
+export function isBoysLoveGenre(genre: string): boolean {
+  const normalized = genre
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[’']/g, "")
+    .replace(/[-_]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return normalized === "boys love" || normalized === "boy love";
+}
+
+export function hasBoysLoveGenre(item: {
+  genres?: TenraiGenre[];
+  themes?: TenraiGenre[];
+}): boolean {
+  return genresOfTenrai(item).some(isBoysLoveGenre);
 }
 
 /**

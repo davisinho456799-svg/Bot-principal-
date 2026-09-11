@@ -24,12 +24,23 @@ import { extractHttpStatus } from "../error-log.js";
 
 const ERROR_PAGE_SIZE = 5;
 const ERROR_PAGE_TIME = 15 * 60 * 1000;
+const DISCORD_EMBED_DESCRIPTION_LIMIT = 4096;
+const ERROR_ROW_DESCRIPTION_LIMIT = 640;
+const ERROR_CONTEXT_VALUE_LIMIT = 180;
 
-type ErrorRow = typeof errorLogsTable.$inferSelect;
+export type ErrorRow = typeof errorLogsTable.$inferSelect;
+
+function truncateText(value: string, limit: number): string {
+  if (value.length <= limit) return value;
+  if (limit <= 1) return value.slice(0, limit);
+  return `${value.slice(0, limit - 1)}…`;
+}
 
 function contextValue(row: ErrorRow, key: string): string | null {
   const value = row.context?.[key];
-  return typeof value === "string" || typeof value === "number" ? String(value) : null;
+  return typeof value === "string" || typeof value === "number"
+    ? truncateText(String(value), ERROR_CONTEXT_VALUE_LIMIT)
+    : null;
 }
 
 function sourceLabel(source: string | null): string {
@@ -43,10 +54,10 @@ function sourceLabel(source: string | null): string {
     notification_source: "fonte de notificação",
     notification: "envio de notificação",
   };
-  return source ? labels[source] ?? source : "desconhecida";
+  return source ? truncateText(labels[source] ?? source, ERROR_CONTEXT_VALUE_LIMIT) : "desconhecida";
 }
 
-function describeErrorRow(row: ErrorRow): string {
+export function describeErrorRow(row: ErrorRow): string {
   const attemptedSource = contextValue(row, "attemptedSource");
   const source = contextValue(row, "source") ?? attemptedSource;
   const title = contextValue(row, "title");
@@ -70,25 +81,34 @@ function describeErrorRow(row: ErrorRow): string {
   }
 
   const message = row.message.replace(/\s+/g, " ").slice(0, 220);
-  return `⚠️ **${row.errorCode}** — ${message}`;
+  return `⚠️ **${truncateText(row.errorCode, ERROR_CONTEXT_VALUE_LIMIT)}** — ${message}`;
 }
 
-function buildErrorEmbed(
+export function clampErrorPage(page: number, totalPages: number): number {
+  const lastPage = Math.max(0, totalPages - 1);
+  return Math.min(lastPage, Math.max(0, Number.isInteger(page) ? page : 0));
+}
+
+export function buildErrorEmbed(
   rows: ErrorRow[],
   page: number,
   totalPages: number,
   guildId: string | null,
 ): EmbedBuilder {
-  const start = page * ERROR_PAGE_SIZE;
+  const safeTotalPages = Math.max(1, totalPages);
+  const safePage = clampErrorPage(page, safeTotalPages);
+  const start = safePage * ERROR_PAGE_SIZE;
   const pageRows = rows.slice(start, start + ERROR_PAGE_SIZE);
   const lines = pageRows.map((row) => {
     const when = new Date(row.createdAt).toLocaleString("pt-BR", {
       timeZone: "America/Sao_Paulo",
     });
     const location = row.discordGuildId
-      ? `servidor \`${row.discordGuildId}\``
+      ? `servidor \`${truncateText(row.discordGuildId, ERROR_CONTEXT_VALUE_LIMIT)}\``
       : "servidor não informado";
-    const command = row.command ? ` • \`/${row.command}\`` : "";
+    const command = row.command
+      ? ` • \`/${truncateText(row.command, ERROR_CONTEXT_VALUE_LIMIT)}\``
+      : "";
     return `\`${when}\`\n${describeErrorRow(row)}\n↳ ${location}${command} • registro \`${row.id}\``;
   });
 
@@ -100,29 +120,44 @@ function buildErrorEmbed(
   }
   const summary = [...statusCounts.entries()]
     .slice(0, 6)
-    .map(([label, count]) => `**${label}:** ${count}`)
+    .map(([label, count]) => `**${truncateText(label, ERROR_CONTEXT_VALUE_LIMIT)}:** ${count}`)
     .join(" • ");
+  const header = (
+    `**Total:** ${rows.length} registro(s)${guildId ? ` • servidor filtrado: \`${truncateText(guildId, ERROR_CONTEXT_VALUE_LIMIT)}\`` : ""}\n` +
+    truncateText(summary || "Nenhuma classificação disponível", 640)
+  );
+  const rowBudget =
+    pageRows.length > 0
+      ? Math.max(
+          1,
+          Math.floor(
+            (DISCORD_EMBED_DESCRIPTION_LIMIT - header.length - pageRows.length * 2) /
+              pageRows.length,
+          ),
+        )
+      : 0;
+  const description = pageRows.length
+    ? `${header}\n\n${lines.map((line) => truncateText(line, Math.min(ERROR_ROW_DESCRIPTION_LIMIT, rowBudget))).join("\n\n")}`
+    : header;
 
   return new EmbedBuilder()
-    .setTitle(`🧾 Erros de notificações — página ${page + 1}/${totalPages}`)
-    .setDescription(
-      `**Total:** ${rows.length} registro(s)${guildId ? ` • servidor filtrado: \`${guildId}\`` : ""}\n` +
-      `${summary || "Nenhuma classificação disponível"}\n\n` +
-      lines.join("\n\n"),
-    )
+    .setTitle(`🧾 Erros de notificações — página ${safePage + 1}/${safeTotalPages}`)
+    .setDescription(description)
     .setColor(0xe74c3c)
     .setFooter({ text: "Retenção automática: 30 dias • Use «Ir para página» para navegar" });
 }
 
-function buildErrorPageButtons(
+export function buildErrorPageButtons(
   page: number,
   totalPages: number,
   disabled = false,
 ): ActionRowBuilder<ButtonBuilder>[] {
-  if (totalPages <= 1) return [];
+  const safeTotalPages = Math.max(1, totalPages);
+  if (safeTotalPages <= 1) return [];
+  const safePage = clampErrorPage(page, safeTotalPages);
 
   const buttons: ButtonBuilder[] = [];
-  if (page > 0) {
+  if (safePage > 0) {
     buttons.push(
       new ButtonBuilder()
         .setCustomId("admin_errors_prev")
@@ -138,7 +173,7 @@ function buildErrorPageButtons(
       .setStyle(ButtonStyle.Primary)
       .setDisabled(disabled),
   );
-  if (page < totalPages - 1) {
+  if (safePage < safeTotalPages - 1) {
     buttons.push(
       new ButtonBuilder()
         .setCustomId("admin_errors_next")
@@ -382,7 +417,8 @@ async function handleErros(interaction: ChatInputCommandInteraction) {
           return;
         }
         currentPage = requestedPage - 1;
-        await submitted.update(pagePayload(currentPage));
+        await submitted.deferUpdate();
+        await interaction.editReply(pagePayload(currentPage));
       } catch (err) {
         // O usuário pode fechar o modal ou o Discord pode expirar a interação.
         if (err instanceof Error && !err.message.includes("time")) {

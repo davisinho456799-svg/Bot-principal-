@@ -17,21 +17,24 @@ export async function deployCommands(
   const commands = [...commandsByName.values()];
   const rest = new REST().setToken(token);
   const configuredGuildId = process.env.DISCORD_GUILD_ID?.trim() || null;
+  const connectedGuildIds = [...new Set(guildIds.filter(Boolean))];
   const guildCommandIds = configuredGuildId
     ? [configuredGuildId]
-    : [];
-  const guildIdsToClear = guildIds.filter((guildId) => guildId !== configuredGuildId);
+    : connectedGuildIds;
+  const guildIdsToClear = connectedGuildIds.filter((guildId) => !guildCommandIds.includes(guildId));
+  const useGuildCommands = guildCommandIds.length > 0;
 
   try {
     logger.info(
       {
         count: commands.length,
-        scope: configuredGuildId ? "guild" : "global",
+        scope: useGuildCommands ? "guild" : "global",
         configuredGuildId,
+        guildCommandIds,
       },
       "Registrando slash commands...",
     );
-    if (configuredGuildId) {
+    if (useGuildCommands) {
       await rest.put(Routes.applicationCommands(clientId), { body: [] });
     } else {
       await rest.put(Routes.applicationCommands(clientId), { body: commands });

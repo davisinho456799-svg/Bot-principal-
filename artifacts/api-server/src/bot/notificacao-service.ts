@@ -1,4 +1,4 @@
-import { type Client, EmbedBuilder } from "discord.js";
+import { type Client } from "discord.js";
 import {
   db,
   pool,
@@ -7,6 +7,7 @@ import {
   capitulosRastreados,
   favoritosTable,
   assinaturasTable,
+  releasePreferencesTable,
   malHistoricoAlteracoesTable,
 } from "@workspace/db";
 import { eq, sql, and, desc, inArray, gte, isNotNull } from "drizzle-orm";
@@ -35,6 +36,12 @@ import {
   notificationEventKey,
 } from "./notificacao-utils.js";
 import { fetchComick, parseComickJson } from "./comick-http.js";
+import {
+  createPanelWatchEmbed,
+  getWorkIdentity,
+  PANEL_WATCH_COLORS,
+  setPanelWatchFooter,
+} from "./identity.js";
 export type { SourceErrorKind } from "./notificacao-utils.js";
 
 const ANILIST_API = "https://graphql.anilist.co";
@@ -308,12 +315,21 @@ function recordSourceError(
   manhwaId: string,
   kind: SourceErrorKind,
   httpStatus?: number,
+  details?: string,
 ): void {
   void recordBotError({
     source: "notification_source",
     errorCode: `SOURCE_${kind.toUpperCase().replace(/-/g, "_")}`,
-    error: new Error(httpStatus ? `${source} HTTP ${httpStatus}` : `${source} ${kind}`),
-    context: { source, manhwaId, errorKind: kind, ...(httpStatus ? { httpStatus } : {}) },
+    error: new Error(
+      `${source}${httpStatus ? ` HTTP ${httpStatus}` : ` ${kind}`}${details ? `: ${details}` : ""}`,
+    ),
+    context: {
+      source,
+      manhwaId,
+      errorKind: kind,
+      ...(httpStatus ? { httpStatus } : {}),
+      ...(details ? { details } : {}),
+    },
   });
 }
 
@@ -371,6 +387,8 @@ export type SourceAttempt = {
   errorKind?: SourceErrorKind;
   /** HTTP status code quando a falha é HTTP. */
   httpStatus?: number;
+  /** Explicação curta quando a fonte responde sem o dado esperado. */
+  details?: string;
 };
 
 export type NotificationCheckSummary = {
@@ -614,7 +632,13 @@ async function fetchChapters(
           const recovered = await getComickBySlug(manhwaId);
           if (recovered) {
             const lastChapter = recovered.last_chapter ?? null;
-            if (lastChapter == null) return fetchError("no_data");
+            if (lastChapter == null) {
+              return fetchError(
+                "no_data",
+                undefined,
+                "busca do Comick não trouxe last_chapter",
+              );
+            }
             const newManhwaId =
               recovered.slug && recovered.slug !== manhwaId
                 ? recovered.slug
@@ -679,7 +703,13 @@ async function fetchChapters(
         last_chapter?: number | null;
       }>(res);
       const lastChapter = json.comic?.last_chapter ?? (json as { last_chapter?: number | null }).last_chapter ?? null;
-      if (lastChapter == null) return fetchError("no_data");
+      if (lastChapter == null) {
+        return fetchError(
+          "no_data",
+          res.status,
+          "resposta 2xx do Comick sem comic.last_chapter",
+        );
+      }
       // Uma resposta bem-sucedida encerra a sequência de bloqueios.
       comickBlockCount = 0;
       return { value: lastChapter, isProxy: false };
@@ -1104,6 +1134,7 @@ async function fetchWithFallback(
       selected: false,
       errorKind: isFetchError(rawPrimary) ? rawPrimary.kind : (primary == null ? "no_data" : undefined),
       httpStatus: isFetchError(rawPrimary) ? rawPrimary.httpStatus : undefined,
+      details: isFetchError(rawPrimary) ? rawPrimary.details : undefined,
     });
     if (primary && !primary.isProxy && !verifyAllSources) {
       attempts[0]!.selected = true;
@@ -1122,6 +1153,7 @@ async function fetchWithFallback(
         selected: false,
         errorKind: isFetchError(rawFetched) ? rawFetched.kind : (fetched == null ? "no_data" : undefined),
         httpStatus: isFetchError(rawFetched) ? rawFetched.httpStatus : undefined,
+          details: isFetchError(rawFetched) ? rawFetched.details : undefined,
       });
       if (fetched && !fetched.isProxy) {
         successful.push({ source: candidate.source, fetched });
@@ -1191,6 +1223,7 @@ async function fetchWithFallback(
       fetched,
       errorKind: isFetchError(raw) ? raw.kind : undefined,
       httpStatus: isFetchError(raw) ? raw.httpStatus : undefined,
+      details: isFetchError(raw) ? raw.details : undefined,
     };
   });
 
@@ -1248,6 +1281,7 @@ async function fetchWithFallback(
       fetched,
       errorKind: isFetchError(raw) ? raw.kind : undefined,
       httpStatus: isFetchError(raw) ? raw.httpStatus : undefined,
+      details: isFetchError(raw) ? raw.details : undefined,
     };
   })();
 
@@ -1260,7 +1294,7 @@ async function fetchWithFallback(
       // Exceção inesperada na tarefa — não bloqueia as outras fontes
       continue;
     }
-    const { source, fetched, errorKind, httpStatus } = result.value;
+    const { source, fetched, errorKind, httpStatus, details } = result.value;
     // Uma fonte sem ID aplicável à obra não foi consultada. Não a exiba como
     // falha no diagnóstico: o comando administrativo usa ❌ para tentativas
     // reais sem dados, e não para fontes deliberadamente ignoradas.
@@ -1272,6 +1306,7 @@ async function fetchWithFallback(
       selected: false,
       errorKind: errorKind ?? (fetched == null ? "no_data" : undefined),
       httpStatus,
+      details,
     });
     if (fetched && !fetched.isProxy) {
       successful.push({ source, fetched });
@@ -1372,9 +1407,8 @@ async function sendNotification(
       throw new Error("Canal de notificação não é enviável");
     }
 
-    const isAnime = source === "anilist-anime";
-    const unidade = isAnime ? "episódio(s)" : "capítulo(s)";
-    const PREFIX = `📬 Novo(s) ${isAnime ? "Episódio(s)" : "Capítulo(s)"}: `;
+    const identity = getWorkIdentity(source);
+    const PREFIX = `${identity.icon} Novo ${identity.unit}: `;
 
     const safeTitle = title.slice(0, 256 - PREFIX.length);
 
@@ -1382,29 +1416,31 @@ async function sendNotification(
     let descBody: string;
     if (isProxy) {
       descBody =
-        `🆕 Novos conteúdos detectados!\n\n` +
-        `🔎 **Buscar nos sites BR:**\n${buildScanLinksExternal(title)}`;
+        `✨ O radar encontrou uma nova atualização para esta obra.\n\n` +
+        `🔎 **Encontrar onde ler:**\n${buildScanLinksExternal(title)}`;
     } else {
       const newCount = Math.floor(newChapters);
       const oldCount = oldChapters != null ? Math.floor(oldChapters) : 0;
       const diff = newCount - oldCount;
-      const unidadeLabel = isAnime ? "Episódio" : "Capítulo";
       const pad = (n: number) => String(n).padStart(3, "0");
       const progressao = oldCount > 0
         ? `**${pad(oldCount)} → ${pad(newCount)}**`
         : `**${pad(newCount)}**`;
       descBody =
-        `📖 ${unidadeLabel} ${progressao}` +
-        (diff > 1 ? ` *(+${diff} novos)*` : "") +
-        `\n\n🔎 **Buscar nos sites BR:**\n${buildScanLinksExternal(title)}`;
+        `📖 **${identity.unit[0]?.toUpperCase()}${identity.unit.slice(1)} ${progressao}**` +
+        (diff > 1 ? `\n✨ **+${diff} novos**` : "") +
+        `\n\n🔎 **Encontrar onde ler:**\n${buildScanLinksExternal(title)}`;
     }
 
-    const embed = new EmbedBuilder()
+    const embed = createPanelWatchEmbed(identity.color)
       .setTitle(`${PREFIX}${safeTitle}`)
       .setURL(siteUrl || null)
-      .setColor(0x2ecc71)
       .setDescription(descBody.slice(0, 4096))
-      .setFooter({ text: "Notificação automática • Bot de Manhwa" });
+      .addFields(
+        { name: "Tipo", value: `${identity.icon} ${identity.label}`, inline: true },
+        { name: "Origem", value: "Radar automático", inline: true },
+      );
+    setPanelWatchFooter(embed, "Novo lançamento • Atualização automática");
 
     if (coverUrl) embed.setThumbnail(coverUrl);
 
@@ -1485,13 +1521,12 @@ async function sendMetadataNotification(
       };
     });
 
-    const embed = new EmbedBuilder()
-      .setTitle(`📝 Alteração na página: ${title}`.slice(0, 256))
+    const embed = createPanelWatchEmbed(PANEL_WATCH_COLORS.status)
+      .setTitle(`📝 Atualização de catálogo • ${title}`.slice(0, 256))
       .setURL(siteUrl || null)
-      .setColor(0x3498db)
-      .setDescription("A página deste título no MyAnimeList foi atualizada.")
+      .setDescription("O radar detectou uma mudança nos dados desta obra.")
       .addFields(fields)
-      .setFooter({ text: "Alteração de página • MyAnimeList" });
+    setPanelWatchFooter(embed, "Alteração de catálogo");
 
     if (coverUrl) embed.setThumbnail(coverUrl);
     await channel.send({ embeds: [embed], allowedMentions: { parse: [] } });
@@ -1535,6 +1570,7 @@ async function sendStatusChangeNotification(
   coverUrl: string | null,
   mentions: string[],
   kind: "hiatus" | "return",
+  source?: string,
   discordGuildId?: string | null,
 ): Promise<boolean> {
   try {
@@ -1551,26 +1587,24 @@ async function sendStatusChangeNotification(
     ).getHours();
     const isSilent = hourBrasilia >= 22 || hourBrasilia < 7;
 
+    const identity = getWorkIdentity(source);
     const embed =
       kind === "hiatus"
-        ? new EmbedBuilder()
-            .setTitle(`⏸️ Em hiato: ${title}`.slice(0, 256))
+        ? createPanelWatchEmbed(PANEL_WATCH_COLORS.warning)
+            .setTitle(`⏸️ ${title} entrou em hiato`.slice(0, 256))
             .setURL(siteUrl || null)
-            .setColor(0xe67e22)
             .setDescription(
-              "Este título entrou em **hiato** no MyAnimeList.\n" +
-              "Novas notificações serão enviadas quando a publicação retomar."
+              `${identity.icon} Esta obra entrou em **hiato**.\n` +
+              "O radar volta a avisar quando a publicação retomar."
             )
-            .setFooter({ text: "Status atualizado • MyAnimeList" })
-        : new EmbedBuilder()
-            .setTitle(`▶️ De volta: ${title}`.slice(0, 256))
+        : createPanelWatchEmbed(PANEL_WATCH_COLORS.success)
+            .setTitle(`▶️ ${title} voltou a publicar`.slice(0, 256))
             .setURL(siteUrl || null)
-            .setColor(0x2ecc71)
             .setDescription(
-              "Este título **voltou do hiato** e retomou a publicação!\n" +
-              "Você será notificado normalmente quando saírem novos capítulos."
+              `${identity.icon} Esta obra **voltou do hiato**!\n` +
+              "O radar retomará os avisos de novos lançamentos."
             )
-            .setFooter({ text: "Status atualizado • MyAnimeList" });
+    setPanelWatchFooter(embed, `Status da obra • ${identity.label}`);
 
     if (coverUrl) embed.setThumbnail(coverUrl);
 
@@ -1628,15 +1662,15 @@ async function sendFinishedNotification(
     ).getHours();
     const isSilent = hourBrasilia >= 22 || hourBrasilia < 7;
 
-    const embed = new EmbedBuilder()
-      .setTitle(`🏁 Obra finalizada: ${title}`.slice(0, 256))
+    const identity = getWorkIdentity();
+    const embed = createPanelWatchEmbed(PANEL_WATCH_COLORS.finished)
+      .setTitle(`🏁 ${title} foi finalizada`.slice(0, 256))
       .setURL(siteUrl || null)
-      .setColor(0x9b59b6)
       .setDescription(
-        "Esta obra foi marcada como **finalizada** no MyAnimeList.\n" +
-        "Todos os capítulos já estão disponíveis!"
+        `${identity.icon} Esta obra foi marcada como **finalizada**.\n` +
+        "O radar não enviará novos avisos de publicação."
       )
-      .setFooter({ text: "Status atualizado • MyAnimeList" });
+    setPanelWatchFooter(embed, "Obra finalizada");
 
     if (coverUrl) embed.setThumbnail(coverUrl);
 
@@ -1792,10 +1826,17 @@ async function runCheckLocked(
               const subscribers = await db
                 .select({ discordUserId: assinaturasTable.discordUserId })
                 .from(assinaturasTable)
+                .leftJoin(
+                  releasePreferencesTable,
+                  eq(releasePreferencesTable.discordUserId, assinaturasTable.discordUserId),
+                )
                 .where(
                   and(
                     eq(assinaturasTable.manhwaId, m.manhwaId),
                     eq(assinaturasTable.guildId, canal.guildId),
+                    sql`COALESCE(${releasePreferencesTable.notificationsEnabled}, true) = true`,
+                    sql`COALESCE(${releasePreferencesTable.digestMode}, 'imediato') = 'imediato'`,
+                    sql`(${assinaturasTable.adult} = false OR COALESCE(${releasePreferencesTable.adultEnabled}, true) = true)`,
                   ),
                 );
               // Não envia embed para guilds sem assinantes deste título
@@ -1914,15 +1955,22 @@ async function runCheckLocked(
               const subscribers = await db
                 .select({ discordUserId: assinaturasTable.discordUserId })
                 .from(assinaturasTable)
+                .leftJoin(
+                  releasePreferencesTable,
+                  eq(releasePreferencesTable.discordUserId, assinaturasTable.discordUserId),
+                )
                 .where(and(
                   eq(assinaturasTable.manhwaId, m.manhwaId),
                   eq(assinaturasTable.guildId, canal.guildId),
+                  sql`COALESCE(${releasePreferencesTable.notificationsEnabled}, true) = true`,
+                  sql`COALESCE(${releasePreferencesTable.digestMode}, 'imediato') = 'imediato'`,
+                  sql`(${assinaturasTable.adult} = false OR COALESCE(${releasePreferencesTable.adultEnabled}, true) = true)`,
                 ));
               if (!subscribers.length) continue;
               const mentions = [...new Set(subscribers.map((s) => `<@${s.discordUserId}>`))];
               const sent = await sendStatusChangeNotification(
                 client, canal.channelId, m.title, m.siteUrl, m.coverUrl ?? null, mentions, kind,
-                canal.guildId,
+                m.source, canal.guildId,
               );
               if (sent) summary.notificationsSent++;
             }
@@ -1940,10 +1988,17 @@ async function runCheckLocked(
               const subscribers = await db
                 .select({ discordUserId: assinaturasTable.discordUserId })
                 .from(assinaturasTable)
+                .leftJoin(
+                  releasePreferencesTable,
+                  eq(releasePreferencesTable.discordUserId, assinaturasTable.discordUserId),
+                )
                 .where(
                   and(
                     eq(assinaturasTable.manhwaId, m.manhwaId),
                     eq(assinaturasTable.guildId, canal.guildId),
+                    sql`COALESCE(${releasePreferencesTable.notificationsEnabled}, true) = true`,
+                    sql`COALESCE(${releasePreferencesTable.digestMode}, 'imediato') = 'imediato'`,
+                    sql`(${assinaturasTable.adult} = false OR COALESCE(${releasePreferencesTable.adultEnabled}, true) = true)`,
                   ),
                 );
               if (!subscribers.length) continue;
@@ -2098,10 +2153,17 @@ async function runCheckLocked(
             const subscribers = await db
               .select({ discordUserId: assinaturasTable.discordUserId })
               .from(assinaturasTable)
+              .leftJoin(
+                releasePreferencesTable,
+                eq(releasePreferencesTable.discordUserId, assinaturasTable.discordUserId),
+              )
               .where(
                 and(
                   eq(assinaturasTable.manhwaId, m.manhwaId),
                   eq(assinaturasTable.guildId, canal.guildId),
+                  sql`COALESCE(${releasePreferencesTable.notificationsEnabled}, true) = true`,
+                  sql`COALESCE(${releasePreferencesTable.digestMode}, 'imediato') = 'imediato'`,
+                  sql`(${assinaturasTable.adult} = false OR COALESCE(${releasePreferencesTable.adultEnabled}, true) = true)`,
                 ),
               );
             // Não envia embed para guilds sem assinantes deste título
@@ -2309,12 +2371,10 @@ export async function runWeeklySummary(client: Client): Promise<void> {
       );
       if (!channel) continue;
 
-      const embed = new EmbedBuilder()
-        .setTitle("📅 Resumo semanal — Atualizações da semana")
-        .setColor(0x5865f2)
+      const embed = createPanelWatchEmbed(PANEL_WATCH_COLORS.primary)
+        .setTitle("🗓️ Resumo semanal · Radar de leitura")
         .setDescription(description)
-        .setFooter({ text: "Capítulos no formato: início da semana → fim da semana" })
-        .setTimestamp();
+      setPanelWatchFooter(embed, "Resumo semanal • Início → fim da semana");
 
       await channel.send({ embeds: [embed], allowedMentions: { parse: [] } });
     } catch (err) {
@@ -2394,7 +2454,17 @@ export function startNotificacaoService(client: Client) {
     }
     verificationInProgress = true;
     try {
-      await runCheck(client);
+      const summary = await runCheck(client, { verifyAllSources: true });
+      logger.info(
+        {
+          titlesChecked: summary.titlesChecked,
+          successfulSources: summary.successfulSources,
+          sourcesWithoutData: summary.sourcesWithoutData,
+          fallbackUsed: summary.fallbackUsed,
+          notificationsSent: summary.notificationsSent,
+        },
+        "Verificação automática concluída",
+      );
     } catch (err) {
       logger.error({ err }, "Erro no serviço de notificações");
       void recordBotError({

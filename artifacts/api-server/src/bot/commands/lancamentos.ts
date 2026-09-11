@@ -1,90 +1,187 @@
-import { ChatInputCommandInteraction, SlashCommandBuilder, EmbedBuilder } from "discord.js";
+import { ChatInputCommandInteraction, SlashCommandBuilder } from "discord.js";
+import { db } from "@workspace/db";
+import { sql } from "drizzle-orm";
+import {
+  fetchTenraiPublishingManga,
+  genresOfTenrai,
+  hasBoysLoveGenre,
+  searchTenraiManga,
+  titleOfTenrai,
+  type TenraiManga,
+} from "../tenrai-fallback.js";
+import {
+  createPanelWatchEmbed,
+  getWorkIdentity,
+  PANEL_WATCH_COLORS,
+  setPanelWatchFooter,
+} from "../identity.js";
 
-const ANILIST_API = "https://graphql.anilist.co";
+type QueryRow = Record<string, unknown>;
 
-const LANCAMENTOS_QUERY = `
-query LancamentosManhwa($page: Int) {
-  Page(page: $page, perPage: 10) {
-    media(
-      type: MANGA
-      countryOfOrigin: KR
-      status: RELEASING
-      sort: POPULARITY_DESC
-    ) {
-      id
-      title { romaji english }
-      averageScore
-      genres
-      chapters
-      popularity
-      siteUrl
-      coverImage { color }
-      startDate { year }
-    }
-  }
+function rowsOf(result: unknown): QueryRow[] {
+  if (!result || typeof result !== "object") return [];
+  const rows = (result as { rows?: unknown }).rows;
+  return Array.isArray(rows) ? rows.filter((row): row is QueryRow => !!row && typeof row === "object") : [];
 }
-`;
 
-interface AniListMedia {
-  id: number;
-  title: { romaji: string; english: string | null };
-  averageScore: number | null;
-  genres: string[];
-  chapters: number | null;
-  popularity: number;
-  siteUrl: string;
-  coverImage: { color: string | null };
-  startDate: { year: number | null };
+async function fetchWeeklyPopular(adult: boolean): Promise<QueryRow[]> {
+  const adultFilter = adult
+    ? sql`EXISTS (
+        SELECT 1 FROM assinaturas adult_subscription
+        WHERE lower(adult_subscription.title) = lower(e.title)
+          AND adult_subscription.adult = true
+      )`
+    : sql`NOT EXISTS (
+        SELECT 1 FROM assinaturas adult_subscription
+        WHERE lower(adult_subscription.title) = lower(e.title)
+          AND adult_subscription.adult = true
+      )`;
+
+  const result = await db.execute(sql`
+    SELECT
+      e.title,
+      MAX(e.chapter) AS chapter,
+      COUNT(DISTINCT e.event_key)::int AS releases,
+      COALESCE((
+        SELECT COUNT(DISTINCT subscribers.discord_user_id)::int
+        FROM assinaturas subscribers
+        WHERE lower(subscribers.title) = lower(e.title)
+      ), 0) AS subscribers,
+      MAX(source.site_url) AS site_url,
+      MAX(source.cover_url) AS cover_url
+    FROM notificacao_eventos e
+    LEFT JOIN assinaturas source ON lower(source.title) = lower(e.title)
+    WHERE e.sent_at IS NOT NULL
+      AND e.sent_at >= now() - interval '7 days'
+      AND ${adultFilter}
+    GROUP BY e.title
+    ORDER BY COUNT(DISTINCT e.event_key) DESC, MAX(e.sent_at) DESC
+    LIMIT 10
+  `);
+
+  return rowsOf(result);
+}
+
+async function fetchTenraiFallback(adult: boolean): Promise<TenraiManga[]> {
+  const rows = await fetchTenraiPublishingManga("manhwa", adult);
+  return rows.filter((row) => !hasBoysLoveGenre(row));
+}
+
+function normalizeTitle(title: string): string {
+  return title
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isTitleMatch(title: string, candidate: TenraiManga): boolean {
+  const normalizedTitle = normalizeTitle(title);
+  if (!normalizedTitle) return false;
+
+  return [candidate.title, candidate.title_english ?? ""].some((value) => {
+    const normalizedCandidate = normalizeTitle(value);
+    return normalizedCandidate === normalizedTitle ||
+      normalizedCandidate.includes(normalizedTitle) ||
+      normalizedTitle.includes(normalizedCandidate);
+  });
+}
+
+async function excludeBoysLoveRows(rows: QueryRow[]): Promise<QueryRow[]> {
+  const decisions = await Promise.all(
+    rows.map(async (row) => {
+      const title = String(row.title ?? "").trim();
+      if (!title) return { row, keep: true };
+
+      try {
+        const matches = await searchTenraiManga(title, "manhwa");
+        const exactMatch = matches.find((candidate) => isTitleMatch(title, candidate));
+        return { row, keep: !exactMatch || !hasBoysLoveGenre(exactMatch) };
+      } catch {
+        return { row, keep: true };
+      }
+    }),
+  );
+
+  return decisions.filter(({ keep }) => keep).map(({ row }) => row);
+}
+
+function formatWeeklyLines(rows: QueryRow[]): string {
+  return rows.map((row, index) => {
+    const title = String(row.title ?? "Título sem nome");
+    const siteUrl = String(row.site_url ?? "");
+    const link = siteUrl ? `[${title}](${siteUrl})` : title;
+    const chapter = row.chapter == null ? "capítulo novo" : `cap. ${String(row.chapter)}`;
+    return (
+      `**${index + 1}.** ${link} — **${chapter}**\n` +
+      `> 🔔 ${String(row.releases ?? 0)} lançamento(s) · 👥 ${String(row.subscribers ?? 0)} acompanhando`
+    );
+  }).join("\n\n");
+}
+
+function formatFallbackLines(rows: TenraiManga[]): string {
+  return rows.map((row, index) => {
+    const title = titleOfTenrai(row);
+    const score = row.score ? `⭐ ${row.score.toFixed(1)}` : "⭐ N/A";
+    const chapters = row.chapters ? `📖 ${row.chapters} caps` : "📖 Em andamento";
+    const genres = genresOfTenrai(row).slice(0, 2).join(", ") || "—";
+    const url = String(row.url ?? "");
+    const link = url ? `[${title}](${url})` : title;
+    return `**${index + 1}.** ${link} — ${score} | ${chapters}\n> 🏷️ ${genres}`;
+  }).join("\n\n");
 }
 
 export const data = new SlashCommandBuilder()
   .setName("lancamentos")
-  .setDescription("Lista os manhwas mais populares que estão em lançamento agora");
+  .setDescription("Lançamentos populares registrados na última semana")
+  .addStringOption((option) =>
+    option
+      .setName("modo")
+      .setDescription("Escolha o tipo de lançamento")
+      .addChoices(
+        { name: "Normal", value: "normal" },
+        { name: "+18", value: "adulto" },
+      ),
+  );
 
-export async function execute(interaction: ChatInputCommandInteraction) {
+export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
   await interaction.deferReply();
+  const adult = interaction.options.getString("modo") === "adulto";
 
   try {
-    const res = await fetch(ANILIST_API, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({ query: LANCAMENTOS_QUERY, variables: { page: 1 } }),
-      signal: AbortSignal.timeout(10000),
-    });
+    let rows = await fetchWeeklyPopular(adult);
+    if (rows.length) rows = await excludeBoysLoveRows(rows);
+    const modeLabel = adult ? "🔞 +18" : "🛡️ Normal";
 
-    if (!res.ok) throw new Error(`AniList error: ${res.status}`);
-    const json = (await res.json()) as {
-      data: { Page: { media: AniListMedia[] } };
-      errors?: { message: string }[];
-    };
-
-    if (json.errors?.length) throw new Error(json.errors[0].message);
-    const list = json.data.Page.media ?? [];
-
-    if (!list.length) {
-      await interaction.editReply("❌ Não foi possível obter os lançamentos agora. Tente novamente!");
-      return;
+    if (!rows.length) {
+      const fallbackRows = await fetchTenraiFallback(adult);
+      if (fallbackRows.length) {
+        await interaction.editReply({
+          embeds: [
+            createPanelWatchEmbed(adult ? PANEL_WATCH_COLORS.adult : PANEL_WATCH_COLORS.manhwa)
+              .setTitle(`${adult ? "🔞" : "🔮"} Catálogo de lançamentos · ${adult ? "+18" : "Normal"}`)
+              .setDescription(formatFallbackLines(fallbackRows))
+              .setFooter({
+                text: "Panel Watch • Catálogo Tenrai • Ainda não há histórico semanal suficiente",
+              }),
+          ],
+        });
+        return;
+      }
     }
 
-    const description = list
-      .map((m, i) => {
-        const title = m.title.english ?? m.title.romaji;
-        const score = m.averageScore ? `⭐ ${(m.averageScore / 10).toFixed(1)}` : "⭐ N/A";
-        const chapters = m.chapters ? `📖 ${m.chapters} caps` : "📖 Em andamento";
-        const genres = m.genres.slice(0, 2).join(", ") || "—";
-        const year = m.startDate?.year ? `(${m.startDate.year})` : "";
-        return `**${i + 1}.** [${title}](${m.siteUrl}) ${year} — ${score} | ${chapters}\n> 🏷️ ${genres}`;
-      })
-      .join("\n\n");
+    const identity = getWorkIdentity("manhwa", adult);
+    const embed = createPanelWatchEmbed(identity.color)
+      .setTitle(`${identity.icon} Lançamentos populares da semana · ${modeLabel}`)
+      .setDescription(formatWeeklyLines(rows))
+    setPanelWatchFooter(embed, "Lançamentos populares • Radar da comunidade");
 
-    const embed = new EmbedBuilder()
-      .setTitle("📡 Manhwas em Lançamento")
-      .setDescription(description)
-      .setColor(0x2ecc71)
-      .setFooter({ text: "Fonte: AniList • Ordenado por popularidade • Status: Em lançamento" });
-
+    const firstCover = rows.find((row) => row.cover_url)?.cover_url;
+    if (firstCover) embed.setThumbnail(String(firstCover));
     await interaction.editReply({ embeds: [embed] });
   } catch {
-    await interaction.editReply("❌ Erro ao buscar lançamentos. Tente novamente!");
+    await interaction.editReply("❌ Não foi possível carregar os lançamentos agora. Tente novamente.");
   }
 }
