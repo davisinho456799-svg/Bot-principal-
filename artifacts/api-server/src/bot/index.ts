@@ -24,6 +24,23 @@ export async function startBot() {
   registerInteractionRouter(client);
 
   logger.info("Chamando client.login()...");
-  await client.login(token);
+  let loginTimeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      client.login(token),
+      new Promise<never>((_, reject) => {
+        loginTimeout = setTimeout(() => {
+          reject(new Error("O login do Discord não respondeu dentro de 45 segundos"));
+        }, 45_000);
+      }),
+    ]);
+  } catch (error) {
+    client.destroy();
+    throw error;
+  } finally {
+    if (loginTimeout) {
+      clearTimeout(loginTimeout);
+    }
+  }
   logger.info("client.login() retornou — aguardando ClientReady");
 }
