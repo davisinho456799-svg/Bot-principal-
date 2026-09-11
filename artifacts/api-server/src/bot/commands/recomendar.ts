@@ -11,6 +11,11 @@ import {
 } from "discord.js";
 import { translateToPtBr, statusLabel } from "../anilist.js";
 import { buildScanLinksExternal } from "./search.js";
+import {
+  fetchTenraiPublishingManga,
+  genresOfTenrai,
+  titleOfTenrai,
+} from "../tenrai-fallback.js";
 
 const ANILIST_API = "https://graphql.anilist.co";
 
@@ -110,6 +115,7 @@ interface AniListMedia {
   chapters: number | null;
   status: string | null;
   siteUrl: string;
+  source?: "AniList" | "Tenrai/MAL";
 }
 
 function cleanDesc(raw: string | null): string {
@@ -151,25 +157,56 @@ async function fetchRecommendations(
     query = RECOMMEND_QUERY;
   }
 
-  const res = await fetch(ANILIST_API, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify({
-      query,
-      variables: { genres, tags, page: 1 },
-    }),
-    signal: AbortSignal.timeout(10000),
+  try {
+    const res = await fetch(ANILIST_API, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({
+        query,
+        variables: { genres, tags, page: 1 },
+      }),
+      signal: AbortSignal.timeout(10000),
+    });
+
+    if (!res.ok) throw new Error(`AniList HTTP ${res.status}`);
+
+    const json = (await res.json()) as {
+      data: { Page: { media: AniListMedia[] } };
+      errors?: { message: string }[];
+    };
+
+    if (json.errors?.length) throw new Error(json.errors[0].message);
+    const result = json.data.Page.media ?? [];
+    if (result.length) return result;
+  } catch {
+    // A recomendação não deve cair inteira só porque o AniList está fora.
+  }
+
+  const fallback = await fetchTenraiPublishingManga("manhwa", isAdult);
+  const selectedValues = [...selected].map((value) => value.toLowerCase());
+  const filtered = fallback.filter((manga) => {
+    if (isAdult && !genresOfTenrai(manga).some((genre) => genre.toLowerCase() === "erotica")) {
+      return false;
+    }
+    if (!selectedValues.length) return true;
+    const itemGenres = genresOfTenrai(manga).map((genre) => genre.toLowerCase());
+    return selectedValues.some((value) =>
+      itemGenres.some((genre) => genre === value || genre.includes(value) || value.includes(genre)),
+    );
   });
-
-  if (!res.ok) throw new Error(`AniList HTTP ${res.status}`);
-
-  const json = (await res.json()) as {
-    data: { Page: { media: AniListMedia[] } };
-    errors?: { message: string }[];
-  };
-
-  if (json.errors?.length) throw new Error(json.errors[0].message);
-  return json.data.Page.media ?? [];
+  const usable = filtered.length ? filtered : fallback;
+  return usable.slice(0, 6).map((manga) => ({
+    id: manga.mal_id,
+    title: { romaji: manga.title, english: manga.title_english ?? null, native: null },
+    description: manga.synopsis ?? null,
+    coverImage: { large: "", color: null },
+    averageScore: manga.score != null ? Math.round(manga.score * 10) : null,
+    genres: genresOfTenrai(manga),
+    chapters: manga.chapters ?? null,
+    status: "RELEASING",
+    siteUrl: manga.url ?? `https://myanimelist.net/manga/${manga.mal_id}`,
+    source: "Tenrai/MAL",
+  }));
 }
 
 async function buildEmbed(
@@ -205,7 +242,7 @@ async function buildEmbed(
     .setTitle(isAdult ? "🔞 Recomendações +18 de Manhwa" : "📚 Recomendações de Manhwa")
     .setDescription(`**Gêneros:** ${genreLabels}\n\n${lines.join("\n\n")}`.slice(0, 4000))
     .setColor(isAdult ? 0xff4444 : 0x7b68ee)
-    .setFooter({ text: "Fonte: AniList • Sinopses traduzidas automaticamente" });
+    .setFooter({ text: `Fonte: ${results[0]?.source ?? "AniList"} • Sinopses traduzidas automaticamente` });
 }
 
 function buildRows(
