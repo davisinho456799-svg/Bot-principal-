@@ -39,7 +39,7 @@ export async function deployCommands(
   token: string,
   guildIds: string[] = [],
 ) {
-  const commands = [
+  const rawCommands = [
     searchData.toJSON(), topData.toJSON(), recomendarData.toJSON(), ajudaData.toJSON(),
     aleatorioData.toJSON(), lancamentosData.toJSON(), favoritosData.toJSON(), compararData.toJSON(),
     autorData.toJSON(), notificarData.toJSON(), listaData.toJSON(), rankingData.toJSON(),
@@ -50,17 +50,47 @@ export async function deployCommands(
     historicoData.toJSON(), verificarData.toJSON(), assinarData.toJSON(), assinar18Data.toJSON(),
     adminData.toJSON(), limparData.toJSON(), monitorCommandDefinition,
   ];
+  const commandsByName = new Map<string, (typeof rawCommands)[number]>();
+  for (const command of rawCommands) {
+    if (commandsByName.has(command.name)) {
+      logger.warn({ commandName: command.name }, "Comando duplicado removido antes do registro");
+    }
+    commandsByName.set(command.name, command);
+  }
+  const commands = [...commandsByName.values()];
   const rest = new REST().setToken(token);
+  const configuredGuildId = process.env.DISCORD_GUILD_ID?.trim() || null;
+  const guildCommandIds = configuredGuildId ? [configuredGuildId] : [];
+  const guildIdsToClear = guildIds.filter((guildId) => guildId !== configuredGuildId);
 
   try {
-    logger.info({ count: commands.length }, "Registrando slash commands...");
-    await rest.put(Routes.applicationCommands(clientId), { body: commands });
+    logger.info(
+      {
+        count: commands.length,
+        scope: configuredGuildId ? "guild" : "global",
+        configuredGuildId,
+      },
+      "Registrando slash commands...",
+    );
+    if (configuredGuildId) {
+      await rest.put(Routes.applicationCommands(clientId), { body: [] });
+    } else {
+      await rest.put(Routes.applicationCommands(clientId), { body: commands });
+    }
     await Promise.all(
-      guildIds.map((guildId) =>
+      (configuredGuildId ? [configuredGuildId] : []).map((guildId) =>
         rest.put(Routes.applicationGuildCommands(clientId, guildId), { body: commands }),
       ),
     );
-    logger.info({ guildCount: guildIds.length }, "Slash commands registrados com sucesso.");
+    await Promise.all(
+      guildIdsToClear.map((guildId) =>
+        rest.put(Routes.applicationGuildCommands(clientId, guildId), { body: [] }),
+      ),
+    );
+    logger.info(
+      { guildCount: configuredGuildId ? 1 : 0, clearedGuildCount: guildIdsToClear.length },
+      "Slash commands registrados com sucesso.",
+    );
   } catch (err) {
     logger.error({ err }, "Erro ao registrar slash commands");
     throw err;
