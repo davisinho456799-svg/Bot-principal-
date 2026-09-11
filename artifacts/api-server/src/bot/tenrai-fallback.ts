@@ -51,6 +51,26 @@ async function tenraiRequest<T>(path: string): Promise<T[]> {
   return json.data ?? [];
 }
 
+async function tenraiRequestOne<T>(path: string): Promise<T | null> {
+  const response = await fetch(`${TENRAI_API}/${path}`, {
+    headers: { Accept: "application/json" },
+    signal: AbortSignal.timeout(12_000),
+  });
+  if (!response.ok) throw new Error(`Tenrai returned ${response.status}`);
+  const json = (await response.json()) as { data?: T | null };
+  return json.data ?? null;
+}
+
+export async function searchTenraiAnime(query: string): Promise<TenraiAnime[]> {
+  return tenraiRequest<TenraiAnime>(
+    `anime?q=${encodeURIComponent(query.trim())}&limit=25&order_by=score&sort=desc`,
+  );
+}
+
+export async function getTenraiAnimeById(malId: number): Promise<TenraiAnime | null> {
+  return tenraiRequestOne<TenraiAnime>(`anime/${malId}`);
+}
+
 export async function fetchTenraiSeasonAnime(): Promise<TenraiAnime[]> {
   return tenraiRequest<TenraiAnime>("seasons/now?limit=25");
 }
