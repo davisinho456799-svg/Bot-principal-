@@ -2,7 +2,7 @@ services:
   - type: web
     name: panel-watch-discord-bot
     runtime: node
-    buildCommand: pnpm install --frozen-lockfile && pnpm --filter @workspace/api-server run build
+    buildCommand: pnpm install --frozen-lockfile && PLAYWRIGHT_BROWSERS_PATH=0 pnpm --filter @workspace/api-server exec playwright install chromium && pnpm --filter @workspace/api-server run build
     startCommand: node --enable-source-maps ./artifacts/api-server/dist/index.mjs
     healthCheckPath: /api/healthz
     branch: main
@@ -10,6 +10,8 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      - key: PLAYWRIGHT_BROWSERS_PATH
+        value: "0"
       - key: DISCORD_BOT_ENABLED
         value: "true"
       - key: DATABASE_URL
