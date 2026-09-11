@@ -17,6 +17,13 @@ import {
 import { searchMangaDexJp, getMangaDexById, type MangaDexResult } from "../mangadex.js";
 import { translateToPtBr, cleanDescription } from "../anilist.js";
 import { logger } from "../../lib/logger.js";
+import {
+  getTenraiMangaById,
+  searchTenraiManga,
+  titleOfTenrai,
+  genresOfTenrai,
+  type TenraiManga,
+} from "../tenrai-fallback.js";
 
 export const data = new SlashCommandBuilder()
   .setName("manga")
@@ -47,6 +54,7 @@ export const data = new SlashCommandBuilder()
 // ─── Cache de autocomplete ────────────────────────────────────────────────────
 
 interface AutocompleteOption { name: string; value: string }
+type MangaDisplay = MangaDexResult & { provider: "MangaDex" | "Tenrai/MAL" };
 const autocompleteCache = new Map<string, { results: AutocompleteOption[]; ts: number }>();
 const CACHE_TTL = 30_000;
 
@@ -61,13 +69,28 @@ export async function autocomplete(interaction: AutocompleteInteraction): Promis
   }
 
   try {
-    const results = await searchMangaDexJp(focused, 10);
-    const options: AutocompleteOption[] = results.slice(0, 25).map((r) => ({
-      name: r.mainTitle.slice(0, 100),
-      value: `mangadex:${r.id}`,
-    }));
-    autocompleteCache.set(focused, { results: options, ts: Date.now() });
-    await interaction.respond(options);
+    const [mangaDexResult, tenraiResult] = await Promise.allSettled([
+      searchMangaDexJp(focused, 10),
+      searchTenraiManga(focused, "manga"),
+    ]);
+    const options: AutocompleteOption[] = [];
+    if (mangaDexResult.status === "fulfilled") {
+      options.push(...mangaDexResult.value.slice(0, 15).map((r) => ({
+        name: r.mainTitle.slice(0, 100),
+        value: `mangadex:${r.id}`,
+      })));
+    }
+    if (tenraiResult.status === "fulfilled") {
+      options.push(...tenraiResult.value.slice(0, 10).map((r) => ({
+        name: `${titleOfTenrai(r).slice(0, 90)} · Tenrai`,
+        value: `tenrai:${r.mal_id}`,
+      })));
+    }
+    const deduped = options.filter((option, index, all) =>
+      all.findIndex((item) => item.name.toLowerCase() === option.name.toLowerCase()) === index,
+    ).slice(0, 25);
+    autocompleteCache.set(focused, { results: deduped, ts: Date.now() });
+    await interaction.respond(deduped);
   } catch {
     await interaction.respond([]);
   }
@@ -87,7 +110,27 @@ function statusLabel(status: string | null): string {
 
 // ─── Embed ────────────────────────────────────────────────────────────────────
 
-async function buildMangaEmbed(r: MangaDexResult): Promise<EmbedBuilder> {
+function toTenraiDisplay(r: TenraiManga): MangaDisplay {
+  return {
+    source: "mangadex",
+    id: String(r.mal_id),
+    mainTitle: titleOfTenrai(r),
+    nativeTitle: r.title,
+    romajiTitle: null,
+    synonyms: [],
+    description: r.synopsis ?? null,
+    coverUrl: null,
+    score: null,
+    genres: genresOfTenrai(r),
+    chapters: r.chapters ?? null,
+    status: r.status?.toLowerCase().includes("publishing") ? "RELEASING" : r.status,
+    siteUrl: r.url ?? `https://myanimelist.net/manga/${r.mal_id}`,
+    year: r.published?.from ? Number(r.published.from.slice(0, 4)) : null,
+    provider: "Tenrai/MAL",
+  };
+}
+
+async function buildMangaEmbed(r: MangaDisplay): Promise<EmbedBuilder> {
   const rawDesc = cleanDescription(r.description ?? "");
   const synopsis = rawDesc
     ? await translateToPtBr(rawDesc)
@@ -149,14 +192,14 @@ async function buildMangaEmbed(r: MangaDexResult): Promise<EmbedBuilder> {
 
   embed.addFields({
     name: "🔗 Links",
-    value: `[Ver no MangaDex](${r.siteUrl})`,
+    value: `[Ver no ${r.provider}](${r.siteUrl})`,
     inline: false,
   });
 
   if (r.coverUrl) embed.setThumbnail(r.coverUrl);
 
   embed.setFooter({
-    text: "📚 Fonte: MangaDex • Sinopse traduzida automaticamente",
+    text: `📚 Fonte: ${r.provider} • Sinopse traduzida automaticamente`,
   });
 
   return embed;
@@ -172,13 +215,16 @@ export async function execute(
 
   await interaction.deferReply();
 
-  // Detecta seleção via autocomplete (formato "mangadex:<id>")
-  const autocompleteMatch = /^mangadex:(.+)$/.exec(titulo);
+  // Detecta seleção via autocomplete (MangaDex ou Tenrai/MAL)
+  const autocompleteMatch = /^(mangadex|tenrai):(.+)$/.exec(titulo);
 
   if (autocompleteMatch) {
-    const id = autocompleteMatch[1]!;
+    const source = autocompleteMatch[1]!;
+    const id = autocompleteMatch[2]!;
     try {
-      const manga = await getMangaDexById(id);
+      const manga = source === "tenrai"
+        ? await getTenraiMangaById(Number(id)).then((item) => item ? toTenraiDisplay(item) : null)
+        : await getMangaDexById(id);
       if (!manga) {
         await interaction.editReply("❌ Não foi possível carregar os detalhes. Tente digitar o título manualmente.");
         return;
@@ -193,7 +239,20 @@ export async function execute(
   }
 
   try {
-    const results = await searchMangaDexJp(titulo, 8, generoId ?? undefined);
+    const [mangaDexResult, tenraiResult] = await Promise.allSettled([
+      searchMangaDexJp(titulo, 8, generoId ?? undefined),
+      searchTenraiManga(titulo, "manga"),
+    ]);
+    const results: MangaDisplay[] = [
+      ...(mangaDexResult.status === "fulfilled"
+        ? mangaDexResult.value.map((item) => ({ ...item, provider: "MangaDex" as const }))
+        : []),
+      ...(tenraiResult.status === "fulfilled"
+        ? tenraiResult.value.slice(0, 8).map(toTenraiDisplay)
+        : []),
+    ].filter((item, index, all) =>
+      all.findIndex((candidate) => candidate.mainTitle.toLowerCase() === item.mainTitle.toLowerCase()) === index,
+    ).slice(0, 8);
 
     if (!results.length) {
       await interaction.editReply(
@@ -220,7 +279,7 @@ export async function execute(
         .filter(Boolean)
         .join(" • ")
         .slice(0, 100),
-      value: r.id,
+      value: `${r.provider === "Tenrai/MAL" ? "tenrai" : "mangadex"}:${r.id}`,
     }));
 
     const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
@@ -246,7 +305,10 @@ export async function execute(
     collector?.on("collect", async (sel: StringSelectMenuInteraction) => {
       await sel.deferUpdate();
       try {
-        const manga = await getMangaDexById(sel.values[0]!);
+        const [source, id] = sel.values[0]!.split(":");
+        const manga = source === "tenrai"
+          ? await getTenraiMangaById(Number(id)).then((item) => item ? toTenraiDisplay(item) : null)
+          : await getMangaDexById(id!);
         if (!manga) {
           await interaction.editReply({ content: "❌ Erro ao carregar detalhes.", components: [] });
           return;
