@@ -1,796 +1,4 @@
-import { type Client, EmbedBuilder } from "discord.js";
-import {
-  db,
-  pool,
-  notificacaoCanaisTable,
-  notificacaoEventosTable,
-  capitulosRastreados,
-  favoritosTable,
-  assinaturasTable,
-  malHistoricoAlteracoesTable,
-} from "@workspace/db";
-import { eq, sql, and, desc, inArray, gte, isNotNull } from "drizzle-orm";
-import { logger } from "../lib/logger.js";
-import { getErogamescapeLastUpdated } from "./erogamescape.js";
-import { buildScanLinksExternal } from "./commands/search.js";
-import { getJikanMangaById, getJikanAnimeById, searchJikanAnimeAny } from "./jikan.js";
-import { searchManhwaAny, searchAnime } from "./anilist.js";
-import { searchComickAny, getComickBySlug } from "./comick.js";
-import { searchMangaDexAny } from "./mangadex.js";
-import { searchMangaUpdates } from "./mangaupdates.js";
-import { searchJikanAny } from "./jikan.js";
-import { recordBotError } from "./error-log.js";
-import {
-  type FetchResult,
-  type FetchError,
-  type SourceErrorKind,
-  fetchError,
-  isFetchError,
-  normalizeChapterValue,
-  classifyHttpStatus,
-  classifyException,
-  normalizeSynopsis,
-  sameNullableNumber,
-  sameNullableText,
-  notificationEventKey,
-} from "./notificacao-utils.js";
-import { fetchComick, parseComickJson } from "./comick-http.js";
-export type { SourceErrorKind } from "./notificacao-utils.js";
-
-const ANILIST_API = "https://graphql.anilist.co";
-const COMICK_API_BASE = (process.env.COMICK_API_BASE ?? "https://api.comick.dev").replace(/\/+$/, "");
-const CHECK_INTERVAL_MS = 2 * 60 * 60 * 1000; // 2 horas
-// A pausa deve proteger a fonte que impõe limite, não parar a fila inteira por
-// um minuto. O scanner continua sequencial; esta margem evita rajadas no
-// Comick sem deixar dezenas de títulos esperando desnecessariamente.
-const BETWEEN_TITLES_DELAY_MS = 10_000;
-const COMICK_COOLDOWN_STEPS_MS = [
-  30 * 60 * 1000, // primeiro bloqueio: 30 min
-  2 * 60 * 60 * 1000, // segundo bloqueio: 2 h
-  6 * 60 * 60 * 1000, // bloqueios seguintes: 6 h
-] as const;
-let comickBlockedUntil = 0;
-let comickBlockCount = 0;
-let verificationInProgress = false;
-let notificacaoServiceStarted = false;
-
-// Impede que duas instâncias (por exemplo, durante um deploy/restart)
-// consultem as fontes e enviem a mesma atualização simultaneamente.
-const NOTIFICATION_LOCK_NAME = "bot-principal-notification-check";
-
-async function withNotificationLock<T>(fn: () => Promise<T>): Promise<T | null> {
-  const connection = await pool.connect();
-  let locked = false;
-
-  try {
-    const lockResult = await connection.query<{ locked: boolean }>(
-      "SELECT pg_try_advisory_lock(hashtextextended($1, 0)) AS locked",
-      [NOTIFICATION_LOCK_NAME],
-    );
-    locked = lockResult.rows[0]?.locked === true;
-
-    if (!locked) {
-      logger.warn(
-        "Outra instância já está verificando notificações — pulando esta rodada",
-      );
-      return null;
-    }
-
-    return await fn();
-  } finally {
-    if (locked) {
-      await connection
-        .query(
-          "SELECT pg_advisory_unlock(hashtextextended($1, 0))",
-          [NOTIFICATION_LOCK_NAME],
-        )
-        .catch((err) => {
-          logger.warn({ err }, "Falha ao liberar lock do serviço de notificações");
-        });
-    }
-    connection.release();
-  }
-}
-
-type NotificationEventClaim = {
-  eventKey: string;
-  claimed: boolean;
-};
-
-/**
- * Reserva o evento no PostgreSQL antes de chamar o Discord.
- *
- * A chave única torna o envio idempotente entre ciclos e reinícios. Se o
- * processo cair depois da reserva, o próximo ciclo preserva a decisão de não
- * reenviar o mesmo evento — evitando a rajada de mensagens duplicadas.
- */
-async function claimNotificationEvent(
-  channelId: string,
-  title: string,
-  chapter: number,
-): Promise<NotificationEventClaim> {
-  const eventKey = notificationEventKey(channelId, title, chapter);
-  const inserted = await db
-    .insert(notificacaoEventosTable)
-    .values({
-      eventKey,
-      channelId,
-      title,
-      chapter,
-    })
-    .onConflictDoNothing()
-    .returning({ eventKey: notificacaoEventosTable.eventKey });
-
-  return { eventKey, claimed: inserted.length > 0 };
-}
-
-async function markNotificationEventSent(eventKey: string): Promise<void> {
-  await db
-    .update(notificacaoEventosTable)
-    .set({ sentAt: new Date() })
-    .where(eq(notificacaoEventosTable.eventKey, eventKey));
-}
-
-async function releaseNotificationEvent(eventKey: string): Promise<void> {
-  await db
-    .delete(notificacaoEventosTable)
-    .where(eq(notificacaoEventosTable.eventKey, eventKey));
-}
-
-function isComickBlocked(): boolean {
-  return Date.now() < comickBlockedUntil;
-}
-
-function blockComick(title: string, status: number): void {
-  const cooldownMs =
-    COMICK_COOLDOWN_STEPS_MS[
-      Math.min(comickBlockCount, COMICK_COOLDOWN_STEPS_MS.length - 1)
-    ];
-  comickBlockCount++;
-  comickBlockedUntil = Date.now() + cooldownMs;
-  logger.warn(
-    {
-      title,
-      status,
-      blockCount: comickBlockCount,
-      cooldownMinutes: cooldownMs / 60_000,
-    },
-    "Comick ativou proteção — pausando consultas ao Comick",
-  );
-}
-
-/**
- * Discord pode devolver canais de anúncio, threads ou canais vindos de uma
- * versão diferente do discord.js. `instanceof TextChannel` rejeita esses
- * canais mesmo quando eles aceitam mensagens, fazendo o serviço retornar
- * `false` sem tentar enviar nada.
- */
-type SendableDiscordChannel = {
-  send(payload: unknown): Promise<unknown>;
-};
-
-function getSendableChannel(
-  channel: unknown,
-  channelId: string,
-): SendableDiscordChannel | null {
-  if (
-    channel &&
-    typeof channel === "object" &&
-    typeof (channel as { send?: unknown }).send === "function"
-  ) {
-    return channel as SendableDiscordChannel;
-  }
-
-  const details =
-    channel && typeof channel === "object"
-      ? {
-          channelType:
-            "type" in channel ? String((channel as { type?: unknown }).type) : "unknown",
-          className:
-            "constructor" in channel
-              ? String(
-                  (channel as { constructor?: { name?: unknown } }).constructor?.name ??
-                    "unknown",
-                )
-              : "unknown",
-        }
-      : { channelType: "null", className: "null" };
-  logger.warn({ channelId, ...details }, "Canal de notificação não é enviável");
-  return null;
-}
-
-type NotificationErrorContext = {
-  channelId: string;
-  title: string;
-  discordGuildId?: string | null;
-  [key: string]: unknown;
-};
-
-function logNotificationError(
-  errorCode: string,
-  message: string,
-  error: unknown,
-  context: NotificationErrorContext,
-): void {
-  const { discordGuildId, ...logContext } = context;
-  logger.error({ err: error, ...logContext }, message);
-  void recordBotError({
-    source: "notification",
-    errorCode,
-    error,
-    discordGuildId,
-    context: logContext,
-  });
-}
-
-const CHAPTERS_QUERY = `
-query GetChapters($id: Int!) {
-  Media(id: $id, type: MANGA) {
-    chapters
-    updatedAt
-    status
-    title { english romaji }
-    siteUrl
-    coverImage { large color }
-    externalLinks { site url }
-  }
-}
-`;
-
-interface MediaInfo {
-  chapters: number | null;
-  updatedAt: number | null;
-  status: string | null;
-  title: { english: string | null; romaji: string };
-  siteUrl: string;
-  coverImage: { large: string; color: string | null };
-  externalLinks: { site: string; url: string }[] | null;
-}
-
-/** Extrai o UUID de uma URL do MangaDex, ex: https://mangadex.org/title/{uuid}/... */
-function extractMangaDexUUID(url: string): string | null {
-  const match = url.match(/mangadex\.org\/title\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
-  return match ? match[1] : null;
-}
-
-/** Consulta o capítulo mais recente no MangaDex dado o UUID da obra */
-async function fetchMangaDexLatestChapter(uuid: string): Promise<number | null> {
-  try {
-    const params = new URLSearchParams({ manga: uuid, limit: "1", "order[chapter]": "desc" });
-    const res = await fetch(`https://api.mangadex.org/chapter?${params}`, { signal: AbortSignal.timeout(8000) });
-    if (!res.ok) return null;
-    const json = (await res.json()) as { data: { attributes: { chapter: string | null } }[]; total: number };
-    if (!json.data?.length) return null;
-    const chap = json.data[0].attributes.chapter;
-    // Capítulos especiais ("EX", "Oneshot", "SP") produzem NaN com parseFloat;
-    // normalizeChapterValue retorna null nesses casos.
-    return normalizeChapterValue(chap ?? json.total);
-  } catch {
-    return null;
-  }
-}
-
-/** Extrai o slug de uma URL do Comick, ex: https://comick.io/comic/{slug}/... */
-function extractComickSlug(url: string): string | null {
-  const match = url.match(/comick\.[^/]+\/comic\/([^/?#]+)/i);
-  return match ? match[1] : null;
-}
-
-/** Consulta o capítulo mais recente no Comick dado o slug da obra */
-async function fetchComickLatestChapter(slug: string): Promise<number | null> {
-  try {
-    const res = await fetchComick(
-      `${COMICK_API_BASE}/comic/${encodeURIComponent(slug)}`,
-    );
-    // 404 pode indicar slug renomeado; tenta recuperar via busca antes de desistir
-    if (res.status === 404) {
-      const recovered = await getComickBySlug(slug);
-      return recovered?.last_chapter ?? null;
-    }
-    if (!res.ok) return null;
-    const json = parseComickJson<{
-      comic?: { last_chapter?: number | null };
-    }>(res);
-    return json.comic?.last_chapter ?? null;
-  } catch {
-    return null;
-  }
-}
-
-
-let mangaUpdatesSessionToken: string | null = null;
-let mangaUpdatesSessionExpiresAt = 0;
-
-// ─── Classificação e registo de erros de fonte ───────────────────────────────
-
-function recordSourceError(
-  source: string,
-  manhwaId: string,
-  kind: SourceErrorKind,
-  httpStatus?: number,
-): void {
-  void recordBotError({
-    source: "notification_source",
-    errorCode: `SOURCE_${kind.toUpperCase().replace(/-/g, "_")}`,
-    error: new Error(httpStatus ? `${source} HTTP ${httpStatus}` : `${source} ${kind}`),
-    context: { source, manhwaId, errorKind: kind, ...(httpStatus ? { httpStatus } : {}) },
-  });
-}
-
-async function getMangaUpdatesSessionToken(forceRefresh = false): Promise<string | null> {
-  if (
-    !forceRefresh &&
-    mangaUpdatesSessionToken &&
-    mangaUpdatesSessionExpiresAt > Date.now()
-  ) {
-    return mangaUpdatesSessionToken;
-  }
-
-      const username = process.env.MANGAUPDATES_USERNAME;
-      const password = process.env.MANGAUPDATES_PASSWORD;
-      if (!username || !password) return null;
-
-  try {
-    const res = await fetch("https://api.mangaupdates.com/v1/account/login", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({ username, password }),
-      signal: AbortSignal.timeout(8000),
-    });
-    if (!res.ok) return null;
-
-    const json = (await res.json()) as {
-      context?: { session_token?: string };
-    };
-    const token = json.context?.session_token;
-    if (!token) return null;
-
-    // A sessão é reutilizada durante uma hora; em caso de 401 ela é renovada.
-    mangaUpdatesSessionToken = token;
-    mangaUpdatesSessionExpiresAt = Date.now() + 60 * 60 * 1000;
-    return token;
-  } catch {
-    return null;
-  }
-}
-
-function parseMangaUpdatesStatusChapter(status: string | null | undefined): number | null {
-  if (!status) return null;
-  const chapters = [...status.matchAll(/(\d+(?:\.\d+)?)\s+Chapters?/gi)]
-    .map((match) => Number(match[1]))
-    .filter((chapter) => Number.isFinite(chapter));
-  return chapters.length ? Math.max(...chapters) : null;
-}
-
-export type SourceAttempt = {
-  source: string;
-  status: "ok" | "sem_dados";
-  value: number | null;
-  selected: boolean;
-  /** Tipo de falha; presente quando status é "sem_dados". */
-  errorKind?: SourceErrorKind;
-  /** HTTP status code quando a falha é HTTP. */
-  httpStatus?: number;
-};
-
-export type NotificationCheckSummary = {
-  titlesChecked: number;
-  successfulSources: number;
-  sourcesWithoutData: number;
-  fallbackUsed: number;
-  notificationsSent: number;
-  attempts: Array<{
-    title: string;
-    primarySource: string;
-    selectedSource: string | null;
-    attempts: SourceAttempt[];
-  }>;
-};
-
-function emptyNotificationCheckSummary(): NotificationCheckSummary {
-  return {
-    titlesChecked: 0,
-    successfulSources: 0,
-    sourcesWithoutData: 0,
-    fallbackUsed: 0,
-    notificationsSent: 0,
-    attempts: [],
-  };
-}
-
-interface MalSnapshot {
-  chapters: number | null;
-  synopsis: string | null;
-  score: number | null;
-  status: string | null;
-}
-
-// Mantém o snapshot inicial + até 10 registros posteriores de alteração.
-const MAL_HISTORY_LIMIT = 10;
-
-
-async function recordMalSnapshot(malId: string, title: string, snapshot: MalSnapshot) {
-  const [previous] = await db
-    .select()
-    .from(malHistoricoAlteracoesTable)
-    .where(eq(malHistoricoAlteracoesTable.malId, malId))
-    .orderBy(desc(malHistoricoAlteracoesTable.observedAt), desc(malHistoricoAlteracoesTable.id))
-    .limit(1);
-
-  if (!previous) {
-    await db.insert(malHistoricoAlteracoesTable).values({
-      malId,
-      title,
-      synopsis: snapshot.synopsis,
-      score: snapshot.score,
-      status: snapshot.status,
-      chapters: snapshot.chapters,
-      changedFields: ["initial"],
-    });
-    return { previous: null, changedFields: [] as string[] };
-  }
-
-  const changedFields: string[] = [];
-  if (normalizeSynopsis(previous.synopsis) !== normalizeSynopsis(snapshot.synopsis)) changedFields.push("synopsis");
-  if (!sameNullableNumber(previous.score, snapshot.score)) changedFields.push("score");
-  if (!sameNullableText(previous.status, snapshot.status)) changedFields.push("status");
-  if (!sameNullableNumber(previous.chapters, snapshot.chapters)) changedFields.push("chapters");
-
-  if (!changedFields.length) return { previous, changedFields };
-
-  await db.insert(malHistoricoAlteracoesTable).values({
-    malId,
-    title,
-    synopsis: snapshot.synopsis,
-    score: snapshot.score,
-    status: snapshot.status,
-    chapters: snapshot.chapters,
-    changedFields,
-  });
-
-  const historyRows = await db
-    .select({
-      id: malHistoricoAlteracoesTable.id,
-      changedFields: malHistoricoAlteracoesTable.changedFields,
-    })
-    .from(malHistoricoAlteracoesTable)
-    .where(eq(malHistoricoAlteracoesTable.malId, malId))
-    .orderBy(desc(malHistoricoAlteracoesTable.observedAt), desc(malHistoricoAlteracoesTable.id));
-  const oldRows = historyRows
-    .filter((row) => !row.changedFields.includes("initial"))
-    .slice(MAL_HISTORY_LIMIT);
-
-  if (oldRows.length) {
-    await db.delete(malHistoricoAlteracoesTable).where(
-      inArray(malHistoricoAlteracoesTable.id, oldRows.map((row) => row.id)),
-    );
-  }
-
-  return { previous, changedFields };
-}
-
-async function fetchChapters(
-  manhwaId: string,
-  source: string,
-): Promise<FetchResult | FetchError | null> {
-  if (source === "anilist") {
-    try {
-      const res = await fetch(ANILIST_API, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({ query: CHAPTERS_QUERY, variables: { id: parseInt(manhwaId, 10) } }),
-        signal: AbortSignal.timeout(8000),
-      });
-      if (!res.ok) {
-        const kind = classifyHttpStatus(res.status);
-        recordSourceError(source, manhwaId, kind, res.status);
-        return fetchError(kind, res.status);
-      }
-      const json = (await res.json()) as { data: { Media: MediaInfo } };
-      const media = json.data?.Media;
-      if (!media) return fetchError("invalid_response");
-      if (media.chapters != null) return { value: media.chapters, isProxy: false };
-
-      // Série em andamento: AniList não informa o capítulo atual.
-      // Tenta cruzar com MangaDex e depois Comick via externalLinks da própria obra.
-      const links = media.externalLinks ?? [];
-
-      const mdLink = links.find((l) => l.url.toLowerCase().includes("mangadex.org"));
-      if (mdLink) {
-        const uuid = extractMangaDexUUID(mdLink.url);
-        if (uuid) {
-          const mdChapter = await fetchMangaDexLatestChapter(uuid);
-          if (mdChapter != null) {
-            logger.debug({ manhwaId, uuid }, "AniList em andamento: capítulo via MangaDex crossref");
-            return { value: mdChapter, isProxy: false };
-          }
-        }
-      }
-
-      const comickLink = links.find((l) => l.url.toLowerCase().includes("comick."));
-      if (comickLink) {
-        const slug = extractComickSlug(comickLink.url);
-        if (slug) {
-          const comickChapter = await fetchComickLatestChapter(slug);
-          if (comickChapter != null) {
-            logger.debug({ manhwaId, slug }, "AniList em andamento: capítulo via Comick crossref");
-            return { value: comickChapter, isProxy: false };
-          }
-        }
-      }
-
-      // updatedAt é apenas um timestamp da página, não uma contagem de capítulos.
-      // Não o use como baseline: alterações de capa/sinopse também mudam esse valor.
-      return fetchError("no_data");
-    } catch (err) {
-      const kind = classifyException(err);
-      recordSourceError(source, manhwaId, kind);
-      return fetchError(kind);
-    }
-  }
-
-  if (source === "mangadex") {
-    try {
-      // Sem filtro de idioma: pega o capítulo mais recente em qualquer idioma
-      const params = new URLSearchParams({ manga: manhwaId, limit: "1", "order[chapter]": "desc" });
-      const res = await fetch(`https://api.mangadex.org/chapter?${params}`, { signal: AbortSignal.timeout(8000) });
-      if (!res.ok) {
-        const kind = classifyHttpStatus(res.status);
-        recordSourceError(source, manhwaId, kind, res.status);
-        return fetchError(kind, res.status);
-      }
-      const json = (await res.json()) as { data: { attributes: { chapter: string | null } }[]; total: number };
-      if (!json.data?.length) return fetchError("no_data");
-      const chap = json.data[0].attributes.chapter;
-      // Capítulos especiais ("EX", "Oneshot", "SP") não são numéricos;
-      // normalizeChapterValue rejeita-os e devolve null → no_data.
-      const value = normalizeChapterValue(chap ?? json.total);
-      if (value === null) return fetchError("no_data");
-      return { value, isProxy: false };
-    } catch (err) {
-      const kind = classifyException(err);
-      recordSourceError(source, manhwaId, kind);
-      return fetchError(kind);
-    }
-  }
-
-  // Anime: usa o número do próximo episódio a ir ao ar - 1 como proxy do último episódio lançado
-  if (source === "anilist-anime") {
-    try {
-      const ANIME_EP_QUERY = `
-        query GetAnimeEp($id: Int!) {
-          Media(id: $id, type: ANIME) {
-            episodes
-            nextAiringEpisode { episode }
-            status
-          }
-        }
-      `;
-      const res = await fetch(ANILIST_API, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({ query: ANIME_EP_QUERY, variables: { id: parseInt(manhwaId, 10) } }),
-        signal: AbortSignal.timeout(8000),
-      });
-      if (!res.ok) {
-        const kind = classifyHttpStatus(res.status);
-        recordSourceError(source, manhwaId, kind, res.status);
-        return fetchError(kind, res.status);
-      }
-      const json = (await res.json()) as {
-        data: { Media: { episodes: number | null; nextAiringEpisode: { episode: number } | null; status: string | null } };
-      };
-      const media = json.data?.Media;
-      if (!media) return fetchError("invalid_response");
-      if (media.nextAiringEpisode) return { value: media.nextAiringEpisode.episode - 1, isProxy: false };
-      if (media.episodes != null) return { value: media.episodes, isProxy: false };
-      return fetchError("no_data");
-    } catch (err) {
-      const kind = classifyException(err);
-      recordSourceError(source, manhwaId, kind);
-      return fetchError(kind);
-    }
-  }
-
-  if (source === "jikan-anime") {
-    const anime = await getJikanAnimeById(Number(manhwaId));
-    if (anime?.episodes == null) return fetchError("no_data");
-    return { value: anime.episodes, isProxy: false };
-  }
-
-  if (source === "comick") {
-    try {
-      if (isComickBlocked()) {
-        logger.debug({ manhwaId }, "Consulta ao Comick ignorada durante cooldown");
-        return fetchError("http_429", 429);
-      }
-      const res = await fetchComick(
-        `${COMICK_API_BASE}/comic/${encodeURIComponent(manhwaId)}`,
-      );
-      if (!res.ok) {
-        // 404 pode indicar que o slug foi renomeado; tenta recuperar via busca
-        // antes de tratar como obra indisponível.
-        if (res.status === 404) {
-          const recovered = await getComickBySlug(manhwaId);
-          if (recovered) {
-            const lastChapter = recovered.last_chapter ?? null;
-            if (lastChapter == null) return fetchError("no_data");
-            const newManhwaId =
-              recovered.slug && recovered.slug !== manhwaId
-                ? recovered.slug
-                : undefined;
-            return { value: lastChapter, isProxy: false, newManhwaId };
-          }
-
-          // Algumas obras aparecem na busca com `last_chapter`, mas o
-          // endpoint de detalhe responde 404. Nesse caso a busca já contém
-          // informação suficiente para o rastreamento.
-          const searchResults = await searchComickAny(
-            manhwaId.replace(/[-_]+/g, " "),
-          ).catch((): Awaited<ReturnType<typeof searchComickAny>> => []);
-          const match = searchResults.find((item) =>
-            [item.title, ...(item.md_titles ?? []).map((entry) => entry.title)]
-              .some((name) => name && likelySameTitle(name, manhwaId)),
-          );
-          if (match?.last_chapter != null) {
-            return {
-              value: match.last_chapter,
-              isProxy: false,
-              newManhwaId: match.slug && match.slug !== manhwaId ? match.slug : undefined,
-            };
-          }
-
-          recordSourceError(source, manhwaId, "http_404", 404);
-          return fetchError("http_404", 404);
-        }
-        if (res.status === 403 || res.status === 429) {
-          blockComick(manhwaId, res.status);
-          const kind = classifyHttpStatus(res.status);
-          recordSourceError(source, manhwaId, kind, res.status);
-          return fetchError(kind, res.status);
-        }
-        // Para outros erros HTTP (como 5xx), tenta o endpoint de busca como
-        // fallback interno do Comick antes de desistir. 403/429 entram em
-        // cooldown acima para não insistir enquanto a proteção está ativa.
-        logger.debug({ manhwaId, httpStatus: res.status }, "Comick /comic/{slug} bloqueado — tentando /v1.0/search");
-        try {
-          const searchRes = await fetchComick(
-            `${COMICK_API_BASE}/v1.0/search?${new URLSearchParams({ q: manhwaId, limit: "10" })}`,
-          );
-          if (searchRes.ok) {
-            const items = parseComickJson<
-              Array<{ slug?: string; last_chapter?: number | null }>
-            >(searchRes);
-            const match = items.find((item) => item.slug === manhwaId);
-            if (match && match.last_chapter != null) {
-              logger.debug({ manhwaId, last_chapter: match.last_chapter }, "Comick search fallback bem-sucedido");
-              return { value: match.last_chapter, isProxy: false };
-            }
-          }
-        } catch {
-          // Search também falhou — segue para o erro original
-        }
-        const kind = classifyHttpStatus(res.status);
-        recordSourceError(source, manhwaId, kind, res.status);
-        return fetchError(kind, res.status);
-      }
-      const json = parseComickJson<{
-        comic?: { last_chapter?: number | null };
-        last_chapter?: number | null;
-      }>(res);
-      const lastChapter = json.comic?.last_chapter ?? (json as { last_chapter?: number | null }).last_chapter ?? null;
-      if (lastChapter == null) return fetchError("no_data");
-      // Uma resposta bem-sucedida encerra a sequência de bloqueios.
-      comickBlockCount = 0;
-      return { value: lastChapter, isProxy: false };
-    } catch (err) {
-      const kind = classifyException(err);
-      recordSourceError(source, manhwaId, kind);
-      return fetchError(kind);
-    }
-  }
-
-  if (source === "mangaupdates") {
-    try {
-      const token = await getMangaUpdatesSessionToken();
-
-      // O endpoint de detalhes funciona publicamente para muitas obras. As
-      // credenciais melhoram a consistência, mas a ausência delas não deve
-      // transformar a fonte inteira em "sem dados".
-      const requestSeries = async (sessionToken: string | null) =>
-        fetch(`https://api.mangaupdates.com/v1/series/${encodeURIComponent(manhwaId)}`, {
-          headers: {
-            Accept: "application/json",
-            ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
-          },
-          signal: AbortSignal.timeout(8000),
-        });
-
-      let res = await requestSeries(token);
-      if (res.status === 401) {
-        const refreshedToken = await getMangaUpdatesSessionToken(true);
-        if (!refreshedToken) {
-          const kind = classifyHttpStatus(res.status);
-          recordSourceError(source, manhwaId, kind, res.status);
-          return fetchError(kind, res.status);
-        }
-        res = await requestSeries(refreshedToken);
-      }
-      if (!res.ok) {
-        const kind = classifyHttpStatus(res.status);
-        recordSourceError(source, manhwaId, kind, res.status);
-        return fetchError(kind, res.status);
-      }
-
-      const series = (await res.json()) as {
-        latest_chapter?: number | string | null;
-        status?: string | null;
-      };
-      const latestChapter = normalizeChapterValue(series.latest_chapter);
-      const statusChapter = parseMangaUpdatesStatusChapter(series.status);
-      const chapter = Math.max(latestChapter ?? 0, statusChapter ?? 0);
-
-      if (chapter <= 0) return fetchError("no_data");
-      return { value: chapter, isProxy: false };
-    } catch (err) {
-      const kind = classifyException(err);
-      recordSourceError(source, manhwaId, kind);
-      return fetchError(kind);
-    }
-  }
-
-  if (source === "jikan") {
-    try {
-      await new Promise((r) => setTimeout(r, 400));
-      const res = await fetch(`https://api.jikan.moe/v4/manga/${manhwaId}`, {
-        headers: { Accept: "application/json" },
-        signal: AbortSignal.timeout(8000),
-      });
-      if (!res.ok) {
-        const kind = classifyHttpStatus(res.status);
-        recordSourceError(source, manhwaId, kind, res.status);
-        return fetchError(kind, res.status);
-      }
-      const json = (await res.json()) as { data?: { chapters?: number | null } };
-      const chapters = json.data?.chapters;
-      if (chapters == null) return fetchError("no_data");
-      return { value: chapters, isProxy: false };
-    } catch (err) {
-      const kind = classifyException(err);
-      recordSourceError(source, manhwaId, kind);
-      return fetchError(kind);
-    }
-  }
-
-  if (source === "vndb") {
-    try {
-      const res = await fetch("https://api.vndb.org/kana/release", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          filters: ["vn", "=", ["id", "=", manhwaId]],
-          fields: "id",
-          results: 100,
-        }),
-        signal: AbortSignal.timeout(8000),
-      });
-      if (!res.ok) {
-        const kind = classifyHttpStatus(res.status);
-        recordSourceError(source, manhwaId, kind, res.status);
-        return fetchError(kind, res.status);
-      }
-      const json = (await res.json()) as { count?: number; results?: unknown[] };
-      const count = json.count ?? json.results?.length ?? null;
-      if (count == null) return fetchError("no_data");
-      return { value: count, isProxy: false };
-    } catch (err) {
-      const kind = classifyException(err);
-      recordSourceError(source, manhwaId, kind);
-      return fetchError(kind);
-    }
-  }
-
-  if (source === "erogamescape") {
+ if (source === "erogamescape") {
     // Rastreia via data de última atualização (最終更新日) — timestamp como proxy
     const ts = await getErogamescapeLastUpdated(manhwaId);
     if (ts === null) return fetchError("no_data");
@@ -1104,6 +312,7 @@ async function fetchWithFallback(
       selected: false,
       errorKind: isFetchError(rawPrimary) ? rawPrimary.kind : (primary == null ? "no_data" : undefined),
       httpStatus: isFetchError(rawPrimary) ? rawPrimary.httpStatus : undefined,
+      details: isFetchError(rawPrimary) ? rawPrimary.details : undefined,
     });
     if (primary && !primary.isProxy && !verifyAllSources) {
       attempts[0]!.selected = true;
@@ -1122,6 +331,7 @@ async function fetchWithFallback(
         selected: false,
         errorKind: isFetchError(rawFetched) ? rawFetched.kind : (fetched == null ? "no_data" : undefined),
         httpStatus: isFetchError(rawFetched) ? rawFetched.httpStatus : undefined,
+          details: isFetchError(rawFetched) ? rawFetched.details : undefined,
       });
       if (fetched && !fetched.isProxy) {
         successful.push({ source: candidate.source, fetched });
@@ -1191,6 +401,7 @@ async function fetchWithFallback(
       fetched,
       errorKind: isFetchError(raw) ? raw.kind : undefined,
       httpStatus: isFetchError(raw) ? raw.httpStatus : undefined,
+      details: isFetchError(raw) ? raw.details : undefined,
     };
   });
 
@@ -1248,6 +459,7 @@ async function fetchWithFallback(
       fetched,
       errorKind: isFetchError(raw) ? raw.kind : undefined,
       httpStatus: isFetchError(raw) ? raw.httpStatus : undefined,
+      details: isFetchError(raw) ? raw.details : undefined,
     };
   })();
 
@@ -1260,7 +472,7 @@ async function fetchWithFallback(
       // Exceção inesperada na tarefa — não bloqueia as outras fontes
       continue;
     }
-    const { source, fetched, errorKind, httpStatus } = result.value;
+    const { source, fetched, errorKind, httpStatus, details } = result.value;
     // Uma fonte sem ID aplicável à obra não foi consultada. Não a exiba como
     // falha no diagnóstico: o comando administrativo usa ❌ para tentativas
     // reais sem dados, e não para fontes deliberadamente ignoradas.
@@ -1272,6 +484,7 @@ async function fetchWithFallback(
       selected: false,
       errorKind: errorKind ?? (fetched == null ? "no_data" : undefined),
       httpStatus,
+      details,
     });
     if (fetched && !fetched.isProxy) {
       successful.push({ source, fetched });
@@ -1372,9 +585,8 @@ async function sendNotification(
       throw new Error("Canal de notificação não é enviável");
     }
 
-    const isAnime = source === "anilist-anime";
-    const unidade = isAnime ? "episódio(s)" : "capítulo(s)";
-    const PREFIX = `📬 Novo(s) ${isAnime ? "Episódio(s)" : "Capítulo(s)"}: `;
+    const identity = getWorkIdentity(source);
+    const PREFIX = `${identity.icon} Novo ${identity.unit}: `;
 
     const safeTitle = title.slice(0, 256 - PREFIX.length);
 
@@ -1382,29 +594,31 @@ async function sendNotification(
     let descBody: string;
     if (isProxy) {
       descBody =
-        `🆕 Novos conteúdos detectados!\n\n` +
-        `🔎 **Buscar nos sites BR:**\n${buildScanLinksExternal(title)}`;
+        `✨ O radar encontrou uma nova atualização para esta obra.\n\n` +
+        `🔎 **Encontrar onde ler:**\n${buildScanLinksExternal(title)}`;
     } else {
       const newCount = Math.floor(newChapters);
       const oldCount = oldChapters != null ? Math.floor(oldChapters) : 0;
       const diff = newCount - oldCount;
-      const unidadeLabel = isAnime ? "Episódio" : "Capítulo";
       const pad = (n: number) => String(n).padStart(3, "0");
       const progressao = oldCount > 0
         ? `**${pad(oldCount)} → ${pad(newCount)}**`
         : `**${pad(newCount)}**`;
       descBody =
-        `📖 ${unidadeLabel} ${progressao}` +
-        (diff > 1 ? ` *(+${diff} novos)*` : "") +
-        `\n\n🔎 **Buscar nos sites BR:**\n${buildScanLinksExternal(title)}`;
+        `📖 **${identity.unit[0]?.toUpperCase()}${identity.unit.slice(1)} ${progressao}**` +
+        (diff > 1 ? `\n✨ **+${diff} novos**` : "") +
+        `\n\n🔎 **Encontrar onde ler:**\n${buildScanLinksExternal(title)}`;
     }
 
-    const embed = new EmbedBuilder()
+    const embed = createPanelWatchEmbed(identity.color)
       .setTitle(`${PREFIX}${safeTitle}`)
       .setURL(siteUrl || null)
-      .setColor(0x2ecc71)
       .setDescription(descBody.slice(0, 4096))
-      .setFooter({ text: "Notificação automática • Bot de Manhwa" });
+      .addFields(
+        { name: "Tipo", value: `${identity.icon} ${identity.label}`, inline: true },
+        { name: "Origem", value: "Radar automático", inline: true },
+      );
+    setPanelWatchFooter(embed, "Novo lançamento • Atualização automática");
 
     if (coverUrl) embed.setThumbnail(coverUrl);
 
@@ -1485,13 +699,12 @@ async function sendMetadataNotification(
       };
     });
 
-    const embed = new EmbedBuilder()
-      .setTitle(`📝 Alteração na página: ${title}`.slice(0, 256))
+    const embed = createPanelWatchEmbed(PANEL_WATCH_COLORS.status)
+      .setTitle(`📝 Atualização de catálogo • ${title}`.slice(0, 256))
       .setURL(siteUrl || null)
-      .setColor(0x3498db)
-      .setDescription("A página deste título no MyAnimeList foi atualizada.")
+      .setDescription("O radar detectou uma mudança nos dados desta obra.")
       .addFields(fields)
-      .setFooter({ text: "Alteração de página • MyAnimeList" });
+    setPanelWatchFooter(embed, "Alteração de catálogo");
 
     if (coverUrl) embed.setThumbnail(coverUrl);
     await channel.send({ embeds: [embed], allowedMentions: { parse: [] } });
@@ -1535,6 +748,7 @@ async function sendStatusChangeNotification(
   coverUrl: string | null,
   mentions: string[],
   kind: "hiatus" | "return",
+  source?: string,
   discordGuildId?: string | null,
 ): Promise<boolean> {
   try {
@@ -1551,26 +765,24 @@ async function sendStatusChangeNotification(
     ).getHours();
     const isSilent = hourBrasilia >= 22 || hourBrasilia < 7;
 
+    const identity = getWorkIdentity(source);
     const embed =
       kind === "hiatus"
-        ? new EmbedBuilder()
-            .setTitle(`⏸️ Em hiato: ${title}`.slice(0, 256))
+        ? createPanelWatchEmbed(PANEL_WATCH_COLORS.warning)
+            .setTitle(`⏸️ ${title} entrou em hiato`.slice(0, 256))
             .setURL(siteUrl || null)
-            .setColor(0xe67e22)
             .setDescription(
-              "Este título entrou em **hiato** no MyAnimeList.\n" +
-              "Novas notificações serão enviadas quando a publicação retomar."
+              `${identity.icon} Esta obra entrou em **hiato**.\n` +
+              "O radar volta a avisar quando a publicação retomar."
             )
-            .setFooter({ text: "Status atualizado • MyAnimeList" })
-        : new EmbedBuilder()
-            .setTitle(`▶️ De volta: ${title}`.slice(0, 256))
+        : createPanelWatchEmbed(PANEL_WATCH_COLORS.success)
+            .setTitle(`▶️ ${title} voltou a publicar`.slice(0, 256))
             .setURL(siteUrl || null)
-            .setColor(0x2ecc71)
             .setDescription(
-              "Este título **voltou do hiato** e retomou a publicação!\n" +
-              "Você será notificado normalmente quando saírem novos capítulos."
+              `${identity.icon} Esta obra **voltou do hiato**!\n` +
+              "O radar retomará os avisos de novos lançamentos."
             )
-            .setFooter({ text: "Status atualizado • MyAnimeList" });
+    setPanelWatchFooter(embed, `Status da obra • ${identity.label}`);
 
     if (coverUrl) embed.setThumbnail(coverUrl);
 
@@ -1628,15 +840,15 @@ async function sendFinishedNotification(
     ).getHours();
     const isSilent = hourBrasilia >= 22 || hourBrasilia < 7;
 
-    const embed = new EmbedBuilder()
-      .setTitle(`🏁 Obra finalizada: ${title}`.slice(0, 256))
+    const identity = getWorkIdentity();
+    const embed = createPanelWatchEmbed(PANEL_WATCH_COLORS.finished)
+      .setTitle(`🏁 ${title} foi finalizada`.slice(0, 256))
       .setURL(siteUrl || null)
-      .setColor(0x9b59b6)
       .setDescription(
-        "Esta obra foi marcada como **finalizada** no MyAnimeList.\n" +
-        "Todos os capítulos já estão disponíveis!"
+        `${identity.icon} Esta obra foi marcada como **finalizada**.\n` +
+        "O radar não enviará novos avisos de publicação."
       )
-      .setFooter({ text: "Status atualizado • MyAnimeList" });
+    setPanelWatchFooter(embed, "Obra finalizada");
 
     if (coverUrl) embed.setThumbnail(coverUrl);
 
@@ -1792,10 +1004,17 @@ async function runCheckLocked(
               const subscribers = await db
                 .select({ discordUserId: assinaturasTable.discordUserId })
                 .from(assinaturasTable)
+                .leftJoin(
+                  releasePreferencesTable,
+                  eq(releasePreferencesTable.discordUserId, assinaturasTable.discordUserId),
+                )
                 .where(
                   and(
                     eq(assinaturasTable.manhwaId, m.manhwaId),
                     eq(assinaturasTable.guildId, canal.guildId),
+                    sql`COALESCE(${releasePreferencesTable.notificationsEnabled}, true) = true`,
+                    sql`COALESCE(${releasePreferencesTable.digestMode}, 'imediato') = 'imediato'`,
+                    sql`(${assinaturasTable.adult} = false OR COALESCE(${releasePreferencesTable.adultEnabled}, true) = true)`,
                   ),
                 );
               // Não envia embed para guilds sem assinantes deste título
@@ -1914,15 +1133,22 @@ async function runCheckLocked(
               const subscribers = await db
                 .select({ discordUserId: assinaturasTable.discordUserId })
                 .from(assinaturasTable)
+                .leftJoin(
+                  releasePreferencesTable,
+                  eq(releasePreferencesTable.discordUserId, assinaturasTable.discordUserId),
+                )
                 .where(and(
                   eq(assinaturasTable.manhwaId, m.manhwaId),
                   eq(assinaturasTable.guildId, canal.guildId),
+                  sql`COALESCE(${releasePreferencesTable.notificationsEnabled}, true) = true`,
+                  sql`COALESCE(${releasePreferencesTable.digestMode}, 'imediato') = 'imediato'`,
+                  sql`(${assinaturasTable.adult} = false OR COALESCE(${releasePreferencesTable.adultEnabled}, true) = true)`,
                 ));
               if (!subscribers.length) continue;
               const mentions = [...new Set(subscribers.map((s) => `<@${s.discordUserId}>`))];
               const sent = await sendStatusChangeNotification(
                 client, canal.channelId, m.title, m.siteUrl, m.coverUrl ?? null, mentions, kind,
-                canal.guildId,
+                m.source, canal.guildId,
               );
               if (sent) summary.notificationsSent++;
             }
@@ -1940,10 +1166,17 @@ async function runCheckLocked(
               const subscribers = await db
                 .select({ discordUserId: assinaturasTable.discordUserId })
                 .from(assinaturasTable)
+                .leftJoin(
+                  releasePreferencesTable,
+                  eq(releasePreferencesTable.discordUserId, assinaturasTable.discordUserId),
+                )
                 .where(
                   and(
                     eq(assinaturasTable.manhwaId, m.manhwaId),
                     eq(assinaturasTable.guildId, canal.guildId),
+                    sql`COALESCE(${releasePreferencesTable.notificationsEnabled}, true) = true`,
+                    sql`COALESCE(${releasePreferencesTable.digestMode}, 'imediato') = 'imediato'`,
+                    sql`(${assinaturasTable.adult} = false OR COALESCE(${releasePreferencesTable.adultEnabled}, true) = true)`,
                   ),
                 );
               if (!subscribers.length) continue;
@@ -2098,10 +1331,17 @@ async function runCheckLocked(
             const subscribers = await db
               .select({ discordUserId: assinaturasTable.discordUserId })
               .from(assinaturasTable)
+              .leftJoin(
+                releasePreferencesTable,
+                eq(releasePreferencesTable.discordUserId, assinaturasTable.discordUserId),
+              )
               .where(
                 and(
                   eq(assinaturasTable.manhwaId, m.manhwaId),
                   eq(assinaturasTable.guildId, canal.guildId),
+                  sql`COALESCE(${releasePreferencesTable.notificationsEnabled}, true) = true`,
+                  sql`COALESCE(${releasePreferencesTable.digestMode}, 'imediato') = 'imediato'`,
+                  sql`(${assinaturasTable.adult} = false OR COALESCE(${releasePreferencesTable.adultEnabled}, true) = true)`,
                 ),
               );
             // Não envia embed para guilds sem assinantes deste título
@@ -2309,12 +1549,10 @@ export async function runWeeklySummary(client: Client): Promise<void> {
       );
       if (!channel) continue;
 
-      const embed = new EmbedBuilder()
-        .setTitle("📅 Resumo semanal — Atualizações da semana")
-        .setColor(0x5865f2)
+      const embed = createPanelWatchEmbed(PANEL_WATCH_COLORS.primary)
+        .setTitle("🗓️ Resumo semanal · Radar de leitura")
         .setDescription(description)
-        .setFooter({ text: "Capítulos no formato: início da semana → fim da semana" })
-        .setTimestamp();
+      setPanelWatchFooter(embed, "Resumo semanal • Início → fim da semana");
 
       await channel.send({ embeds: [embed], allowedMentions: { parse: [] } });
     } catch (err) {
@@ -2394,7 +1632,17 @@ export function startNotificacaoService(client: Client) {
     }
     verificationInProgress = true;
     try {
-      await runCheck(client);
+      const summary = await runCheck(client, { verifyAllSources: true });
+      logger.info(
+        {
+          titlesChecked: summary.titlesChecked,
+          successfulSources: summary.successfulSources,
+          sourcesWithoutData: summary.sourcesWithoutData,
+          fallbackUsed: summary.fallbackUsed,
+          notificationsSent: summary.notificationsSent,
+        },
+        "Verificação automática concluída",
+      );
     } catch (err) {
       logger.error({ err }, "Erro no serviço de notificações");
       void recordBotError({

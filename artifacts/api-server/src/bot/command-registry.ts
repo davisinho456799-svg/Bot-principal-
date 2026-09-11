@@ -17,6 +17,7 @@ import * as topCommand from "./commands/top.js";
 import * as recomendarCommand from "./commands/recomendar.js";
 import * as aleatorioCommand from "./commands/aleatorio.js";
 import * as lancamentosCommand from "./commands/lancamentos.js";
+import * as centralCommand from "./commands/central.js";
 import * as compararCommand from "./commands/comparar.js";
 import * as notificarCommand from "./commands/notificar.js";
 import * as rankingCommand from "./commands/ranking.js";
@@ -56,6 +57,7 @@ const commandModules: BotCommand[] = [
   ajudaCommand,
   aleatorioCommand,
   lancamentosCommand,
+  centralCommand,
   favoritosCommand,
   compararCommand,
   autorCommand,

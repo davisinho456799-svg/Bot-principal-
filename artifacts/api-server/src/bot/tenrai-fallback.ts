@@ -1,7 +1,7 @@
 /**
  * Adaptadores leves para a API Tenrai (compatível com os dados públicos do MAL).
- * AniList continua sendo a fonte primária; estes métodos são usados quando ele
- * está indisponível ou retorna uma resposta vazia.
+ * O Tenrai é usado pelos fluxos que precisam de um catálogo alternativo sem
+ * depender diretamente do AniList.
  */
 
 const TENRAI_API = "https://api.tenrai.org/v1";

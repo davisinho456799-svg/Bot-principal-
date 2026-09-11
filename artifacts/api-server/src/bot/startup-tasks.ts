@@ -29,6 +29,16 @@ export async function runBotStartupTasks(readyClient: Client<true>) {
       )
     `);
     logger.info("Migração automática: notificacao_eventos verificada");
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS release_preferences (
+        discord_user_id TEXT PRIMARY KEY,
+        notifications_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        adult_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+        digest_mode TEXT NOT NULL DEFAULT 'imediato',
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `);
+    logger.info("Migração automática: release_preferences verificada");
   } catch (err) {
     logger.error({ err }, "Falha na migração automática — bot continuará normalmente");
   }

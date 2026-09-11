@@ -31,12 +31,17 @@ export interface FetchError {
   readonly _err: true;
   kind: SourceErrorKind;
   httpStatus?: number;
+  details?: string;
 }
 
 // ─── Factories e guards ───────────────────────────────────────────────────────
 
-export function fetchError(kind: SourceErrorKind, httpStatus?: number): FetchError {
-  return { _err: true, kind, httpStatus };
+export function fetchError(
+  kind: SourceErrorKind,
+  httpStatus?: number,
+  details?: string,
+): FetchError {
+  return { _err: true, kind, httpStatus, details };
 }
 
 export function isFetchError(r: FetchResult | FetchError | null): r is FetchError {

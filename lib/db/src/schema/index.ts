@@ -2,6 +2,7 @@ export * from "./bot-config";
 import { pgTable, text, serial, timestamp, real, json, unique } from "drizzle-orm/pg-core";
 export * from "./errorLogs";
 export * from "./subscriptions";
+export * from "./release-preferences";
 export * from "./malSnapshots";
 
 // ─── Status de leitura ───────────────────────────────────────────────────────
