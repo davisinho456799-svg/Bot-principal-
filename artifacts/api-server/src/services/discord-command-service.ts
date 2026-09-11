@@ -1,8 +1,5 @@
 import {
   ChannelType,
-  Client,
-  Events,
-  GatewayIntentBits,
   PermissionFlagsBits,
   SlashCommandBuilder,
   type ChatInputCommandInteraction,
@@ -90,8 +87,6 @@ export const monitorCommandDefinition = new SlashCommandBuilder()
     )
     .toJSON();
 
-const commandDefinitions = [monitorCommandDefinition];
-
 type Platform = "lezhin" | "toomics" | "toptoon";
 
 function detectPlatform(link: string): Platform | null {
@@ -101,7 +96,6 @@ function detectPlatform(link: string): Platform | null {
   if (hostname.includes("toptoon")) return "toptoon";
   return null;
 }
-
 function titleFromUrl(link: string) {
   const url = new URL(link);
   const slug = decodeURIComponent(url.pathname)
@@ -128,7 +122,6 @@ async function replyError(interaction: ChatInputCommandInteraction, message: str
     await interaction.reply({ content: `❌ ${message}`, ephemeral: true });
   }
 }
-
 async function handleAdd(interaction: ChatInputCommandInteraction) {
   const rawLink = interaction.options.getString("link", true).trim();
   const requestedTitle = interaction.options.getString("nome")?.trim();
@@ -352,42 +345,4 @@ export async function executeManhwaCommand(interaction: ChatInputCommandInteract
       content: `⚠️ **Erros atuais do monitor (${failedWorks.length})**\n${lines.join("\n")}`.slice(0, 1900),
     });
   }
-}
-
-async function registerCommands(client: Client<true>) {
-  const configuredGuildId = process.env.DISCORD_GUILD_ID;
-  const guilds = configuredGuildId
-    ? [client.guilds.cache.get(configuredGuildId)].filter(Boolean)
-    : [...client.guilds.cache.values()];
-
-  await Promise.all(guilds.map((guild) => guild!.commands.set(commandDefinitions)));
-  logger.info(
-    { guildCount: guilds.length, configuredGuildId: configuredGuildId ?? null },
-    "Discord monitor commands registered",
-  );
-}
-
-export function startDiscordCommandBot() {
-  const token = process.env.DISCORD_BOT_TOKEN;
-  if (!token) {
-    logger.warn("DISCORD_BOT_TOKEN is not configured; Discord commands are disabled");
-    return;
-  }
-
-  const client = new Client({ intents: [GatewayIntentBits.Guilds] });
-  client.once(Events.ClientReady, (readyClient) => {
-    void registerCommands(readyClient).catch((error) => {
-      logger.error({ err: error }, "Discord command registration failed");
-    });
-  });
-  client.on(Events.InteractionCreate, (interaction) => {
-    if (!interaction.isChatInputCommand() || interaction.commandName !== "monitor") return;
-    void executeManhwaCommand(interaction).catch((error) => {
-      logger.error({ err: error }, "Discord monitor command failed");
-      void replyError(interaction, "Não foi possível concluir o comando agora.");
-    });
-  });
-  void client.login(token).catch((error) => {
-    logger.error({ err: error }, "Discord command bot login failed");
-  });
 }

@@ -7,38 +7,7 @@ import {
 } from "discord.js";
 import { logger } from "../lib/logger.js";
 import { deployCommands } from "./deploy-commands.js";
-import * as ajudaCommand from "./commands/ajuda.js";
-import * as autorCommand from "./commands/autor.js";
-import * as animeCommand from "./commands/anime.js";
-import * as mangaCommand from "./commands/manga.js";
-import * as buscarCommand from "./commands/buscar.js";
-import * as listaCommand from "./commands/lista.js";
-import * as favoritosCommand from "./commands/favoritos.js";
-import * as noticiasCommand from "./commands/noticias.js";
-import * as temporadaCommand from "./commands/temporada.js";
-import * as statusCommand from "./commands/status.js";
-import * as searchCommand from "./commands/search.js";
-import * as topCommand from "./commands/top.js";
-import * as recomendarCommand from "./commands/recomendar.js";
-import * as aleatorioCommand from "./commands/aleatorio.js";
-import * as lancamentosCommand from "./commands/lancamentos.js";
-import * as compararCommand from "./commands/comparar.js";
-import * as notificarCommand from "./commands/notificar.js";
-import * as rankingCommand from "./commands/ranking.js";
-import * as perfilCommand from "./commands/perfil.js";
-import * as similarCommand from "./commands/similar.js";
-import * as identificarCommand from "./commands/identificar.js";
-import * as temasCommand from "./commands/temas.js";
-import * as filmeCommand from "./commands/filme.js";
-import * as calendarioCommand from "./commands/calendario.js";
-import * as calendario18Command from "./commands/calendario18.js";
-import { configurarCommand, atualizarCommand, statusCommand as temporadaStatusCommand } from "./season-management.js";
-import * as historicoCommand from "./commands/historico.js";
-import * as verificarCommand from "./commands/verificar.js";
-import * as assinarCommand from "./commands/assinar.js";
-import * as assinar18Command from "./commands/assinar18.js";
-import * as adminCommand from "./commands/admin.js";
-import * as limparCommand from "./commands/limpar.js";
+import { commandRegistry as commands } from "./command-registry.js";
 import { startNotificacaoService, startWeeklyService } from "./notificacao-service.js";
 import { cleanupDuplicateAliases } from "./unified.js";
 import { logUsage } from "./usage-logger.js";
@@ -48,57 +17,9 @@ import { and, eq, sql } from "drizzle-orm";
 import type { StatusLeitura } from "@workspace/db";
 import { recordBotError } from "./error-log.js";
 import {
-  executeManhwaCommand,
-  monitorCommandDefinition,
-} from "../services/discord-command-service.js";
-import {
   config as getDiscordConfig,
   getConfiguredSeasonPage,
 } from "../routes/discord.js";
-
-type Command = {
-  data: { name: string };
-  execute: (interaction: ChatInputCommandInteraction) => Promise<void>;
-  autocomplete?: (interaction: AutocompleteInteraction) => Promise<void>;
-};
-
-const commands = new Map<string, Command>([
-  [searchCommand.data.name, searchCommand],
-  [topCommand.data.name, topCommand],
-  [recomendarCommand.data.name, recomendarCommand],
-  [ajudaCommand.data.name, ajudaCommand],
-  [aleatorioCommand.data.name, aleatorioCommand],
-  [lancamentosCommand.data.name, lancamentosCommand],
-  [favoritosCommand.data.name, favoritosCommand],
-  [compararCommand.data.name, compararCommand],
-  [autorCommand.data.name, autorCommand],
-  [notificarCommand.data.name, notificarCommand],
-  [listaCommand.data.name, listaCommand],
-  [rankingCommand.data.name, rankingCommand],
-  [perfilCommand.data.name, perfilCommand],
-  [similarCommand.data.name, similarCommand],
-  [buscarCommand.data.name, buscarCommand],
-  [animeCommand.data.name, animeCommand],
-  [noticiasCommand.data.name, noticiasCommand],
-  [identificarCommand.data.name, identificarCommand],
-  [temasCommand.data.name, temasCommand],
-  [filmeCommand.data.name, filmeCommand],
-  [mangaCommand.data.name, mangaCommand],
-  [calendarioCommand.data.name, calendarioCommand],
-  [calendario18Command.data.name, calendario18Command],
-  [temporadaCommand.data.name, temporadaCommand],
-  [configurarCommand.data.name, configurarCommand],
-  [atualizarCommand.data.name, atualizarCommand],
-  [temporadaStatusCommand.data.name, temporadaStatusCommand],
-  [statusCommand.data.name, statusCommand],
-  [historicoCommand.data.name, historicoCommand],
-  [verificarCommand.data.name, verificarCommand],
-  [assinarCommand.data.name, assinarCommand],
-  [assinar18Command.data.name, assinar18Command],
-  [adminCommand.data.name, adminCommand],
-  [limparCommand.data.name, limparCommand],
-  [monitorCommandDefinition.name, { data: monitorCommandDefinition, execute: executeManhwaCommand }],
-]);
 
 export async function startBot() {
   const token =
