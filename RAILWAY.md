@@ -26,7 +26,7 @@ O Railway injeta `PORT` automaticamente. Não fixe esse valor nas variáveis.
 1. Crie um serviço a partir do repositório GitHub.
 2. Adicione um PostgreSQL ao projeto Railway.
 3. Cadastre as variáveis obrigatórias no serviço da aplicação.
-4. Use o `railway.json` da raiz para build, start e healthcheck.
+4. Use o `railway.json` da raiz para build, start e healthcheck; mantenha o serviço acompanhado da branch `bot`.
 5. Depois do primeiro deploy, aplique o schema do banco uma vez:
 
 ```bash
