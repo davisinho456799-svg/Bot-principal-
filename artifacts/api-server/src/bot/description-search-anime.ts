@@ -456,7 +456,7 @@ export function extractAnimeConcepts(ptBrDescription: string): AnimeConcepts {
 
 export interface AnimeDescriptionCandidate {
   id: string;
-  source: "anilist-anime" | "jikan" | "kitsu";
+  source: "anilist-anime" | "jikan" | "tenrai" | "kitsu";
   mainTitle: string;
   synonyms: string[];
   description: string | null;

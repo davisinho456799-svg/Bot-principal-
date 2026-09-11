@@ -1,3 +1,5 @@
+/// <reference lib="dom" />
+
 import {
   chromium,
   type Browser,
@@ -488,11 +490,11 @@ async function findRenderedChapters(
              "")
           : "";
 
-        // Schedule/status labels such as "Atualizado toda Sex" can carry a
-        // chapter-related attribute without being the visual card. A real
-        // card must contain media or have dimensions large enough to render
-        // the chapter metadata and thumbnail area.
-        if (!hasImage || !hasCardDimensions) continue;
+         // Schedule/status labels and internal episode links can carry a
+         // chapter-like number without being a visual release card. A
+         // candidate must have actual card media; otherwise it can produce a
+         // phantom chapter notification with no photo.
+         if (!hasImage || !hasCardDimensions) continue;
 
         // A platform chapter card is expected to have a marker, link, or
         // image. This rejects the page wrapper and promotional banners.
@@ -760,12 +762,13 @@ export async function openBrowserListing(
     const diagnostics = await page.evaluate(() => {
       const bodyText = (document.body?.innerText || "").replace(/\s+/g, " ").trim();
       const lowerText = bodyText.toLocaleLowerCase();
-      const signals = [
+      const signalEntries: Array<[name: string, present: boolean]> = [
         ["login", /login|sign in|entrar|conectar/.test(lowerText)],
         ["captcha", /captcha|recaptcha|verifique que eres humano|are you human/.test(lowerText)],
         ["cloudflare", /cloudflare|just a moment|checking your browser/.test(lowerText)],
         ["access-denied", /access denied|forbidden|acesso negado/.test(lowerText)],
-      ]
+      ];
+      const signals = signalEntries
         .filter(([, present]) => present)
         .map(([name]) => name);
       const visibleImageCount = Array.from(document.images).filter((image) => {

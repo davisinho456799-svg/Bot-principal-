@@ -294,7 +294,7 @@ export function tenraiAnimeToUnified(m: TenraiAnime): UnifiedResult {
     score: m.score != null ? Math.round(m.score * 10) : null,
     genres: genresOfTenrai(m),
     chapters: null,
-    status: m.status?.toLowerCase().includes("airing") ? "RELEASING" : m.status,
+    status: m.status?.toLowerCase().includes("airing") ? "RELEASING" : (m.status ?? null),
     siteUrl: m.url ?? `https://myanimelist.net/anime/${m.mal_id}`,
     year: null,
     ptBrUrl: null,

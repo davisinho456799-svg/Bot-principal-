@@ -173,7 +173,7 @@ function toTenraiDisplay(r: TenraiManga): MangaDisplay {
     score: null,
     genres: genresOfTenrai(r),
     chapters: r.chapters ?? null,
-    status: r.status?.toLowerCase().includes("publishing") ? "RELEASING" : r.status,
+    status: r.status?.toLowerCase().includes("publishing") ? "RELEASING" : (r.status ?? null),
     siteUrl: r.url ?? `https://myanimelist.net/manga/${r.mal_id}`,
     year: r.published?.from ? Number(r.published.from.slice(0, 4)) : null,
     provider: "Tenrai/MAL",
@@ -274,7 +274,7 @@ export async function execute(
     try {
       const manga = source === "tenrai"
         ? await getTenraiMangaById(Number(id)).then((item) => item ? toTenraiDisplay(item) : null)
-        : await getMangaDexById(id);
+        : await getMangaDexById(id).then((item) => item ? { ...item, provider: "MangaDex" as const } : null);
       if (!manga) {
         await interaction.editReply("❌ Não foi possível carregar os detalhes. Tente digitar o título manualmente.");
         return;
@@ -358,7 +358,7 @@ export async function execute(
         const [source, id] = sel.values[0]!.split(":");
         const manga = source === "tenrai"
           ? await getTenraiMangaById(Number(id)).then((item) => item ? toTenraiDisplay(item) : null)
-          : await getMangaDexById(id!);
+          : await getMangaDexById(id!).then((item) => item ? { ...item, provider: "MangaDex" as const } : null);
         if (!manga) {
           await interaction.editReply({ content: "❌ Erro ao carregar detalhes.", components: [] });
           return;

@@ -61,6 +61,10 @@ function isReleasedBeforePreviousCheck(
   previousCheckAt: Date | null,
 ): boolean {
   if (!chapter.releaseDate || !previousCheckAt) return false;
+
+  // Os sites normalmente informam apenas a data, não o horário. Comparar
+  // pelo início do dia evita que um capítulo publicado no mesmo dia da
+  // verificação seja descartado por causa do horário da rodada anterior.
   const previousCheckDate = previousCheckAt.toISOString().slice(0, 10);
   return chapter.releaseDate < previousCheckDate;
 }
@@ -72,6 +76,7 @@ function isReleasedBeforeMonitorCreation(
   if (!chapter.releaseDate) return false;
   return chapter.releaseDate < createdAt.toISOString().slice(0, 10);
 }
+
 async function migrateLegacyKeys(
   tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
   work: typeof monitoredWorksTable.$inferSelect,
@@ -322,7 +327,9 @@ async function postStrip(
     content: `${isTest ? "🧪 **TESTE** · " : ""}**${title}** · ${chapterSummary}${total > 1 ? ` · parte ${part}/${total}` : ""}`,
     allowed_mentions: { parse: [] },
   }));
-  const pngBlob = new Blob([png], { type: "image/png" });
+  const pngArrayBuffer = new ArrayBuffer(png.byteLength);
+  new Uint8Array(pngArrayBuffer).set(png);
+  const pngBlob = new Blob([pngArrayBuffer], { type: "image/png" });
   form.append("files[0]", pngBlob, `chapter-release-${isTest ? "test-" : ""}${Date.now()}-${part}.png`);
   const response = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
     method: "POST",
@@ -452,13 +459,13 @@ export async function runMonitor() {
         !seenKeys.has(candidate.key) &&
         !seenNumbers.has(chapterNumberIdentity(candidate.number)),
       );
-      const knownChapterNumbers = existing
+      const existingNumbers = existing
         .map((chapter) => numericChapterNumber(chapter.number))
         .filter((number): number is number => number !== null);
-      const highestKnownChapter = knownChapterNumbers.length ? Math.max(...knownChapterNumbers) : null;
+      const highestExisting = existingNumbers.length ? Math.max(...existingNumbers) : null;
       const isAtOrBelowKnownChapter = (chapter: ChapterCandidate) => {
         const number = numericChapterNumber(chapter.number);
-        return highestKnownChapter !== null && number !== null && number <= highestKnownChapter;
+        return highestExisting !== null && number !== null && number <= highestExisting;
       };
       const historical = previouslyUnseen.filter((candidate) =>
         isHistoricalRelease(candidate, checkedAt) ||
@@ -476,13 +483,9 @@ export async function runMonitor() {
       // HTML fallback parsers do not have the card date. If a migration
       // suddenly exposes a large historical range, do not publish the whole
       // backlog; record the older entries and only publish the newest one.
-      const existingNumbers = existing
-        .map((chapter) => numericChapterNumber(chapter.number))
-        .filter((number): number is number => number !== null);
       const freshNumbers = fresh
         .map((chapter) => numericChapterNumber(chapter.number))
         .filter((number): number is number => number !== null);
-      const highestExisting = existingNumbers.length ? Math.max(...existingNumbers) : null;
       const highestFresh = freshNumbers.length ? Math.max(...freshNumbers) : null;
       if (
         fresh.length >= 5 &&
@@ -591,6 +594,7 @@ export async function runMonitor() {
           directByKey.set(chapter.key, group);
         }
       }
+
       const groups: Array<{ chapters: ChapterCandidate[]; image?: Buffer }> = [];
       const emittedDirectKeys = new Set<string>();
       let fallbackChapters: ChapterCandidate[] = [];
@@ -600,12 +604,22 @@ export async function runMonitor() {
         }
         fallbackChapters = [];
       };
+
+      // A browser page can expose only part of a long listing at capture time.
+      // Do not discard the remaining fresh chapters just because one direct
+      // capture succeeded; send uncovered chapters through the normal 5-item
+      // fallback batches.
       if (directByKey.size < fresh.length) {
         logger.warn(
-          { workId: work.id, freshCount: fresh.length, capturedCount: directByKey.size },
+          {
+            workId: work.id,
+            freshCount: fresh.length,
+            capturedCount: directByKey.size,
+          },
           "Captura do monitor ficou parcial — capítulos restantes irão para o fallback",
         );
       }
+
       for (const chapter of fresh) {
         const direct = directByKey.get(chapter.key);
         if (!direct) {
@@ -620,6 +634,7 @@ export async function runMonitor() {
         }
       }
       flushFallback();
+
       for (let index = 0; index < groups.length; index++) {
         const group = groups[index]!;
         await postStrip(

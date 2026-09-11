@@ -214,7 +214,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
       averageScore: item.score != null ? Math.round(item.score * 10) : null,
       genres: genresOfTenrai(item),
       chapters: item.chapters ?? null,
-      status: item.status?.toLowerCase().includes("publishing") ? "RELEASING" : item.status,
+      status: item.status?.toLowerCase().includes("publishing") ? "RELEASING" : (item.status ?? null),
       siteUrl: item.url ?? `https://myanimelist.net/manga/${item.mal_id}`,
       startDate: { year: item.published?.from ? Number(item.published.from.slice(0, 4)) : null },
       coverImage: { large: "", color: null },

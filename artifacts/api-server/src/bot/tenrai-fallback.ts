@@ -36,6 +36,7 @@ export interface TenraiManga {
   url?: string | null;
   score?: number | null;
   chapters?: number | null;
+  status?: string | null;
   synopsis?: string | null;
   genres?: TenraiGenre[];
   published?: { from?: string | null } | null;
