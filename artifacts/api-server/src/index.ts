@@ -1,10 +1,9 @@
 import app from "./app";
 import { logger } from "./lib/logger";
-import { pool, db } from "@workspace/db";
-import { monitorConfigTable } from "@workspace/db/schema";
-import { runMonitor } from "./services/monitor-service";
+import { pool } from "@workspace/db";
 import { startBot } from "./bot/index.js";
 import { startDiscordScheduler } from "./discord-scheduler.js";
+import { startMonitorScheduler } from "./services/monitor-scheduler.js";
 
 const rawPort = process.env["PORT"];
 
@@ -44,22 +43,8 @@ async function startApplication() {
       logger.error({ err: error }, "Falha ao iniciar o bot do Discord");
       process.exitCode = 1;
     });
-    void scheduleMonitor();
+    void startMonitorScheduler();
   });
-}
-
-async function scheduleMonitor() {
-  const [config] = await db.select().from(monitorConfigTable).limit(1);
-  const intervalMinutes = Math.max(5, config?.intervalMinutes ?? 30);
-  setTimeout(async () => {
-    try {
-      await runMonitor();
-    } catch (error) {
-      logger.error({ err: error }, "Scheduled monitor run failed");
-    } finally {
-      void scheduleMonitor();
-    }
-  }, intervalMinutes * 60_000);
 }
 
 void startApplication().catch((error) => {
