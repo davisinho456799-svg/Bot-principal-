@@ -57,21 +57,71 @@ interface AutocompleteOption { name: string; value: string }
 type MangaDisplay = MangaDexResult & { provider: "MangaDex" | "Tenrai/MAL" };
 const autocompleteCache = new Map<string, { results: AutocompleteOption[]; ts: number }>();
 const CACHE_TTL = 30_000;
+const AUTOCOMPLETE_SOURCE_TIMEOUT = 1_200;
+
+async function withAutocompleteTimeout<T>(
+  source: string,
+  promise: Promise<T>,
+  fallback: T,
+): Promise<T> {
+  const startedAt = Date.now();
+  let timedOut = false;
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((resolve) => {
+        timer = setTimeout(() => {
+          timedOut = true;
+          resolve(fallback);
+        }, AUTOCOMPLETE_SOURCE_TIMEOUT);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+    logger.info({
+      source,
+      durationMs: Date.now() - startedAt,
+      timedOut,
+    }, "Fonte de autocomplete finalizada");
+  }
+}
+
+async function respondAutocomplete(
+  interaction: AutocompleteInteraction,
+  results: AutocompleteOption[],
+): Promise<void> {
+  const startedAt = Date.now();
+  try {
+    await interaction.respond(results);
+    logger.info({
+      command: "manga",
+      optionCount: results.length,
+      respondDurationMs: Date.now() - startedAt,
+    }, "Resposta de autocomplete enviada");
+  } catch (err) {
+    logger.warn({ err, command: "manga" }, "Falha ao enviar resposta de autocomplete");
+    throw err;
+  }
+}
 
 export async function autocomplete(interaction: AutocompleteInteraction): Promise<void> {
   const focused = interaction.options.getFocused();
-  if (!focused || focused.length < 2) { await interaction.respond([]); return; }
+  if (!focused || focused.length < 2) {
+    await respondAutocomplete(interaction, []);
+    return;
+  }
 
   const cached = autocompleteCache.get(focused);
   if (cached && Date.now() - cached.ts < CACHE_TTL) {
-    await interaction.respond(cached.results);
+    await respondAutocomplete(interaction, cached.results);
     return;
   }
 
   try {
     const [mangaDexResult, tenraiResult] = await Promise.allSettled([
-      searchMangaDexJp(focused, 10),
-      searchTenraiManga(focused, "manga"),
+      withAutocompleteTimeout("mangadex", searchMangaDexJp(focused, 10), []),
+      withAutocompleteTimeout("tenrai", searchTenraiManga(focused, "manga"), []),
     ]);
     const options: AutocompleteOption[] = [];
     if (mangaDexResult.status === "fulfilled") {
@@ -90,9 +140,9 @@ export async function autocomplete(interaction: AutocompleteInteraction): Promis
       all.findIndex((item) => item.name.toLowerCase() === option.name.toLowerCase()) === index,
     ).slice(0, 25);
     autocompleteCache.set(focused, { results: deduped, ts: Date.now() });
-    await interaction.respond(deduped);
+    await respondAutocomplete(interaction, deduped);
   } catch {
-    await interaction.respond([]);
+    await respondAutocomplete(interaction, []);
   }
 }
 

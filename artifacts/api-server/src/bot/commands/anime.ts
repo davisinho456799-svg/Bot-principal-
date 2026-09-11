@@ -58,6 +58,56 @@ export const data = new SlashCommandBuilder()
 interface AutocompleteOption { name: string; value: string }
 const autocompleteCache = new Map<string, { results: AutocompleteOption[]; ts: number }>();
 const CACHE_TTL = 30_000;
+// Discord invalida autocomplete após alguns segundos. Uma fonte lenta não
+// pode bloquear todas as outras nem fazer a interação expirar.
+const AUTOCOMPLETE_SOURCE_TIMEOUT = 1_200;
+
+async function withAutocompleteTimeout<T>(
+  source: string,
+  promise: Promise<T>,
+  fallback: T,
+): Promise<T> {
+  const startedAt = Date.now();
+  let timedOut = false;
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((resolve) => {
+        timer = setTimeout(() => {
+          timedOut = true;
+          resolve(fallback);
+        }, AUTOCOMPLETE_SOURCE_TIMEOUT);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+    logger.info({
+      source,
+      durationMs: Date.now() - startedAt,
+      timedOut,
+    }, "Fonte de autocomplete finalizada");
+  }
+}
+
+async function respondAutocomplete(
+  interaction: AutocompleteInteraction,
+  results: AutocompleteOption[],
+  source: "anime",
+): Promise<void> {
+  const startedAt = Date.now();
+  try {
+    await interaction.respond(results);
+    logger.info({
+      command: source,
+      optionCount: results.length,
+      respondDurationMs: Date.now() - startedAt,
+    }, "Resposta de autocomplete enviada");
+  } catch (err) {
+    logger.warn({ err, command: source }, "Falha ao enviar resposta de autocomplete");
+    throw err;
+  }
+}
 
 function autocompleteRelevance(query: string, title: string): number {
   const normalize = (value: string) =>
@@ -76,23 +126,23 @@ function autocompleteRelevance(query: string, title: string): number {
 export async function autocomplete(interaction: AutocompleteInteraction): Promise<void> {
   const focused = interaction.options.getFocused();
   if (!focused || focused.length < 2) {
-    await interaction.respond([]);
+    await respondAutocomplete(interaction, [], "anime");
     return;
   }
 
   const cached = autocompleteCache.get(focused);
   if (cached && Date.now() - cached.ts < CACHE_TTL) {
-    await interaction.respond(cached.results);
+    await respondAutocomplete(interaction, cached.results, "anime");
     return;
   }
 
   try {
     const [anilistResults, kitsuResults, anisearchResults, malResults, tenraiResults] = await Promise.allSettled([
-      searchAnime(focused),
-      searchKitsu(focused),
-      searchAniSearch(focused),
-      searchJikanAnimeAny(focused),
-      searchTenraiAnime(focused),
+      withAutocompleteTimeout("anilist", searchAnime(focused), []),
+      withAutocompleteTimeout("kitsu", searchKitsu(focused), []),
+      withAutocompleteTimeout("anisearch", searchAniSearch(focused), []),
+      withAutocompleteTimeout("jikan", searchJikanAnimeAny(focused), []),
+      withAutocompleteTimeout("tenrai", searchTenraiAnime(focused), []),
     ]);
 
     const seen = new Set<string>();
@@ -158,9 +208,9 @@ export async function autocomplete(interaction: AutocompleteInteraction): Promis
       .slice(0, 25)
       .map(({ option }) => option);
     autocompleteCache.set(focused, { results: top, ts: Date.now() });
-    await interaction.respond(top);
+    await respondAutocomplete(interaction, top, "anime");
   } catch {
-    await interaction.respond([]);
+    await respondAutocomplete(interaction, [], "anime");
   }
 }
 

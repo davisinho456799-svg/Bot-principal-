@@ -301,16 +301,28 @@ export async function startBot() {
     }
 
     if (interaction.isAutocomplete()) {
+      const receivedAt = Date.now();
       const command = commands.get(interaction.commandName);
+      logger.info({
+        command: interaction.commandName,
+        dispatchDelayMs: Math.max(0, receivedAt - interaction.createdTimestamp),
+      }, "Autocomplete recebido");
       if (command?.autocomplete) {
         try {
           await command.autocomplete(interaction);
-        } catch {
+        } catch (err) {
           // Autocomplete silently falha — nunca responder com erro visível
+          logger.warn({ err, command: interaction.commandName }, "Autocomplete falhou no despacho");
         }
       } else {
         await interaction.respond([]).catch(() => null);
       }
+      logger.info({
+        command: interaction.commandName,
+        handlerDurationMs: Date.now() - receivedAt,
+        totalSinceDiscordMs: Math.max(0, Date.now() - interaction.createdTimestamp),
+        responded: interaction.responded,
+      }, "Autocomplete finalizado");
       return;
     }
 
