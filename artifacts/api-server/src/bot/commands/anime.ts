@@ -59,6 +59,20 @@ interface AutocompleteOption { name: string; value: string }
 const autocompleteCache = new Map<string, { results: AutocompleteOption[]; ts: number }>();
 const CACHE_TTL = 30_000;
 
+function autocompleteRelevance(query: string, title: string): number {
+  const normalize = (value: string) =>
+    value.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+  const q = normalize(query);
+  const t = normalize(title.replace(/\s*·\s*Tenrai$/i, ""));
+  if (!q || !t) return 0;
+  if (q === t) return 1;
+  if (t.startsWith(q)) return 0.92;
+  if (t.includes(q)) return 0.78;
+  const words = q.split(/\s+/).filter((word) => word.length > 1);
+  const hits = words.filter((word) => t.includes(word)).length;
+  return words.length ? (hits / words.length) * 0.65 : 0;
+}
+
 export async function autocomplete(interaction: AutocompleteInteraction): Promise<void> {
   const focused = interaction.options.getFocused();
   if (!focused || focused.length < 2) {
@@ -134,7 +148,15 @@ export async function autocomplete(interaction: AutocompleteInteraction): Promis
       }
     }
 
-    const top = options.slice(0, 25);
+    const top = options
+      .map((option, index) => ({
+        option,
+        index,
+        relevance: autocompleteRelevance(focused, option.name),
+      }))
+      .sort((a, b) => b.relevance - a.relevance || a.index - b.index)
+      .slice(0, 25)
+      .map(({ option }) => option);
     autocompleteCache.set(focused, { results: top, ts: Date.now() });
     await interaction.respond(top);
   } catch {
