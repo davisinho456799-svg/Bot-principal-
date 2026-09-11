@@ -1,0 +1,38 @@
+FROM node:22-bookworm-slim AS builder
+
+WORKDIR /app
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+
+RUN corepack enable && corepack prepare pnpm@10.26.1 --activate
+
+COPY . .
+
+RUN test -f .railway/chapter-monitor-source.tgz.b64 \
+  && base64 -d .railway/chapter-monitor-source.tgz.b64 | tar -xzf - -C /app \
+  && rm -f .railway/chapter-monitor-source.tgz.b64
+
+RUN pnpm install --frozen-lockfile
+RUN pnpm run railway:build \
+  && test -f /app/artifacts/chapter-monitor/dist/public/index.html \
+  && test -f /app/artifacts/api-server/dist/index.mjs
+
+FROM node:22-bookworm-slim
+
+WORKDIR /app
+
+RUN corepack enable && corepack prepare pnpm@10.26.1 --activate
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends chromium \
+  && rm -rf /var/lib/apt/lists/*
+
+ENV NODE_ENV=production
+ENV SERVE_FRONTEND=true
+ENV PLAYWRIGHT_EXECUTABLE_PATH=/usr/bin/chromium
+
+COPY --from=builder /app/package.json ./package.json
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/artifacts/api-server/node_modules ./artifacts/api-server/node_modules
+COPY --from=builder /app/artifacts/api-server/dist ./artifacts/api-server/dist
+COPY --from=builder /app/artifacts/chapter-monitor/dist/public ./artifacts/chapter-monitor/dist/public
+
+CMD ["node", "--enable-source-maps", "./artifacts/api-server/dist/index.mjs"]

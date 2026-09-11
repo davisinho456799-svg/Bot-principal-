@@ -1,0 +1,261 @@
+openapi: 3.1.0
+info:
+  # Do not change the title, if the title changes, the import paths will be broken
+  title: Api
+  version: 0.1.0
+  description: API specification
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: monitor
+    description: Chapter monitoring operations
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      description: Returns server health status
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+  /monitor/overview:
+    get:
+      operationId: getMonitorOverview
+      tags: [monitor]
+      summary: Get monitor overview
+      responses:
+        "200":
+          description: Overview and recent activity
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MonitorOverview"
+  /monitor/works:
+    get:
+      operationId: listMonitoredWorks
+      tags: [monitor]
+      summary: List monitored works
+      responses:
+        "200":
+          description: Monitored works
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/MonitoredWork"
+    post:
+      operationId: createMonitoredWork
+      tags: [monitor]
+      summary: Add a work to monitor
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MonitoredWorkInput"
+      responses:
+        "201":
+          description: Work added
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MonitoredWork"
+  /monitor/works/{id}:
+    patch:
+      operationId: updateMonitoredWork
+      tags: [monitor]
+      summary: Update a monitored work
+      parameters:
+        - $ref: "#/components/parameters/WorkId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MonitoredWorkUpdate"
+      responses:
+        "200":
+          description: Work updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MonitoredWork"
+        "404":
+          description: Work not found
+    delete:
+      operationId: deleteMonitoredWork
+      tags: [monitor]
+      summary: Delete a monitored work
+      parameters:
+        - $ref: "#/components/parameters/WorkId"
+      responses:
+        "204":
+          description: Work deleted
+        "404":
+          description: Work not found
+  /monitor/run:
+    post:
+      operationId: runMonitorNow
+      tags: [monitor]
+      summary: Run all monitors now
+      responses:
+        "202":
+          description: Monitor run started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunResult"
+  /monitor/discord/channels:
+    get:
+      operationId: listDiscordChannels
+      tags: [monitor]
+      summary: List channels accessible to the bot
+      responses:
+        "200":
+          description: Guild channels available for publishing
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DiscordChannel"
+        "503":
+          description: Discord bot is not configured
+  /monitor/config:
+    get:
+      operationId: getMonitorConfig
+      tags: [monitor]
+      summary: Get monitor configuration
+      responses:
+        "200":
+          description: Monitor configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MonitorConfig"
+    patch:
+      operationId: updateMonitorConfig
+      tags: [monitor]
+      summary: Update monitor configuration
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MonitorConfigUpdate"
+      responses:
+        "200":
+          description: Monitor configuration updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MonitorConfig"
+components:
+  parameters:
+    WorkId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: number
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required:
+        - status
+    MonitoredWork:
+      type: object
+      required: [id, title, platform, listingUrl, active, chaptersSeen, lastCheckedAt, lastPublishedAt]
+      properties:
+        id: { type: number }
+        title: { type: string }
+        platform:
+          type: string
+          enum: [lezhin, toomics, toptoon]
+        listingUrl: { type: string }
+        active: { type: boolean }
+        chaptersSeen: { type: number }
+        lastCheckedAt: { type: ["string", "null"], format: date-time }
+        lastPublishedAt: { type: ["string", "null"], format: date-time }
+        lastStatus: { type: string }
+    MonitoredWorkInput:
+      type: object
+      required: [title, platform, listingUrl]
+      properties:
+        title: { type: string, minLength: 1 }
+        platform:
+          type: string
+          enum: [lezhin, toomics, toptoon]
+        listingUrl: { type: string, minLength: 1 }
+        active: { type: boolean, default: true }
+    MonitoredWorkUpdate:
+      type: object
+      properties:
+        title: { type: string, minLength: 1 }
+        listingUrl: { type: string, minLength: 1 }
+        active: { type: boolean }
+    ActivityItem:
+      type: object
+      required: [id, workTitle, platform, chapterCount, status, createdAt]
+      properties:
+        id: { type: number }
+        workTitle: { type: string }
+        platform: { type: string }
+        chapterCount: { type: number }
+        status: { type: string }
+        createdAt: { type: string, format: date-time }
+    MonitorOverview:
+      type: object
+      required: [activeWorks, chaptersTracked, postsSent, lastRunAt, nextRunAt, recentActivity]
+      properties:
+        activeWorks: { type: number }
+        chaptersTracked: { type: number }
+        postsSent: { type: number }
+        lastRunAt: { type: ["string", "null"], format: date-time }
+        nextRunAt: { type: ["string", "null"], format: date-time }
+        recentActivity:
+          type: array
+          items:
+            $ref: "#/components/schemas/ActivityItem"
+    RunResult:
+      type: object
+      required: [status, worksChecked, chaptersFound, postsSent]
+      properties:
+        status: { type: string }
+        worksChecked: { type: number }
+        chaptersFound: { type: number }
+        postsSent: { type: number }
+    DiscordChannel:
+      type: object
+      required: [id, name, guildId, guildName]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        guildId: { type: string }
+        guildName: { type: string }
+    MonitorConfig:
+      type: object
+      required: [discordChannelId, discordChannelName, intervalMinutes]
+      properties:
+        discordChannelId: { type: ["string", "null"] }
+        discordChannelName: { type: ["string", "null"] }
+        intervalMinutes: { type: number }
+    MonitorConfigUpdate:
+      type: object
+      properties:
+        discordChannelId: { type: ["string", "null"] }
+        discordChannelName: { type: ["string", "null"] }
+        intervalMinutes: { type: number, minimum: 5, maximum: 1440 }
+
