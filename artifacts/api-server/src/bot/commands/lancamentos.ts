@@ -4,6 +4,8 @@ import { sql } from "drizzle-orm";
 import {
   fetchTenraiPublishingManga,
   genresOfTenrai,
+  hasBoysLoveGenre,
+  searchTenraiManga,
   titleOfTenrai,
   type TenraiManga,
 } from "../tenrai-fallback.js";
@@ -61,7 +63,49 @@ async function fetchWeeklyPopular(adult: boolean): Promise<QueryRow[]> {
 }
 
 async function fetchTenraiFallback(adult: boolean): Promise<TenraiManga[]> {
-  return fetchTenraiPublishingManga("manhwa", adult);
+  const rows = await fetchTenraiPublishingManga("manhwa", adult);
+  return rows.filter((row) => !hasBoysLoveGenre(row));
+}
+
+function normalizeTitle(title: string): string {
+  return title
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isTitleMatch(title: string, candidate: TenraiManga): boolean {
+  const normalizedTitle = normalizeTitle(title);
+  if (!normalizedTitle) return false;
+
+  return [candidate.title, candidate.title_english ?? ""].some((value) => {
+    const normalizedCandidate = normalizeTitle(value);
+    return normalizedCandidate === normalizedTitle ||
+      normalizedCandidate.includes(normalizedTitle) ||
+      normalizedTitle.includes(normalizedCandidate);
+  });
+}
+
+async function excludeBoysLoveRows(rows: QueryRow[]): Promise<QueryRow[]> {
+  const decisions = await Promise.all(
+    rows.map(async (row) => {
+      const title = String(row.title ?? "").trim();
+      if (!title) return { row, keep: true };
+
+      try {
+        const matches = await searchTenraiManga(title, "manhwa");
+        const exactMatch = matches.find((candidate) => isTitleMatch(title, candidate));
+        return { row, keep: !exactMatch || !hasBoysLoveGenre(exactMatch) };
+      } catch {
+        return { row, keep: true };
+      }
+    }),
+  );
+
+  return decisions.filter(({ keep }) => keep).map(({ row }) => row);
 }
 
 function formatWeeklyLines(rows: QueryRow[]): string {
@@ -108,6 +152,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
 
   try {
     let rows = await fetchWeeklyPopular(adult);
+    if (rows.length) rows = await excludeBoysLoveRows(rows);
     const modeLabel = adult ? "🔞 +18" : "🛡️ Normal";
 
     if (!rows.length) {

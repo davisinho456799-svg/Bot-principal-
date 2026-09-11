@@ -121,6 +121,26 @@ export function genresOfTenrai(item: {
   )];
 }
 
+export function isBoysLoveGenre(genre: string): boolean {
+  const normalized = genre
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[’']/g, "")
+    .replace(/[-_]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return normalized === "boys love" || normalized === "boy love";
+}
+
+export function hasBoysLoveGenre(item: {
+  genres?: TenraiGenre[];
+  themes?: TenraiGenre[];
+}): boolean {
+  return genresOfTenrai(item).some(isBoysLoveGenre);
+}
+
 /**
  * Converte o horário semanal informado em JST/UTC para o próximo timestamp.
  * Se a fonte não informa a grade, retorna null em vez de inventar um horário.
