@@ -15,6 +15,7 @@ import {
 import { logger } from "../../lib/logger.js";
 
 const ANILIST_API = "https://graphql.anilist.co";
+const TENRAI_API = "https://api.tenrai.org/v1";
 
 const SEASON_QUERY = `
 query SeasonAnime($season: MediaSeason!, $seasonYear: Int!, $page: Int) {
@@ -55,6 +56,19 @@ interface SeasonMedia {
   studios: { nodes: { name: string }[] };
   startDate: { month: number | null; day: number | null };
   nextAiringEpisode: { episode: number; airingAt: number } | null;
+  source?: string;
+}
+
+interface TenraiSeasonMedia {
+  mal_id: number;
+  title: string;
+  title_english?: string | null;
+  score?: number | null;
+  genres?: { name?: string | null }[];
+  episodes?: number | null;
+  status?: string | null;
+  url?: string | null;
+  images?: { jpg?: { large_image_url?: string | null; image_url?: string | null } };
 }
 
 // ─── Temporada ────────────────────────────────────────────────────────────────
@@ -97,19 +111,57 @@ const STATUS_PT: Record<string, string> = {
 // ─── Busca ────────────────────────────────────────────────────────────────────
 
 async function fetchSeason(season: string, year: number, page = 1): Promise<SeasonMedia[]> {
-  const res = await fetch(ANILIST_API, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify({ query: SEASON_QUERY, variables: { season, seasonYear: year, page } }),
-    signal: AbortSignal.timeout(12000),
-  });
-  if (!res.ok) throw new Error(`AniList ${res.status}`);
-  const json = (await res.json()) as {
-    data: { Page: { media: SeasonMedia[]; pageInfo: { hasNextPage: boolean } } };
-    errors?: { message: string }[];
-  };
-  if (json.errors?.length) throw new Error(json.errors[0]!.message);
-  return json.data.Page.media ?? [];
+  try {
+    const res = await fetch(ANILIST_API, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ query: SEASON_QUERY, variables: { season, seasonYear: year, page } }),
+      signal: AbortSignal.timeout(12000),
+    });
+    if (!res.ok) throw new Error(`AniList ${res.status}`);
+    const json = (await res.json()) as {
+      data: { Page: { media: SeasonMedia[]; pageInfo: { hasNextPage: boolean } } };
+      errors?: { message: string }[];
+    };
+    if (json.errors?.length) throw new Error(json.errors[0]!.message);
+    return (json.data.Page.media ?? []).map((media) => ({ ...media, source: "AniList" }));
+  } catch (error) {
+    logger.warn(
+      { err: error, season, year, page },
+      "AniList indisponível no comando /temporada; usando Tenrai",
+    );
+    const response = await fetch(
+      `${TENRAI_API}/seasons/${year}/${season.toLowerCase()}?limit=20&page=${page}`,
+      {
+        headers: { Accept: "application/json" },
+        signal: AbortSignal.timeout(12000),
+      },
+    );
+    if (!response.ok) throw new Error(`AniList indisponível e Tenrai ${response.status}`);
+    const json = (await response.json()) as { data?: TenraiSeasonMedia[] };
+    return (json.data ?? []).map((media) => {
+      const status = media.status?.toLowerCase() ?? "";
+      return {
+        id: media.mal_id,
+        title: {
+          romaji: media.title,
+          english: media.title_english ?? null,
+        },
+        averageScore: media.score == null ? null : media.score * 10,
+        genres: (media.genres ?? []).map((genre) => genre.name ?? "").filter(Boolean),
+        episodes: media.episodes ?? null,
+        status: status.includes("not yet") || status.includes("upcoming")
+          ? "NOT_YET_RELEASED"
+          : "RELEASING",
+        siteUrl: media.url ?? `https://myanimelist.net/anime/${media.mal_id}`,
+        coverImage: { color: null },
+        studios: { nodes: [] },
+        startDate: { month: null, day: null },
+        nextAiringEpisode: null,
+        source: "MAL/Tenrai",
+      };
+    });
+  }
 }
 
 // ─── Embed ────────────────────────────────────────────────────────────────────
@@ -137,7 +189,7 @@ function buildSeasonEmbed(list: SeasonMedia[], season: string, year: number, pag
     .setTitle(`${emoji} Temporada ${seasonName} ${year}`)
     .setDescription(lines.join("\n\n").slice(0, 4000))
     .setColor(color)
-    .setFooter({ text: `Página ${page} • Ordenado por popularidade • Fonte: AniList` });
+    .setFooter({ text: `Página ${page} • Ordenado por popularidade • Fonte: ${list[0]?.source ?? "AniList"}` });
 }
 
 // ─── Comando ──────────────────────────────────────────────────────────────────

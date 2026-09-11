@@ -1,3 +1,5 @@
+import { logger } from "../lib/logger";
+
 type AniListItem = {
   id: number;
   title: { romaji?: string | null; english?: string | null };
@@ -82,6 +84,19 @@ type SeasonResponse = {
   errors?: Array<{ message?: string }>;
 };
 
+type TenraiAnime = {
+  mal_id: number;
+  title: string;
+  title_english?: string | null;
+  url?: string | null;
+  images?: { jpg?: { large_image_url?: string | null; image_url?: string | null } };
+  score?: number | null;
+  episodes?: number | null;
+  synopsis?: string | null;
+  genres?: Array<{ name?: string | null }>;
+  status?: string | null;
+};
+
 async function fetchSeasonFromAniList(season: string, year: number) {
   let lastError: Error | undefined;
   for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -118,6 +133,24 @@ async function fetchSeasonFromAniList(season: string, year: number) {
   throw lastError ?? new Error("AniList request failed");
 }
 
+async function fetchSeasonFromTenrai(season: string, year: number): Promise<TenraiAnime[]> {
+  const response = await fetch(
+    `https://api.tenrai.org/v1/seasons/${year}/${season}?limit=25`,
+    {
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(12_000),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(`Tenrai returned ${response.status}`);
+  }
+
+  const json = (await response.json()) as { data?: TenraiAnime[] };
+  const anime = json.data ?? [];
+  if (!anime.length) throw new Error("Tenrai returned an empty seasonal catalog");
+  return anime;
+}
+
 function map(item: AniListItem, kind: SeasonDataItem["kind"], status: SeasonDataItem["status"]): SeasonDataItem {
   return {
     id: item.id,
@@ -134,17 +167,51 @@ function map(item: AniListItem, kind: SeasonDataItem["kind"], status: SeasonData
   };
 }
 
+function mapTenraiAnime(item: TenraiAnime): SeasonDataItem {
+  const status = item.status?.toLowerCase() ?? "";
+  return {
+    id: item.mal_id,
+    title: item.title_english || item.title || "Sem título",
+    kind: "anime",
+    status: status.includes("not yet") || status.includes("upcoming") ? "upcoming" : "airing",
+    imageUrl: item.images?.jpg?.large_image_url || item.images?.jpg?.image_url || "",
+    url: item.url || `https://myanimelist.net/anime/${item.mal_id}`,
+    score: item.score == null ? null : item.score,
+    episodes: item.episodes ?? null,
+    volumes: null,
+    synopsis: item.synopsis ?? null,
+    genres: (item.genres ?? [])
+      .map((genre) => genre.name ?? "")
+      .filter(Boolean),
+  };
+}
+
 export async function getCurrentSeasonData(): Promise<SeasonCatalog> {
   const { season, year } = currentSeason();
-  const result = await fetchSeasonFromAniList(season, year);
-  const anime = result.anime.map((item) =>
-    map(item, "anime", item.status === "NOT_YET_RELEASED" ? "upcoming" : "airing"),
-  );
+  let anime: SeasonDataItem[];
+  let manga: SeasonDataItem[];
+
+  try {
+    const result = await fetchSeasonFromAniList(season, year);
+    anime = result.anime.map((item) =>
+      map(item, "anime", item.status === "NOT_YET_RELEASED" ? "upcoming" : "airing"),
+    );
+    manga = result.manga.map((item) => map(item, "manga", "publishing"));
+  } catch (error) {
+    logger.warn(
+      { err: error, season, year },
+      "AniList indisponível; usando catálogo sazonal reserva do Tenrai",
+    );
+    const fallbackAnime = await fetchSeasonFromTenrai(season, year);
+    anime = fallbackAnime.map(mapTenraiAnime);
+    manga = [];
+  }
+
   return {
     season,
     year,
     anime,
-    manga: result.manga.map((item) => map(item, "manga", "publishing")),
+    manga,
     updatedAt: new Date(),
   };
 }
