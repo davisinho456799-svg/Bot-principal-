@@ -43,6 +43,7 @@ const SOURCE_LABELS: Record<string, string> = {
   comick: "Comick.io",
   mangaupdates: "MangaUpdates",
   jikan: "MyAnimeList",
+  tenrai: "Tenrai",
 };
 
 const SOURCE_ICONS: Record<string, string> = {
@@ -51,6 +52,7 @@ const SOURCE_ICONS: Record<string, string> = {
   comick: "🟢",
   mangaupdates: "🔵",
   jikan: "🔴",
+  tenrai: "🔵",
 };
 
 function buildAltTitles(r: UnifiedResult): string | null {
@@ -214,12 +216,12 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     const query = titulo!;
 
     // ✅ Se o valor vier do autocomplete no formato "source:id", vai direto ao resultado
-    if (/^(anilist|comick|mangadex|mangaupdates|jikan):[^\s|]+$/.test(query)) {
+    if (/^(anilist|comick|mangadex|mangaupdates|jikan|tenrai):[^\s|]+$/.test(query)) {
       try {
         const [source, ...idParts] = query.split(":");
         const id = idParts.join(":");
         const direct = await getUnifiedById(
-          source as "anilist" | "mangadex" | "comick" | "mangaupdates" | "jikan",
+          source as "anilist" | "mangadex" | "comick" | "mangaupdates" | "jikan" | "tenrai",
           id
         );
         if (direct) {
@@ -315,7 +317,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
       const decodedScore = scoreStr ? parseInt(scoreStr, 10) : undefined;
 
       const manhwa = await getUnifiedById(
-        source as "anilist" | "mangadex" | "comick" | "mangaupdates" | "jikan",
+        source as "anilist" | "mangadex" | "comick" | "mangaupdates" | "jikan" | "tenrai",
         id
       );
       if (!manhwa) {

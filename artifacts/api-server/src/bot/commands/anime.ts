@@ -451,12 +451,18 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
   let isDescSearch = false;
 
   // Detecta se o título veio do autocomplete (formato "source:id")
-  const AUTOCOMPLETE_RE = /^(anilist-anime|jikan|kitsu|anidb|anisearch):(.+)$/;
+  const AUTOCOMPLETE_RE = /^(anilist-anime|jikan|tenrai|kitsu|anidb|anisearch):(.+)$/;
   const autocompleteMatch = titulo ? AUTOCOMPLETE_RE.exec(titulo) : null;
 
   if (autocompleteMatch) {
     // Seleção direta do autocomplete → busca por ID, sem pesquisa textual
-    const source = autocompleteMatch[1] as "anilist-anime" | "jikan" | "kitsu" | "anidb" | "anisearch";
+    const source = autocompleteMatch[1] as
+      | "anilist-anime"
+      | "jikan"
+      | "tenrai"
+      | "kitsu"
+      | "anidb"
+      | "anisearch";
     const id = autocompleteMatch[2]!;
     try {
       const anime = await getUnifiedAnimeById(source, id);
@@ -545,6 +551,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
   const sourcesSummary = [
     sourceSet.has("anilist-anime") ? "🟣 AniList" : null,
     sourceSet.has("jikan") ? "🔴 MAL" : null,
+    sourceSet.has("tenrai") ? "🔵 Tenrai" : null,
     sourceSet.has("kitsu") ? "🔵 Kitsu" : null,
     sourceSet.has("anisearch") ? "🔵 AniSearch" : null,
   ].filter(Boolean).join(" + ");
@@ -574,7 +581,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
       const decodedScore = scoreStr ? parseInt(scoreStr, 10) : undefined;
 
       const anime = await getUnifiedAnimeById(
-        source as "anilist-anime" | "jikan" | "kitsu" | "anidb" | "anisearch",
+        source as "anilist-anime" | "jikan" | "tenrai" | "kitsu" | "anidb" | "anisearch",
         id
       );
       if (!anime) {
