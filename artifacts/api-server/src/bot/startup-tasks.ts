@@ -43,6 +43,13 @@ export async function runBotStartupTasks(readyClient: Client<true>) {
     logger.error({ err }, "Falha na migração automática — bot continuará normalmente");
   }
 
+  if (process.env["DISCORD_LIGHT_MODE"] === "true") {
+    logger.info(
+      "Modo leve ativo — notificações automáticas, resumo semanal e limpeza periódica desabilitados",
+    );
+    return;
+  }
+
   startNotificacaoService(readyClient);
   startWeeklyService(readyClient);
 

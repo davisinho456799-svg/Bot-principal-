@@ -7,15 +7,20 @@ import { startMonitorScheduler } from "./services/monitor-scheduler.js";
 
 const rawPort = process.env["PORT"];
 const discordBotEnabled = process.env["DISCORD_BOT_ENABLED"] !== "false";
+const lightweightBotMode = process.env["DISCORD_LIGHT_MODE"] === "true";
 
 async function startApplication() {
   try {
     await pool.query("select 1");
     logger.info("Conexão com o PostgreSQL confirmada");
-    if (discordBotEnabled) {
+    if (discordBotEnabled && !lightweightBotMode) {
       startDiscordScheduler();
     } else {
-      logger.info("Bot e schedulers do Discord desabilitados neste ambiente");
+      logger.info(
+        discordBotEnabled
+          ? "Modo leve do bot ativo; schedulers automáticos desabilitados"
+          : "Bot e schedulers do Discord desabilitados neste ambiente",
+      );
     }
   } catch (error) {
     logger.error(
@@ -30,6 +35,10 @@ async function startApplication() {
     logger.info("PORT não definido; iniciando como worker do Discord");
     if (discordBotEnabled) {
       await startBot();
+      void startMonitorScheduler().catch((error) => {
+        logger.error({ err: error }, "Falha ao iniciar o monitor scheduler");
+        process.exitCode = 1;
+      });
     }
     return;
   }
