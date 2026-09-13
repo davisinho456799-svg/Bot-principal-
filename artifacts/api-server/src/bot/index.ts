@@ -5,57 +5,9 @@ import { registerInteractionRouter } from "./interaction-router.js";
 
 const LOGIN_TIMEOUT_MS = 30_000;
 const RETRY_DELAY_MS = 10_000;
-const TOKEN_VALIDATION_ATTEMPTS = 4;
 
 function sleep(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
-}
-
-function normalizeBotToken(token: string) {
-  return token.replace(/^Bot\s+/i, "").trim();
-}
-
-async function validateDiscordToken(token: string) {
-  for (let attempt = 1; attempt <= TOKEN_VALIDATION_ATTEMPTS; attempt += 1) {
-    const response = await fetch("https://discord.com/api/v10/users/@me", {
-      headers: { Authorization: `Bot ${normalizeBotToken(token)}` },
-      signal: AbortSignal.timeout(10_000),
-    });
-
-    if (response.ok) {
-      const account = (await response.json()) as { id?: string; username?: string };
-      logger.info(
-        { applicationId: account.id, username: account.username },
-        "Token do Discord validado pela API",
-      );
-      return;
-    }
-
-    if (response.status === 429 && attempt < TOKEN_VALIDATION_ATTEMPTS) {
-      const retryAfterHeader = Number(response.headers.get("retry-after") ?? "0");
-      const rateLimitBody = (await response.json().catch(() => null)) as
-        | { retry_after?: number }
-        | null;
-      const retryAfterBody = Number(rateLimitBody?.retry_after ?? 0) * 1000;
-      const retryAfterMs = Math.min(
-        30_000,
-        Math.max(1_000, retryAfterBody, retryAfterHeader * 1000),
-      );
-
-      logger.warn(
-        { attempt, retryAfterMs },
-        "Discord limitou temporariamente a validação do token; aguardando",
-      );
-      await sleep(retryAfterMs);
-      continue;
-    }
-
-    throw new Error(
-      response.status === 429
-        ? "Discord manteve o rate limit da validação do token após as tentativas"
-        : `Discord rejeitou o token (HTTP ${response.status})`,
-    );
-  }
 }
 
 function registerGatewayDiagnostics(client: Client) {
@@ -133,7 +85,7 @@ export async function startBot() {
 
   logger.info({ tokenConfigured: true }, "Token do Discord encontrado, criando client Discord");
 
-  await validateDiscordToken(token);
+  logger.info("Iniciando conexão direta com o gateway do Discord");
 
   let attempt = 0;
   while (true) {
