@@ -32,7 +32,6 @@ async function buildAll() {
     external: [
       "*.node",
       "sharp",
-      "discord.js",
       "better-sqlite3",
       "sqlite3",
       "canvas",
