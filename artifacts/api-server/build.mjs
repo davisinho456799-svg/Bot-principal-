@@ -4,11 +4,16 @@ import { fileURLToPath } from "node:url";
 import { build as esbuild } from "esbuild";
 import esbuildPluginPino from "esbuild-plugin-pino";
 import { cp, rm } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { tmpdir } from "node:os";
+import { promisify } from "node:util";
 
 // Plugins (e.g. 'esbuild-plugin-pino') may use `require` to resolve dependencies
 globalThis.require = createRequire(import.meta.url);
 
 const artifactDir = path.dirname(fileURLToPath(import.meta.url));
+const workspaceRoot = path.resolve(artifactDir, "../..");
+const execFileAsync = promisify(execFile);
 
 async function buildAll() {
   const distDir = path.resolve(artifactDir, "dist");
@@ -136,6 +141,50 @@ globalThis.__dirname = __bannerPath.dirname(globalThis.__filename);
   // Discloud may omit directories named "dist" from the runtime layer after
   // building. Keep a runtime copy outside that ignored directory.
   await cp(distDir, compiledWorkerDir, { recursive: true });
+
+  // The worker uses Playwright and Sharp through lazy imports. Discloud can
+  // drop the workspace node_modules between its build and runtime layers, so
+  // deploy the production dependency tree next to the compiled entrypoint.
+  // Keep Playwright's browser download disabled: discloud.config provides the
+  // system Chromium binary separately.
+  const runtimeStageDir = path.join(
+    tmpdir(),
+    `workspace-api-server-runtime-${process.pid}`,
+  );
+  try {
+    await rm(runtimeStageDir, { recursive: true, force: true });
+    await execFileAsync(
+      "corepack",
+      [
+        "pnpm",
+        "deploy",
+        "--filter",
+        "@workspace/api-server",
+        "--prod",
+        "--legacy",
+        runtimeStageDir,
+      ],
+      {
+        cwd: workspaceRoot,
+        env: {
+          ...process.env,
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1",
+        },
+        maxBuffer: 20 * 1024 * 1024,
+      },
+    );
+    await execFileAsync(
+      "cp",
+      [
+        "-a",
+        path.join(runtimeStageDir, "node_modules"),
+        path.join(compiledWorkerDir, "node_modules"),
+      ],
+      { maxBuffer: 20 * 1024 * 1024 },
+    );
+  } finally {
+    await rm(runtimeStageDir, { recursive: true, force: true });
+  }
 }
 
 buildAll().catch((err) => {
