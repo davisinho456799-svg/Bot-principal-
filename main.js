@@ -7,6 +7,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
 process.env.NODE_ENV ??= "production";
+process.env.DISCORD_BOT_ENABLED = "true";
 process.env.DISCORD_LIGHT_MODE ??= "true";
 process.env.MONITOR_INTERVAL_MINUTES ??= "60";
 process.env.PLAYWRIGHT_EXECUTABLE_PATH ??= "/usr/bin/chromium";

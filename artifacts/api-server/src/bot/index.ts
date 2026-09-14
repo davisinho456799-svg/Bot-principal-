@@ -76,6 +76,8 @@ function createClient(token: string) {
 export async function startBot() {
   const token =
     process.env["DISCORD_BOT_TOKEN"] ??
+    process.env["DISCORD_TOKEN"] ??
+    process.env["DISCORD_BOT_KEY"] ??
     process.env["Discord_bot_key"] ??
     process.env["Discord_key"];
   if (!token) {
