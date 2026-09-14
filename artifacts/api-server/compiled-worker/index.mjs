@@ -82372,31 +82372,35 @@ function parserForPlatform(platform) {
 }
 
 // src/services/browser-chapter-capture.ts
-import {
-  chromium
-} from "playwright";
 var PAGE_TIMEOUT_MS = 3e4;
 var MAX_CAPTURE_WIDTH = 2400;
 var MAX_CAPTURE_HEIGHT = 4800;
 var CARD_PADDING = 0;
 var browserPromise = null;
 var contextPromise = null;
+var chromiumPromise = null;
+async function getChromium() {
+  chromiumPromise ??= import("playwright").then((module) => module.chromium);
+  return chromiumPromise;
+}
 async function getBrowser() {
   if (!browserPromise) {
-    browserPromise = chromium.launch({
-      headless: true,
-      executablePath: process.env.PLAYWRIGHT_EXECUTABLE_PATH || void 0,
-      args: [
-        "--disable-dev-shm-usage",
-        "--disable-gpu",
-        "--disable-background-networking",
-        "--disable-background-timer-throttling",
-        "--disable-renderer-backgrounding",
-        "--disable-extensions",
-        "--no-sandbox",
-        "--disable-setuid-sandbox"
-      ]
-    }).catch((error40) => {
+    browserPromise = getChromium().then(
+      (chromium) => chromium.launch({
+        headless: true,
+        executablePath: process.env.PLAYWRIGHT_EXECUTABLE_PATH || void 0,
+        args: [
+          "--disable-dev-shm-usage",
+          "--disable-gpu",
+          "--disable-background-networking",
+          "--disable-background-timer-throttling",
+          "--disable-renderer-backgrounding",
+          "--disable-extensions",
+          "--no-sandbox",
+          "--disable-setuid-sandbox"
+        ]
+      })
+    ).catch((error40) => {
       browserPromise = null;
       throw error40;
     });
