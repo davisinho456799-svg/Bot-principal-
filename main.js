@@ -13,7 +13,7 @@ process.env.PLAYWRIGHT_EXECUTABLE_PATH ??= "/usr/bin/chromium";
 
 const execFileAsync = promisify(execFile);
 const projectRoot = path.dirname(fileURLToPath(import.meta.url));
-const workerPath = path.join(projectRoot, "artifacts", "api-server", "dist", "index.mjs");
+const workerPath = path.join(projectRoot, "artifacts", "api-server", "compiled-worker", "index.mjs");
 const workerUrl = pathToFileURL(workerPath).href;
 
 async function ensureCompiledWorker() {

@@ -12,7 +12,9 @@ const artifactDir = path.dirname(fileURLToPath(import.meta.url));
 
 async function buildAll() {
   const distDir = path.resolve(artifactDir, "dist");
+  const compiledWorkerDir = path.resolve(artifactDir, "compiled-worker");
   await rm(distDir, { recursive: true, force: true });
+  await rm(compiledWorkerDir, { recursive: true, force: true });
 
   await esbuild({
     entryPoints: [path.resolve(artifactDir, "src/index.ts")],
@@ -131,6 +133,10 @@ globalThis.__dirname = __bannerPath.dirname(globalThis.__filename);
     path.join(distDir, "data_files"),
     { recursive: true },
   );
+
+  // Discloud may omit directories named "dist" from the runtime layer after
+  // building. Keep a runtime copy outside that ignored directory.
+  await cp(distDir, compiledWorkerDir, { recursive: true });
 }
 
 buildAll().catch((err) => {
