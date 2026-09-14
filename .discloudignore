@@ -1,0 +1,14 @@
+.git
+.github
+.agents
+.local
+.cache
+attached_assets
+exports
+node_modules
+**/node_modules
+dist
+**/dist
+*.zip
+*.log
+*.tsbuildinfo

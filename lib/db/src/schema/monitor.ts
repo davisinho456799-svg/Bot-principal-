@@ -59,7 +59,7 @@ export const monitorConfigTable = pgTable("monitor_config", {
   id: integer("id").primaryKey().default(1),
   discordChannelId: text("discord_channel_id"),
   discordChannelName: text("discord_channel_name"),
-  intervalMinutes: integer("interval_minutes").notNull().default(30),
+  intervalMinutes: integer("interval_minutes").notNull().default(60),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

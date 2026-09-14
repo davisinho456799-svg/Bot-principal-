@@ -24,6 +24,7 @@ import {
 } from "@workspace/db/schema";
 import { logger } from "../lib/logger";
 import { runMonitor } from "../services/monitor-service";
+import { getMonitorIntervalMinutes } from "../services/monitor-interval";
 
 const router: IRouter = Router();
 
@@ -51,7 +52,13 @@ async function getConfig() {
     .returning();
   if (created) return created;
   const [existing] = await db.select().from(monitorConfigTable).limit(1);
-  return existing ?? { id: 1, discordChannelId: null, discordChannelName: null, intervalMinutes: 30, updatedAt: new Date() };
+  return existing ?? {
+    id: 1,
+    discordChannelId: null,
+    discordChannelName: null,
+    intervalMinutes: getMonitorIntervalMinutes(undefined),
+    updatedAt: new Date(),
+  };
 }
 
 router.get("/monitor/overview", async (_req, res, next) => {
@@ -86,7 +93,10 @@ router.get("/monitor/overview", async (_req, res, next) => {
     const config = await getConfig();
     const lastRunAt = lastRun?.value?.toISOString() ?? null;
     const nextRunAt = lastRunAt
-      ? new Date(new Date(lastRunAt).getTime() + config.intervalMinutes * 60_000).toISOString()
+      ? new Date(
+          new Date(lastRunAt).getTime() +
+            getMonitorIntervalMinutes(config.intervalMinutes) * 60_000,
+        ).toISOString()
       : null;
     const response = {
       activeWorks: Number(active?.value ?? 0),
@@ -164,7 +174,7 @@ router.get("/monitor/config", async (_req, res, next) => {
     res.json(GetMonitorConfigResponse.parse({
       discordChannelId: config.discordChannelId,
       discordChannelName: config.discordChannelName,
-      intervalMinutes: config.intervalMinutes,
+      intervalMinutes: getMonitorIntervalMinutes(config.intervalMinutes),
     }));
   } catch (error) {
     next(error);
@@ -182,7 +192,7 @@ router.patch("/monitor/config", async (req, res, next) => {
     res.json(UpdateMonitorConfigResponse.parse({
       discordChannelId: config.discordChannelId,
       discordChannelName: config.discordChannelName,
-      intervalMinutes: config.intervalMinutes,
+      intervalMinutes: getMonitorIntervalMinutes(config.intervalMinutes),
     }));
   } catch (error) {
     next(error);
