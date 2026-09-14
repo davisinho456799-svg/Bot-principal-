@@ -1,7 +1,7 @@
 // Discloud entrypoint for the compiled Discord worker.
 // Defaults are intentionally lightweight for a single 4 GB deployment.
 import { execFile } from "node:child_process";
-import { access } from "node:fs/promises";
+import { access, constants as fsConstants } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
@@ -10,13 +10,22 @@ process.env.NODE_ENV ??= "production";
 process.env.DISCORD_BOT_ENABLED = "true";
 process.env.DISCORD_LIGHT_MODE ??= "true";
 process.env.MONITOR_INTERVAL_MINUTES ??= "60";
-process.env.PLAYWRIGHT_EXECUTABLE_PATH ??= "/usr/bin/chromium";
 
 const execFileAsync = promisify(execFile);
 const projectRoot = path.dirname(fileURLToPath(import.meta.url));
 const workerPath = path.join(projectRoot, "artifacts", "api-server", "compiled-worker", "index.mjs");
 const workerUrl = pathToFileURL(workerPath).href;
 const apiServerNodeModules = path.join(projectRoot, "artifacts", "api-server", "node_modules");
+const browserCandidates = [
+  process.env.PLAYWRIGHT_EXECUTABLE_PATH,
+  "/usr/bin/chromium",
+  "/usr/bin/chromium-browser",
+  "/usr/bin/google-chrome",
+  "/usr/bin/google-chrome-stable",
+  "/usr/local/bin/chromium",
+].filter((candidate, index, candidates) =>
+  candidate && candidates.indexOf(candidate) === index
+);
 
 async function hasRuntimePackage(packageName) {
   const packageLocations = [
@@ -33,6 +42,45 @@ async function hasRuntimePackage(packageName) {
     }
   }
   return false;
+}
+
+async function ensureBrowserExecutable() {
+  for (const candidate of browserCandidates) {
+    try {
+      await access(candidate, fsConstants.X_OK);
+      process.env.PLAYWRIGHT_EXECUTABLE_PATH = candidate;
+      console.log(`Chromium encontrado em ${candidate}.`);
+      return candidate;
+    } catch {
+      // Try the next known location.
+    }
+  }
+
+  try {
+    const { stdout } = await execFileAsync(
+      "sh",
+      [
+        "-c",
+        "command -v chromium || command -v chromium-browser || command -v google-chrome || command -v google-chrome-stable",
+      ],
+      { maxBuffer: 1024 * 1024 },
+    );
+    const discovered = stdout.trim().split(/\s+/)[0];
+    if (discovered) {
+      await access(discovered, fsConstants.X_OK);
+      process.env.PLAYWRIGHT_EXECUTABLE_PATH = discovered;
+      console.log(`Chromium encontrado pelo PATH em ${discovered}.`);
+      return discovered;
+    }
+  } catch {
+    // Playwright may still find its managed browser if one is present.
+  }
+
+  delete process.env.PLAYWRIGHT_EXECUTABLE_PATH;
+  console.warn(
+    "Nenhum Chromium do sistema foi encontrado; o Playwright tentará usar o navegador gerenciado, se estiver instalado.",
+  );
+  return null;
 }
 
 async function ensureMonitorDependencies() {
@@ -112,6 +160,7 @@ async function ensureCompiledWorker() {
 
 try {
   await ensureMonitorDependencies();
+  await ensureBrowserExecutable();
   await ensureCompiledWorker();
   await import(workerUrl);
 } catch (error) {
