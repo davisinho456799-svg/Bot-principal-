@@ -54,6 +54,7 @@ async function ensureMonitorDependencies() {
         cwd: projectRoot,
         env: {
           ...process.env,
+          CI: "true",
           NODE_ENV: "production",
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1",
         },
@@ -72,9 +73,15 @@ async function ensureMonitorDependencies() {
       );
     }
   } catch (error) {
+    const details = error && typeof error === "object"
+      ? [
+        "stderr" in error && typeof error.stderr === "string" ? error.stderr.trim() : "",
+        "stdout" in error && typeof error.stdout === "string" ? error.stdout.trim() : "",
+      ].filter(Boolean).join("\n")
+      : "";
     console.warn(
       "Não foi possível reinstalar as dependências do monitor; o bot continuará sem imagens de fallback.",
-      error,
+      details || error,
     );
   }
 }
