@@ -1,5 +1,5 @@
 import { and, eq } from "drizzle-orm";
-import sharp from "sharp";
+import type sharp from "sharp";
 import { db } from "@workspace/db";
 import {
   detectedChaptersTable,
@@ -40,6 +40,15 @@ type ExistingChapter = {
 };
 
 const HISTORICAL_RELEASE_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1_000;
+
+type SharpFactory = typeof sharp;
+
+let sharpFactoryPromise: Promise<SharpFactory> | null = null;
+
+async function getSharp(): Promise<SharpFactory> {
+  sharpFactoryPromise ??= import("sharp").then((module) => module.default);
+  return sharpFactoryPromise;
+}
 
 function numericChapterNumber(value: string): number | null {
   const number = Number(value.replace(",", ".").trim());
@@ -240,6 +249,7 @@ async function downloadThumbnail(url: string): Promise<Buffer | null> {
     const response = await fetch(url, { headers: { "User-Agent": "ChapterMonitor/1.0" } });
     if (!response.ok) return null;
     const bytes = Buffer.from(await response.arrayBuffer());
+    const sharp = await getSharp();
     const metadata = await sharp(bytes).metadata();
     if (!metadata.width || !metadata.height) return null;
     if (metadata.width / metadata.height > 4.2) return null;
@@ -262,6 +272,7 @@ async function buildStrip(
   title: string,
   chapters: ChapterCandidate[],
 ): Promise<Buffer> {
+  const sharp = await getSharp();
   const rowHeight = 164;
   const width = 920;
   const headerHeight = 92;
@@ -343,6 +354,7 @@ async function postStrip(
 async function isUsableBrowserCapture(image: Buffer | undefined): Promise<boolean> {
   if (!image) return false;
   try {
+    const sharp = await getSharp();
     const metadata = await sharp(image).metadata();
     return (metadata.width ?? 0) >= 240 && (metadata.height ?? 0) >= 90;
   } catch {

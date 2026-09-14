@@ -82178,7 +82178,6 @@ var logger = (0, import_pino.default)({
 init_drizzle_orm();
 init_src();
 init_schema2();
-import sharp from "sharp";
 
 // src/services/parsers/parser-utils.ts
 var USER_AGENT = "ChapterMonitor/1.0 (+public-thumbnail-monitor)";
@@ -83067,6 +83066,11 @@ function chapterNumberIdentity(value) {
   return value.trim().replace(/^0+(?=\d)/, "");
 }
 var HISTORICAL_RELEASE_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1e3;
+var sharpFactoryPromise = null;
+async function getSharp() {
+  sharpFactoryPromise ??= import("sharp").then((module) => module.default);
+  return sharpFactoryPromise;
+}
 function numericChapterNumber(value) {
   const number4 = Number(value.replace(",", ".").trim());
   return Number.isFinite(number4) ? number4 : null;
@@ -83206,6 +83210,7 @@ async function downloadThumbnail(url2) {
     const response = await fetch(url2, { headers: { "User-Agent": "ChapterMonitor/1.0" } });
     if (!response.ok) return null;
     const bytes = Buffer.from(await response.arrayBuffer());
+    const sharp = await getSharp();
     const metadata = await sharp(bytes).metadata();
     if (!metadata.width || !metadata.height) return null;
     if (metadata.width / metadata.height > 4.2) return null;
@@ -83223,6 +83228,7 @@ async function downloadThumbnail(url2) {
   }
 }
 async function buildStrip(title, chapters) {
+  const sharp = await getSharp();
   const rowHeight = 164;
   const width = 920;
   const headerHeight = 92;
@@ -83281,6 +83287,7 @@ async function postStrip(channelId, title, chapters, part, total, isTest = false
 async function isUsableBrowserCapture(image) {
   if (!image) return false;
   try {
+    const sharp = await getSharp();
     const metadata = await sharp(image).metadata();
     return (metadata.width ?? 0) >= 240 && (metadata.height ?? 0) >= 90;
   } catch {
