@@ -27,7 +27,7 @@ const browserCandidates = [
   candidate && candidates.indexOf(candidate) === index
 );
 
-async function hasRuntimePackage(packageName) {
+async function findRuntimePackageRoot(packageName) {
   const packageLocations = [
     path.join(projectRoot, "node_modules", packageName, "package.json"),
     path.join(apiServerNodeModules, packageName, "package.json"),
@@ -36,12 +36,16 @@ async function hasRuntimePackage(packageName) {
   for (const packagePath of packageLocations) {
     try {
       await access(packagePath);
-      return true;
+      return path.dirname(packagePath);
     } catch {
       // Check the next location used by pnpm or the Discloud runtime layer.
     }
   }
-  return false;
+  return null;
+}
+
+async function hasRuntimePackage(packageName) {
+  return Boolean(await findRuntimePackageRoot(packageName));
 }
 
 async function ensureBrowserExecutable() {
@@ -83,6 +87,51 @@ async function ensureBrowserExecutable() {
   return null;
 }
 
+async function ensureManagedBrowser() {
+  const playwrightRoot = await findRuntimePackageRoot("playwright");
+  if (!playwrightRoot) {
+    console.warn(
+      "Playwright não está instalado; não foi possível baixar o navegador gerenciado.",
+    );
+    return false;
+  }
+
+  const playwrightCli = path.join(playwrightRoot, "cli.js");
+  console.warn(
+    "Nenhum Chromium do sistema foi encontrado; baixando o Chromium gerenciado pelo Playwright.",
+  );
+  const installEnv = { ...process.env, CI: "true", NODE_ENV: "production" };
+  delete installEnv.PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD;
+
+  try {
+    const { stdout, stderr } = await execFileAsync(
+      process.execPath,
+      [playwrightCli, "install", "chromium-headless-shell"],
+      {
+        cwd: projectRoot,
+        env: installEnv,
+        maxBuffer: 40 * 1024 * 1024,
+      },
+    );
+    if (stdout) console.log(stdout.trim());
+    if (stderr) console.error(stderr.trim());
+    console.log("Chromium gerenciado pelo Playwright instalado.");
+    return true;
+  } catch (error) {
+    const details = error && typeof error === "object"
+      ? [
+        "stderr" in error && typeof error.stderr === "string" ? error.stderr.trim() : "",
+        "stdout" in error && typeof error.stdout === "string" ? error.stdout.trim() : "",
+      ].filter(Boolean).join("\n")
+      : "";
+    console.warn(
+      "Não foi possível baixar o Chromium gerenciado; o monitor usará o parser sem captura.",
+      details || error,
+    );
+    return false;
+  }
+}
+
 async function ensureMonitorDependencies() {
   const requiredPackages = ["playwright", "sharp"];
   const missingPackages = [];
@@ -104,7 +153,6 @@ async function ensureMonitorDependencies() {
           ...process.env,
           CI: "true",
           NODE_ENV: "production",
-          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1",
         },
         maxBuffer: 20 * 1024 * 1024,
       },
@@ -160,7 +208,8 @@ async function ensureCompiledWorker() {
 
 try {
   await ensureMonitorDependencies();
-  await ensureBrowserExecutable();
+  const systemBrowser = await ensureBrowserExecutable();
+  if (!systemBrowser) await ensureManagedBrowser();
   await ensureCompiledWorker();
   await import(workerUrl);
 } catch (error) {
