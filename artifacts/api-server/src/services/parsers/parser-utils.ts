@@ -39,6 +39,15 @@ function getThumbnail(markup: string, listingUrl: string): string | null {
     if (candidate) return resolveUrl(candidate, listingUrl);
   }
 
+  const dataThumbnail = getAttribute(markup, [
+    "data-bg",
+    "data-ep_thumb1",
+    "data-thumbnail",
+    "data-thumb",
+    "data-image",
+  ]);
+  if (dataThumbnail) return resolveUrl(dataThumbnail, listingUrl);
+
   const background = markup.match(/background-image\s*:\s*url\(\s*["']?([^"')]+)["']?\s*\)/i)?.[1];
   return background ? resolveUrl(background, listingUrl) : null;
 }
@@ -72,6 +81,7 @@ function extractChapterNumber(markup: string, href: string | null, specific: boo
   ];
   const patterns = specific
     ? [
+        /제\s*#?(\d+(?:\.\d+)?)\s*화/i,
         /data-(?:episode|chapter)(?:[-_](?:number|no))?\s*=\s*["']#?(\d+(?:\.\d+)?)/i,
         /["'](?:episode|chapter)(?:Number|No|Index)?["']\s*:\s*["']?#?(\d+(?:\.\d+)?)/i,
         /(?:episode|chapter|ep|ch)[^0-9]{0,12}#?(\d+(?:\.\d+)?)/i,

@@ -234,7 +234,7 @@ async function fetchListing(
 
 async function downloadThumbnail(url: string): Promise<Buffer | null> {
   try {
-    if (/fullversion|full[-_ ]?version|download[-_ ]?app|app[-_ ]?version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)/i.test(url)) {
+    if (/fullversion|full[-_ ]?version|download[-_ ]?app|app[-_ ]?version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)|(?:^|[/._-])(?:banner|bnr)(?:[/._-]|$)/i.test(url)) {
       return null;
     }
     const response = await fetch(url, { headers: { "User-Agent": "ChapterMonitor/1.0" } });
@@ -242,6 +242,7 @@ async function downloadThumbnail(url: string): Promise<Buffer | null> {
     const bytes = Buffer.from(await response.arrayBuffer());
     const metadata = await sharp(bytes).metadata();
     if (!metadata.width || !metadata.height) return null;
+    if (metadata.width / metadata.height > 4.2) return null;
     const stats = await sharp(bytes).stats();
     const colorChannels = stats.channels.slice(0, 3);
     const alpha = stats.channels[3];

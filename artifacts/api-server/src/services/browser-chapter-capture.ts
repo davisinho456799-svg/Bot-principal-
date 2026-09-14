@@ -267,7 +267,7 @@ async function findRenderedChapters(
         "[id*='chapter']",
         "div"
       ].join(",");
-      const blockedWords = /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)/i;
+      const blockedWords = /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)|(?:^|[/._-])(?:banner|bnr)(?:[/._-]|$)/i;
       const chapterLabel = /(?:chapter|episode|episodio|epis[oó]dio|ep(?:isode)?|ch(?:apter)?|cap(?:itulo|ítulo)?|cap\\\\.)/i;
       const chapterPattern = /(?:chapter|episode|episodio|epis[oó]dio|ep(?:isode)?|ch(?:apter)?|cap(?:itulo|ítulo)?|cap\\\\.)\\\\s*(?:#|[-_:])?\\\\s*(\\\\d{1,5}(?:[.,]\\\\d+)?)/ig;
       const hashPattern = /(?:^|\\\\s)#(\\\\d{1,5}(?:[.,]\\\\d+)?)(?=\\\\s|$)/g;
@@ -423,7 +423,7 @@ async function findRenderedChapters(
             .replace(whitespacePattern, " ")
             .trim();
           const parentNumbers = chapterNumbers(parent);
-          const parentHasImage = Boolean(parent.querySelector("img, picture, source"));
+           const parentHasImage = Boolean(parent.querySelector("img, picture, source, [data-bg], [data-ep_thumb1], [data-ep_thumb2], [data-ep_thumb3]"));
           if (
             parentNumbers.length !== 1 ||
             !parentHasImage ||
@@ -451,11 +451,14 @@ async function findRenderedChapters(
         const hasMarker = chapterLabelFixed.test(classText) ||
           platformAttributes.some((attribute) => cardElement.hasAttribute(attribute)) ||
           chapterLabelFixed.test(cardElement.getAttribute("href") || "");
-        const hasImage = Boolean(cardElement.querySelector("img, picture, source"));
+         const hasImage = Boolean(cardElement.querySelector("img, picture, source, [data-bg], [data-ep_thumb1], [data-ep_thumb2], [data-ep_thumb3]"));
         const hasLink = cardElement.tagName.toLowerCase() === "a" || Boolean(cardElement.querySelector("a[href]"));
         const hasChapterText = chapterLabelFixed.test(cardText);
         const hasCardDimensions = rect.width >= 240 && rect.height >= 90;
-        const mediaElements = [cardElement, ...Array.from(cardElement.querySelectorAll("img, source"))];
+         const mediaElements = [
+           ...Array.from(cardElement.querySelectorAll("img, source, [data-bg], [data-ep_thumb1], [data-ep_thumb2], [data-ep_thumb3]")),
+           cardElement,
+         ];
         const mediaContext = (media) => [
           media.currentSrc || "",
           media.getAttribute("src") || "",
@@ -463,6 +466,8 @@ async function findRenderedChapters(
           media.getAttribute("data-original") || "",
           media.getAttribute("data-lazy-src") || "",
           media.getAttribute("data-image") || "",
+           media.getAttribute("data-bg") || "",
+           media.getAttribute("data-ep_thumb1") || "",
           media.getAttribute("data-ep_thumb2") || "",
           media.getAttribute("data-ep_thumb3") || "",
           media.getAttribute("data-thumbnail") || "",
@@ -483,6 +488,8 @@ async function findRenderedChapters(
              thumbnail.getAttribute("data-original") ||
              thumbnail.getAttribute("data-lazy-src") ||
              thumbnail.getAttribute("data-image") ||
+              thumbnail.getAttribute("data-bg") ||
+              thumbnail.getAttribute("data-ep_thumb1") ||
              thumbnail.getAttribute("data-ep_thumb2") ||
              thumbnail.getAttribute("data-ep_thumb3") ||
              thumbnail.getAttribute("data-thumbnail") ||
