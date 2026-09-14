@@ -158109,9 +158109,27 @@ function chapterNumberIdentity(value) {
 }
 var HISTORICAL_RELEASE_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1e3;
 var sharpFactoryPromise = null;
+var sharpUnavailable = false;
+var sharpWarningLogged = false;
 async function getSharp() {
   sharpFactoryPromise ??= import("sharp").then((module2) => module2.default);
   return sharpFactoryPromise;
+}
+async function getOptionalSharp() {
+  if (sharpUnavailable) return null;
+  try {
+    return await getSharp();
+  } catch (error40) {
+    sharpUnavailable = true;
+    if (!sharpWarningLogged) {
+      sharpWarningLogged = true;
+      logger.warn(
+        { err: error40 },
+        "Sharp n\xE3o est\xE1 dispon\xEDvel; o monitor continuar\xE1 sem gerar imagens de fallback"
+      );
+    }
+    return null;
+  }
 }
 function numericChapterNumber(value) {
   const number4 = Number(value.replace(",", ".").trim());
@@ -158249,10 +158267,11 @@ async function downloadThumbnail(url2) {
     if (/fullversion|full[-_ ]?version|download[-_ ]?app|app[-_ ]?version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)|(?:^|[/._-])(?:banner|bnr)(?:[/._-]|$)/i.test(url2)) {
       return null;
     }
+    const sharp = await getOptionalSharp();
+    if (!sharp) return null;
     const response = await fetch(url2, { headers: { "User-Agent": "ChapterMonitor/1.0" } });
     if (!response.ok) return null;
     const bytes = Buffer.from(await response.arrayBuffer());
-    const sharp = await getSharp();
     const metadata = await sharp(bytes).metadata();
     if (!metadata.width || !metadata.height) return null;
     if (metadata.width / metadata.height > 4.2) return null;
@@ -158270,7 +158289,8 @@ async function downloadThumbnail(url2) {
   }
 }
 async function buildStrip(title, chapters) {
-  const sharp = await getSharp();
+  const sharp = await getOptionalSharp();
+  if (!sharp) return null;
   const rowHeight = 164;
   const width = 920;
   const headerHeight = 92;
@@ -158311,14 +158331,22 @@ async function postStrip(channelId, title, chapters, part, total, isTest = false
   const png = capturedImage ?? await buildStrip(title, chapters);
   const form = new FormData();
   const chapterSummary = chapters.length === 1 ? `1 cap\xEDtulo novo \xB7 cap\xEDtulo ${chapters[0].number}` : `${chapters.length} cap\xEDtulos novos \xB7 cap\xEDtulos ${chapters.map((chapter) => chapter.number).join(", ")}`;
+  if (!png) {
+    logger.warn(
+      { title, chapterNumbers: chapters.map((chapter) => chapter.number) },
+      "Sharp indispon\xEDvel e nenhuma captura do navegador foi obtida; enviando notifica\xE7\xE3o sem anexo"
+    );
+  }
   form.append("payload_json", JSON.stringify({
-    content: `${isTest ? "\u{1F9EA} **TESTE** \xB7 " : ""}**${title}** \xB7 ${chapterSummary}${total > 1 ? ` \xB7 parte ${part}/${total}` : ""}`,
+    content: `${isTest ? "\u{1F9EA} **TESTE** \xB7 " : ""}**${title}** \xB7 ${chapterSummary}${total > 1 ? ` \xB7 parte ${part}/${total}` : ""}${png ? "" : " \xB7 imagem indispon\xEDvel no modo leve"}`,
     allowed_mentions: { parse: [] }
   }));
-  const pngArrayBuffer = new ArrayBuffer(png.byteLength);
-  new Uint8Array(pngArrayBuffer).set(png);
-  const pngBlob = new Blob([pngArrayBuffer], { type: "image/png" });
-  form.append("files[0]", pngBlob, `chapter-release-${isTest ? "test-" : ""}${Date.now()}-${part}.png`);
+  if (png) {
+    const pngArrayBuffer = new ArrayBuffer(png.byteLength);
+    new Uint8Array(pngArrayBuffer).set(png);
+    const pngBlob = new Blob([pngArrayBuffer], { type: "image/png" });
+    form.append("files[0]", pngBlob, `chapter-release-${isTest ? "test-" : ""}${Date.now()}-${part}.png`);
+  }
   const response = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
     method: "POST",
     headers: { Authorization: `Bot ${token}` },
@@ -158328,13 +158356,9 @@ async function postStrip(channelId, title, chapters, part, total, isTest = false
 }
 async function isUsableBrowserCapture(image) {
   if (!image) return false;
-  try {
-    const sharp = await getSharp();
-    const metadata = await sharp(image).metadata();
-    return (metadata.width ?? 0) >= 240 && (metadata.height ?? 0) >= 90;
-  } catch {
-    return false;
-  }
+  const isPng = image.length >= 24 && image[0] === 137 && image[1] === 80 && image[2] === 78 && image[3] === 71 && image[4] === 13 && image[5] === 10 && image[6] === 26 && image[7] === 10;
+  if (!isPng) return false;
+  return image.readUInt32BE(16) >= 240 && image.readUInt32BE(20) >= 90;
 }
 async function runTestNotification(progress, workId) {
   await reportProgress(progress, "Iniciando o teste da notifica\xE7\xE3o.");
@@ -158401,7 +158425,7 @@ async function runTestNotification(progress, workId) {
       title: work.title,
       chapter: chapter.number,
       parser,
-      captureMode: capturedImage ? "captura direta do card" : "fallback SVG/Sharp",
+      captureMode: capturedImage ? "captura direta do card" : "fallback SVG/Sharp ou mensagem sem anexo",
       channelId: config3.discordChannelId
     };
   } finally {

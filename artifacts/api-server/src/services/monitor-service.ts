@@ -44,10 +44,29 @@ const HISTORICAL_RELEASE_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1_000;
 type SharpFactory = typeof sharp;
 
 let sharpFactoryPromise: Promise<SharpFactory> | null = null;
+let sharpUnavailable = false;
+let sharpWarningLogged = false;
 
 async function getSharp(): Promise<SharpFactory> {
   sharpFactoryPromise ??= import("sharp").then((module) => module.default);
   return sharpFactoryPromise;
+}
+
+async function getOptionalSharp(): Promise<SharpFactory | null> {
+  if (sharpUnavailable) return null;
+  try {
+    return await getSharp();
+  } catch (error) {
+    sharpUnavailable = true;
+    if (!sharpWarningLogged) {
+      sharpWarningLogged = true;
+      logger.warn(
+        { err: error },
+        "Sharp não está disponível; o monitor continuará sem gerar imagens de fallback",
+      );
+    }
+    return null;
+  }
 }
 
 function numericChapterNumber(value: string): number | null {
@@ -246,10 +265,11 @@ async function downloadThumbnail(url: string): Promise<Buffer | null> {
     if (/fullversion|full[-_ ]?version|download[-_ ]?app|app[-_ ]?version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)|(?:^|[/._-])(?:banner|bnr)(?:[/._-]|$)/i.test(url)) {
       return null;
     }
+    const sharp = await getOptionalSharp();
+    if (!sharp) return null;
     const response = await fetch(url, { headers: { "User-Agent": "ChapterMonitor/1.0" } });
     if (!response.ok) return null;
     const bytes = Buffer.from(await response.arrayBuffer());
-    const sharp = await getSharp();
     const metadata = await sharp(bytes).metadata();
     if (!metadata.width || !metadata.height) return null;
     if (metadata.width / metadata.height > 4.2) return null;
@@ -271,8 +291,9 @@ async function downloadThumbnail(url: string): Promise<Buffer | null> {
 async function buildStrip(
   title: string,
   chapters: ChapterCandidate[],
-): Promise<Buffer> {
-  const sharp = await getSharp();
+): Promise<Buffer | null> {
+  const sharp = await getOptionalSharp();
+  if (!sharp) return null;
   const rowHeight = 164;
   const width = 920;
   const headerHeight = 92;
@@ -335,14 +356,22 @@ async function postStrip(
   const chapterSummary = chapters.length === 1
     ? `1 capítulo novo · capítulo ${chapters[0].number}`
     : `${chapters.length} capítulos novos · capítulos ${chapters.map((chapter) => chapter.number).join(", ")}`;
+  if (!png) {
+    logger.warn(
+      { title, chapterNumbers: chapters.map((chapter) => chapter.number) },
+      "Sharp indisponível e nenhuma captura do navegador foi obtida; enviando notificação sem anexo",
+    );
+  }
   form.append("payload_json", JSON.stringify({
-    content: `${isTest ? "🧪 **TESTE** · " : ""}**${title}** · ${chapterSummary}${total > 1 ? ` · parte ${part}/${total}` : ""}`,
+    content: `${isTest ? "🧪 **TESTE** · " : ""}**${title}** · ${chapterSummary}${total > 1 ? ` · parte ${part}/${total}` : ""}${png ? "" : " · imagem indisponível no modo leve"}`,
     allowed_mentions: { parse: [] },
   }));
-  const pngArrayBuffer = new ArrayBuffer(png.byteLength);
-  new Uint8Array(pngArrayBuffer).set(png);
-  const pngBlob = new Blob([pngArrayBuffer], { type: "image/png" });
-  form.append("files[0]", pngBlob, `chapter-release-${isTest ? "test-" : ""}${Date.now()}-${part}.png`);
+  if (png) {
+    const pngArrayBuffer = new ArrayBuffer(png.byteLength);
+    new Uint8Array(pngArrayBuffer).set(png);
+    const pngBlob = new Blob([pngArrayBuffer], { type: "image/png" });
+    form.append("files[0]", pngBlob, `chapter-release-${isTest ? "test-" : ""}${Date.now()}-${part}.png`);
+  }
   const response = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
     method: "POST",
     headers: { Authorization: `Bot ${token}` },
@@ -353,13 +382,20 @@ async function postStrip(
 
 async function isUsableBrowserCapture(image: Buffer | undefined): Promise<boolean> {
   if (!image) return false;
-  try {
-    const sharp = await getSharp();
-    const metadata = await sharp(image).metadata();
-    return (metadata.width ?? 0) >= 240 && (metadata.height ?? 0) >= 90;
-  } catch {
-    return false;
-  }
+  // Browser captures are always requested as PNG. Read the IHDR dimensions
+  // directly so a valid capture does not depend on Sharp being installed.
+  const isPng =
+    image.length >= 24 &&
+    image[0] === 0x89 &&
+    image[1] === 0x50 &&
+    image[2] === 0x4e &&
+    image[3] === 0x47 &&
+    image[4] === 0x0d &&
+    image[5] === 0x0a &&
+    image[6] === 0x1a &&
+    image[7] === 0x0a;
+  if (!isPng) return false;
+  return image.readUInt32BE(16) >= 240 && image.readUInt32BE(20) >= 90;
 }
 
 export async function runTestNotification(
@@ -439,7 +475,9 @@ export async function runTestNotification(
       title: work.title,
       chapter: chapter.number,
       parser,
-      captureMode: capturedImage ? "captura direta do card" : "fallback SVG/Sharp",
+      captureMode: capturedImage
+        ? "captura direta do card"
+        : "fallback SVG/Sharp ou mensagem sem anexo",
       channelId: config.discordChannelId,
     };
   } finally {
