@@ -54473,7 +54473,7 @@ var init_malSnapshots = __esm({
 });
 
 // ../../lib/db/src/schema/monitor.ts
-var monitoredWorksTable, detectedChaptersTable, monitorActivityTable, monitorConfigTable, insertMonitoredWorkSchema;
+var monitoredWorksTable, detectedChaptersTable, monitorActivityTable, monitorHistoryTable, monitorConfigTable, insertMonitoredWorkSchema;
 var init_monitor = __esm({
   "../../lib/db/src/schema/monitor.ts"() {
     "use strict";
@@ -54517,6 +54517,13 @@ var init_monitor = __esm({
       chapterCount: integer("chapter_count").notNull().default(0),
       status: text("status").notNull(),
       createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow()
+    });
+    monitorHistoryTable = pgTable("monitor_history", {
+      id: serial("id").primaryKey(),
+      workId: integer("work_id").notNull().references(() => monitoredWorksTable.id, { onDelete: "cascade" }),
+      chapterNumber: text("chapter_number").notNull(),
+      releaseDate: text("release_date"),
+      notifiedAt: timestamp("notified_at", { withTimezone: true }).notNull().defaultNow()
     });
     monitorConfigTable = pgTable("monitor_config", {
       id: integer("id").primaryKey().default(1),
@@ -54562,6 +54569,7 @@ __export(schema_exports, {
   malSnapshotsTable: () => malSnapshotsTable,
   monitorActivityTable: () => monitorActivityTable,
   monitorConfigTable: () => monitorConfigTable,
+  monitorHistoryTable: () => monitorHistoryTable,
   monitoredWorksTable: () => monitoredWorksTable,
   notificacaoCanaisTable: () => notificacaoCanaisTable,
   notificacaoEventosTable: () => notificacaoEventosTable,
@@ -54733,6 +54741,7 @@ __export(src_exports, {
   malSnapshotsTable: () => malSnapshotsTable,
   monitorActivityTable: () => monitorActivityTable,
   monitorConfigTable: () => monitorConfigTable,
+  monitorHistoryTable: () => monitorHistoryTable,
   monitoredWorksTable: () => monitoredWorksTable,
   notificacaoCanaisTable: () => notificacaoCanaisTable,
   notificacaoEventosTable: () => notificacaoEventosTable,
@@ -157016,6 +157025,16 @@ var GetMonitorOverviewResponse = objectType({
     "createdAt": coerce.date()
   }))
 });
+var ListMonitorHistoryResponseItem = objectType({
+  "id": numberType(),
+  "workId": numberType(),
+  "workTitle": stringType(),
+  "platform": stringType(),
+  "chapterNumber": stringType(),
+  "releaseDate": stringType().nullable().optional(),
+  "notifiedAt": coerce.date()
+});
+var ListMonitorHistoryResponse = arrayType(ListMonitorHistoryResponseItem);
 var ListMonitoredWorksResponseItem = objectType({
   "id": numberType(),
   "title": stringType(),
@@ -157197,8 +157216,20 @@ init_schema2();
 // src/lib/logger.ts
 var import_pino = __toESM(require_pino(), 1);
 var isProduction = process.env.NODE_ENV === "production";
+function serializeError(error40) {
+  if (!(error40 instanceof Error)) return error40;
+  return {
+    type: error40.constructor.name,
+    message: error40.message,
+    stack: error40.stack?.replace(/\r?\n/g, " | "),
+    ...error40.cause ? { cause: error40.cause } : {}
+  };
+}
 var logger = (0, import_pino.default)({
   level: process.env.LOG_LEVEL ?? "info",
+  serializers: {
+    err: serializeError
+  },
   redact: [
     "req.headers.authorization",
     "req.headers.cookie",
@@ -158607,6 +158638,12 @@ async function runMonitor() {
       await db.transaction(async (tx) => {
         await migrateLegacyKeys(tx, work, existing);
         await tx.insert(detectedChaptersTable).values(fresh.map((chapter) => ({ workId: work.id, chapterKey: chapter.key, chapterNumber: chapter.number, thumbnailUrl: chapter.thumbnailUrl, detectedAt: checkedAt, publishedAt: checkedAt })));
+        await tx.insert(monitorHistoryTable).values(fresh.map((chapter) => ({
+          workId: work.id,
+          chapterNumber: chapter.number,
+          releaseDate: chapter.releaseDate ?? null,
+          notifiedAt: checkedAt
+        })));
         await tx.insert(monitorActivityTable).values({ workId: work.id, chapterCount: fresh.length, status: "Published" });
         await tx.update(monitoredWorksTable).set({ chaptersSeen: existing.length + historical.length + fresh.length, lastCheckedAt: checkedAt, lastPublishedAt: checkedAt, lastStatus: `${fresh.length} new chapter${fresh.length === 1 ? "" : "s"} published`, updatedAt: checkedAt }).where(eq(monitoredWorksTable.id, work.id));
       });
@@ -158687,6 +158724,29 @@ router2.get("/monitor/overview", async (_req, res, next) => {
       recentActivity: activities.map((item) => ({ ...item, createdAt: item.createdAt.toISOString() }))
     };
     res.json(GetMonitorOverviewResponse.parse(response));
+  } catch (error40) {
+    next(error40);
+  }
+});
+router2.get("/monitor/history", async (req, res, next) => {
+  try {
+    const requestedLimit = Number(req.query.limit ?? 50);
+    const limit = Number.isFinite(requestedLimit) ? Math.min(200, Math.max(1, Math.floor(requestedLimit))) : 50;
+    const requestedWorkId = req.query.workId ? Number(req.query.workId) : null;
+    const workId = requestedWorkId !== null && Number.isInteger(requestedWorkId) ? requestedWorkId : null;
+    const rows = await db.select({
+      id: monitorHistoryTable.id,
+      workId: monitorHistoryTable.workId,
+      workTitle: monitoredWorksTable.title,
+      platform: monitoredWorksTable.platform,
+      chapterNumber: monitorHistoryTable.chapterNumber,
+      releaseDate: monitorHistoryTable.releaseDate,
+      notifiedAt: monitorHistoryTable.notifiedAt
+    }).from(monitorHistoryTable).innerJoin(monitoredWorksTable, eq(monitorHistoryTable.workId, monitoredWorksTable.id)).where(workId === null ? void 0 : eq(monitorHistoryTable.workId, workId)).orderBy(desc(monitorHistoryTable.notifiedAt)).limit(limit);
+    res.json(ListMonitorHistoryResponse.parse(rows.map((row) => ({
+      ...row,
+      notifiedAt: row.notifiedAt.toISOString()
+    }))));
   } catch (error40) {
     next(error40);
   }
@@ -163193,7 +163253,6 @@ var SOURCE_LABELS = {
   mangadex: "MangaDex",
   mangaupdates: "MangaUpdates",
   jikan: "MyAnimeList",
-  tenrai: "Tenrai",
   "jikan-anime": "MyAnimeList"
 };
 var SOURCE_ICONS = {
@@ -163203,7 +163262,6 @@ var SOURCE_ICONS = {
   mangadex: "\u{1F7E0}",
   mangaupdates: "\u{1F535}",
   jikan: "\u{1F534}",
-  tenrai: "\u{1F535}",
   "jikan-anime": "\u{1F534}"
 };
 function dedupeTitleSuggestions(suggestions) {
@@ -163274,13 +163332,12 @@ async function respondSourceAutocomplete(interaction, tipo, selectedTitle, focus
         if (match) suggestions.push(sourceChoice("jikan", String(match.malId)));
       }
     } else {
-      const [comickRaw, anilistRaw, mangadexRaw, muRaw, jikanRaw, tenraiRaw] = await Promise.allSettled([
+      const [comickRaw, anilistRaw, mangadexRaw, muRaw, jikanRaw] = await Promise.allSettled([
         withTimeout2(searchComick(query), TIMEOUT_MS),
         withTimeout2(searchManhwa(query), TIMEOUT_MS),
         withTimeout2(searchMangaDex(query), TIMEOUT_MS),
         withTimeout2(searchMangaUpdates(query, "Manhwa"), TIMEOUT_MS),
-        withTimeout2(searchJikan(query), TIMEOUT_MS),
-        withTimeout2(searchTenraiManga(query, "manhwa"), TIMEOUT_MS)
+        withTimeout2(searchJikan(query), TIMEOUT_MS)
       ]);
       if (comickRaw.status === "fulfilled") {
         const match = firstTitleMatch(comickRaw.value, query, (item) => item.title);
@@ -163306,10 +163363,6 @@ async function respondSourceAutocomplete(interaction, tipo, selectedTitle, focus
         const match = firstTitleMatch(jikanRaw.value, query, (item) => item.mainTitle);
         if (match) suggestions.push(sourceChoice("jikan", String(match.malId)));
       }
-      if (tenraiRaw.status === "fulfilled") {
-        const match = firstTitleMatch(tenraiRaw.value, query, (item) => item.title_english ?? item.title);
-        if (match) suggestions.push(sourceChoice("tenrai", String(match.mal_id)));
-      }
     }
     const filter = focusedValue.trim().toLowerCase();
     await interaction.respond(
@@ -163331,13 +163384,12 @@ async function respondAutocomplete(interaction, focusedValue, sourceFilter = nul
     await interaction.respond(cached2.results.slice(0, 25));
     return;
   }
-  const [comickRaw, anilistRaw, mangadexRaw, muRaw, jikanRaw, tenraiRaw] = await Promise.allSettled([
+  const [comickRaw, anilistRaw, mangadexRaw, muRaw, jikanRaw] = await Promise.allSettled([
     withTimeout2(searchComick(query), TIMEOUT_MS),
     withTimeout2(searchManhwa(query), TIMEOUT_MS),
     withTimeout2(searchMangaDex(query), TIMEOUT_MS),
     withTimeout2(searchMangaUpdates(query, "Manhwa"), TIMEOUT_MS),
-    withTimeout2(searchJikan(query), TIMEOUT_MS),
-    withTimeout2(searchTenraiManga(query, "manhwa"), TIMEOUT_MS)
+    withTimeout2(searchJikan(query), TIMEOUT_MS)
   ]);
   const seen = /* @__PURE__ */ new Set();
   const suggestions = [];
@@ -163398,19 +163450,6 @@ async function respondAutocomplete(interaction, focusedValue, sourceFilter = nul
       if (m.mainTitle && key && !seen.has(`jikan:${key}`)) {
         seen.add(`jikan:${key}`);
         suggestions.push(sourceSuggestion(m.mainTitle, "jikan", String(m.malId), plainValue));
-        count2++;
-      }
-    }
-  }
-  if (tenraiRaw.status === "fulfilled" && (!sourceFilter || sourceFilter === "tenrai")) {
-    let count2 = 0;
-    for (const m of tenraiRaw.value) {
-      if (count2 >= PER_SOURCE_LIMIT) break;
-      const title = m.title_english?.trim() || m.title?.trim() || "";
-      const key = title.toLowerCase();
-      if (title && !seen.has(`tenrai:${key}`)) {
-        seen.add(`tenrai:${key}`);
-        suggestions.push(sourceSuggestion(title, "tenrai", String(m.mal_id), plainValue));
         count2++;
       }
     }
@@ -173927,6 +173966,8 @@ var monitorCommandDefinition = new import_discord35.SlashCommandBuilder().setNam
 ).addSubcommand(
   (command) => command.setName("listar").setDescription("Lista os manhwas ativos")
 ).addSubcommand(
+  (command) => command.setName("historico").setDescription("Lista os \xFAltimos cap\xEDtulos enviados ao Discord")
+).addSubcommand(
   (command) => command.setName("canal").setDescription("Escolhe o canal que receber\xE1 as notifica\xE7\xF5es").addChannelOption(
     (option) => option.setName("canal").setDescription("Canal de texto para as notifica\xE7\xF5es").addChannelTypes(import_discord35.ChannelType.GuildText, import_discord35.ChannelType.GuildAnnouncement).setRequired(true)
   )
@@ -174052,6 +174093,32 @@ async function handleSetChannel(interaction) {
     ].join("\n")
   });
 }
+async function handleHistory(interaction) {
+  const history = await db.select({
+    workTitle: monitoredWorksTable.title,
+    chapterNumber: monitorHistoryTable.chapterNumber,
+    releaseDate: monitorHistoryTable.releaseDate,
+    notifiedAt: monitorHistoryTable.notifiedAt
+  }).from(monitorHistoryTable).innerJoin(monitoredWorksTable, eq(monitorHistoryTable.workId, monitoredWorksTable.id)).orderBy(desc(monitorHistoryTable.notifiedAt)).limit(15);
+  if (!history.length) {
+    await interaction.editReply({
+      content: "\u{1F4ED} Ainda n\xE3o h\xE1 cap\xEDtulos enviados pelo monitor."
+    });
+    return;
+  }
+  const lines = history.map((item) => {
+    const notifiedAt = item.notifiedAt.toLocaleString("pt-BR", {
+      dateStyle: "short",
+      timeStyle: "short"
+    });
+    const releaseDate = item.releaseDate ? ` \xB7 lan\xE7ado em ${item.releaseDate}` : "";
+    return `\u2022 **${item.workTitle}** \xB7 cap\xEDtulo **${item.chapterNumber}** \xB7 notificado em ${notifiedAt}${releaseDate}`;
+  });
+  const suffix = history.length === 15 ? "\n\nMostrando os 15 mais recentes." : "";
+  await interaction.editReply({
+    content: [`\u{1F4DA} **Hist\xF3rico de notifica\xE7\xF5es**`, ...lines, suffix].join("\n").slice(0, 1950)
+  });
+}
 async function executeManhwaCommand(interaction) {
   await interaction.deferReply({ ephemeral: true });
   const subcommand = interaction.options.getSubcommand();
@@ -174061,6 +174128,10 @@ async function executeManhwaCommand(interaction) {
   }
   if (subcommand === "listar") {
     await handleList(interaction);
+    return;
+  }
+  if (subcommand === "historico") {
+    await handleHistory(interaction);
     return;
   }
   if (subcommand === "canal") {
@@ -174288,8 +174359,12 @@ async function runBotStartupTasks(readyClient) {
     logger.error({ err }, "Falha na migra\xE7\xE3o autom\xE1tica \u2014 bot continuar\xE1 normalmente");
   }
   if (process.env["DISCORD_LIGHT_MODE"] === "true") {
+    const notificationsEnabled = process.env["LIGHT_MODE_NOTIFICATIONS"] === "true";
+    if (notificationsEnabled) {
+      startNotificacaoService(readyClient);
+    }
     logger.info(
-      "Modo leve ativo \u2014 notifica\xE7\xF5es autom\xE1ticas, resumo semanal e limpeza peri\xF3dica desabilitados"
+      notificationsEnabled ? "Modo leve ativo \u2014 notifica\xE7\xF5es autom\xE1ticas habilitadas; resumo semanal e limpeza peri\xF3dica desabilitados" : "Modo leve ativo \u2014 notifica\xE7\xF5es autom\xE1ticas, resumo semanal e limpeza peri\xF3dica desabilitados"
     );
     return;
   }
