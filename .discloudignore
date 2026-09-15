@@ -12,3 +12,4 @@ dist
 *.zip
 *.log
 *.tsbuildinfo
+# Discloud auto deploy sync marker
