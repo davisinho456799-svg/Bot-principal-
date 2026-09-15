@@ -6,7 +6,11 @@ import {
 } from "discord.js";
 import { desc, eq, like } from "drizzle-orm";
 import { db } from "@workspace/db";
-import { monitorConfigTable, monitoredWorksTable } from "@workspace/db/schema";
+import {
+  monitorConfigTable,
+  monitorHistoryTable,
+  monitoredWorksTable,
+} from "@workspace/db/schema";
 import { logger } from "../lib/logger";
 import { runMonitor, runTestNotification } from "./monitor-service.js";
 
@@ -44,6 +48,11 @@ export const monitorCommandDefinition = new SlashCommandBuilder()
     )
     .addSubcommand((command) =>
       command.setName("listar").setDescription("Lista os manhwas ativos"),
+    )
+    .addSubcommand((command) =>
+      command
+        .setName("historico")
+        .setDescription("Lista os últimos capítulos enviados ao Discord"),
     )
     .addSubcommand((command) =>
       command
@@ -237,6 +246,40 @@ async function handleSetChannel(interaction: ChatInputCommandInteraction) {
   });
 }
 
+async function handleHistory(interaction: ChatInputCommandInteraction) {
+  const history = await db
+    .select({
+      workTitle: monitoredWorksTable.title,
+      chapterNumber: monitorHistoryTable.chapterNumber,
+      releaseDate: monitorHistoryTable.releaseDate,
+      notifiedAt: monitorHistoryTable.notifiedAt,
+    })
+    .from(monitorHistoryTable)
+    .innerJoin(monitoredWorksTable, eq(monitorHistoryTable.workId, monitoredWorksTable.id))
+    .orderBy(desc(monitorHistoryTable.notifiedAt))
+    .limit(15);
+
+  if (!history.length) {
+    await interaction.editReply({
+      content: "📭 Ainda não há capítulos enviados pelo monitor.",
+    });
+    return;
+  }
+
+  const lines = history.map((item) => {
+    const notifiedAt = item.notifiedAt.toLocaleString("pt-BR", {
+      dateStyle: "short",
+      timeStyle: "short",
+    });
+    const releaseDate = item.releaseDate ? ` · lançado em ${item.releaseDate}` : "";
+    return `• **${item.workTitle}** · capítulo **${item.chapterNumber}** · notificado em ${notifiedAt}${releaseDate}`;
+  });
+  const suffix = history.length === 15 ? "\n\nMostrando os 15 mais recentes." : "";
+  await interaction.editReply({
+    content: [`📚 **Histórico de notificações**`, ...lines, suffix].join("\n").slice(0, 1950),
+  });
+}
+
 export async function executeManhwaCommand(interaction: ChatInputCommandInteraction) {
   await interaction.deferReply({ ephemeral: true });
   const subcommand = interaction.options.getSubcommand();
@@ -246,6 +289,10 @@ export async function executeManhwaCommand(interaction: ChatInputCommandInteract
   }
   if (subcommand === "listar") {
     await handleList(interaction);
+    return;
+  }
+  if (subcommand === "historico") {
+    await handleHistory(interaction);
     return;
   }
   if (subcommand === "canal") {

@@ -7,6 +7,7 @@ import {
   GetMonitorConfigResponse,
   GetMonitorOverviewResponse,
   ListDiscordChannelsResponse,
+  ListMonitorHistoryResponse,
   ListMonitoredWorksResponse,
   RunMonitorNowResponse,
   UpdateMonitoredWorkBody,
@@ -20,6 +21,7 @@ import {
   detectedChaptersTable,
   monitorActivityTable,
   monitorConfigTable,
+  monitorHistoryTable,
   monitoredWorksTable,
 } from "@workspace/db/schema";
 import { logger } from "../lib/logger";
@@ -107,6 +109,40 @@ router.get("/monitor/overview", async (_req, res, next) => {
       recentActivity: activities.map((item) => ({ ...item, createdAt: item.createdAt.toISOString() })),
     };
     res.json(GetMonitorOverviewResponse.parse(response));
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get("/monitor/history", async (req, res, next) => {
+  try {
+    const requestedLimit = Number(req.query.limit ?? 50);
+    const limit = Number.isFinite(requestedLimit)
+      ? Math.min(200, Math.max(1, Math.floor(requestedLimit)))
+      : 50;
+    const requestedWorkId = req.query.workId ? Number(req.query.workId) : null;
+    const workId = requestedWorkId !== null && Number.isInteger(requestedWorkId)
+      ? requestedWorkId
+      : null;
+    const rows = await db
+      .select({
+        id: monitorHistoryTable.id,
+        workId: monitorHistoryTable.workId,
+        workTitle: monitoredWorksTable.title,
+        platform: monitoredWorksTable.platform,
+        chapterNumber: monitorHistoryTable.chapterNumber,
+        releaseDate: monitorHistoryTable.releaseDate,
+        notifiedAt: monitorHistoryTable.notifiedAt,
+      })
+      .from(monitorHistoryTable)
+      .innerJoin(monitoredWorksTable, eq(monitorHistoryTable.workId, monitoredWorksTable.id))
+      .where(workId === null ? undefined : eq(monitorHistoryTable.workId, workId))
+      .orderBy(desc(monitorHistoryTable.notifiedAt))
+      .limit(limit);
+    res.json(ListMonitorHistoryResponse.parse(rows.map((row) => ({
+      ...row,
+      notifiedAt: row.notifiedAt.toISOString(),
+    }))));
   } catch (error) {
     next(error);
   }

@@ -4,6 +4,7 @@ import { db } from "@workspace/db";
 import {
   detectedChaptersTable,
   monitorActivityTable,
+  monitorHistoryTable,
   monitorConfigTable,
   monitoredWorksTable,
 } from "@workspace/db/schema";
@@ -702,6 +703,12 @@ export async function runMonitor() {
       await db.transaction(async (tx) => {
         await migrateLegacyKeys(tx, work, existing);
         await tx.insert(detectedChaptersTable).values(fresh.map((chapter) => ({ workId: work.id, chapterKey: chapter.key, chapterNumber: chapter.number, thumbnailUrl: chapter.thumbnailUrl, detectedAt: checkedAt, publishedAt: checkedAt })));
+        await tx.insert(monitorHistoryTable).values(fresh.map((chapter) => ({
+          workId: work.id,
+          chapterNumber: chapter.number,
+          releaseDate: chapter.releaseDate ?? null,
+          notifiedAt: checkedAt,
+        })));
         await tx.insert(monitorActivityTable).values({ workId: work.id, chapterCount: fresh.length, status: "Published" });
         await tx.update(monitoredWorksTable).set({ chaptersSeen: existing.length + historical.length + fresh.length, lastCheckedAt: checkedAt, lastPublishedAt: checkedAt, lastStatus: `${fresh.length} new chapter${fresh.length === 1 ? "" : "s"} published`, updatedAt: checkedAt }).where(eq(monitoredWorksTable.id, work.id));
       });

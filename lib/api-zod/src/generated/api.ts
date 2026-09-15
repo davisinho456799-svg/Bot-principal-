@@ -40,6 +40,17 @@ export const GetMonitorOverviewResponse = zod.object({
 /**
  * @summary List monitored works
  */
+export const ListMonitorHistoryResponseItem = zod.object({
+  "id": zod.number(),
+  "workId": zod.number(),
+  "workTitle": zod.string(),
+  "platform": zod.string(),
+  "chapterNumber": zod.string(),
+  "releaseDate": zod.string().nullable().optional(),
+  "notifiedAt": zod.coerce.date()
+})
+export const ListMonitorHistoryResponse = zod.array(ListMonitorHistoryResponseItem)
+
 export const ListMonitoredWorksResponseItem = zod.object({
   "id": zod.number(),
   "title": zod.string(),

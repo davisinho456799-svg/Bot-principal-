@@ -78,6 +78,17 @@ export interface MonitorOverview {
   recentActivity: ActivityItem[];
 }
 
+export interface MonitorHistoryItem {
+  id: number;
+  workId: number;
+  workTitle: string;
+  platform: string;
+  chapterNumber: string;
+  /** @nullable */
+  releaseDate?: string | null;
+  notifiedAt: string;
+}
+
 export interface RunResult {
   status: string;
   worksChecked: number;

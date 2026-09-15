@@ -55,6 +55,18 @@ export const monitorActivityTable = pgTable("monitor_activity", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+export const monitorHistoryTable = pgTable("monitor_history", {
+  id: serial("id").primaryKey(),
+  workId: integer("work_id")
+    .notNull()
+    .references(() => monitoredWorksTable.id, { onDelete: "cascade" }),
+  chapterNumber: text("chapter_number").notNull(),
+  releaseDate: text("release_date"),
+  notifiedAt: timestamp("notified_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export type MonitorHistory = typeof monitorHistoryTable.$inferSelect;
+
 export const monitorConfigTable = pgTable("monitor_config", {
   id: integer("id").primaryKey().default(1),
   discordChannelId: text("discord_channel_id"),
