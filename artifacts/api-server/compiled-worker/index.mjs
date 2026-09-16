@@ -174722,10 +174722,17 @@ async function validateGatewayAccess(token) {
     headers: { Authorization: `Bot ${normalizedToken}` },
     signal: AbortSignal.timeout(GATEWAY_PREFLIGHT_TIMEOUT_MS)
   });
-  if (!response.ok) {
+  if (response.status === 429) {
     const retryAfter = response.headers.get("retry-after");
+    logger.warn(
+      { retryAfter },
+      "Preflight do Gateway limitado pelo Discord; seguindo para o login direto"
+    );
+    return normalizedToken;
+  }
+  if (!response.ok) {
     throw new Error(
-      `Discord rejeitou o token no preflight do Gateway (HTTP ${response.status})${retryAfter ? `; retry-after=${retryAfter}s` : ""}`
+      `Discord rejeitou o token no preflight do Gateway (HTTP ${response.status})`
     );
   }
   const gateway = await response.json();
