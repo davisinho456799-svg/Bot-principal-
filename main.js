@@ -11,6 +11,7 @@ process.env.DISCORD_BOT_ENABLED = "true";
 process.env.DISCORD_LIGHT_MODE ??= "true";
 process.env.LIGHT_MODE_NOTIFICATIONS ??= "true";
 process.env.MONITOR_INTERVAL_MINUTES ??= "60";
+console.log("Panel Watch Discord worker build: embed-limit-fix-v2");
 
 const execFileAsync = promisify(execFile);
 const projectRoot = path.dirname(fileURLToPath(import.meta.url));
