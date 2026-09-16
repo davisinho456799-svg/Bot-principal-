@@ -166,7 +166,14 @@ export async function execute(interaction: ChatInputCommandInteraction) {
   );
 
   // ── Configuração AniDB ──────────────────────────────────────────────────────
-  embed.addFields(
+  // Discord permite no máximo 25 fields por embed. As seções anteriores já
+  // usam 24, então a configuração continua em um segundo embed.
+  const configEmbed = createPanelWatchEmbed(PANEL_WATCH_COLORS.primary)
+    .setTitle("⚙️ Panel Watch · Configuração")
+    .setDescription("Configurações opcionais e sites de leitura em português.");
+  setPanelWatchFooter(configEmbed, "Configuração e links");
+
+  configEmbed.addFields(
     {
       name: "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n⚙️ CONFIGURAÇÃO — AniDB (opcional)",
       value:
@@ -186,16 +193,12 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     },
   );
 
-  embed
-    .addFields({
-      name: "🇧🇷 Sites de leitura BR (manhwa/manga)",
-      value:
-        "BlackoutComics • Hiper.cool • TiaManhwa • NexusToons • InkApk • ReMangas • MangaHost • UnionMangas • MangaLivre",
-      inline: false,
-    })
-    .setFooter({
-      text: "Dados: AniList • MangaDex • Comick • MangaUpdates • MAL • Kitsu • AniDB • VNDB • Sinopses traduzidas automaticamente",
-    });
+  configEmbed.addFields({
+    name: "🇧🇷 Sites de leitura BR (manhwa/manga)",
+    value:
+      "BlackoutComics • Hiper.cool • TiaManhwa • NexusToons • InkApk • ReMangas • MangaHost • UnionMangas • MangaLivre",
+    inline: false,
+  });
 
-  await interaction.reply({ embeds: [embed] });
+  await interaction.reply({ embeds: [embed, configEmbed] });
 }

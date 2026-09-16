@@ -159251,7 +159251,9 @@ async function execute(interaction) {
       inline: false
     }
   );
-  embed.addFields(
+  const configEmbed = createPanelWatchEmbed(PANEL_WATCH_COLORS.primary).setTitle("\u2699\uFE0F Panel Watch \xB7 Configura\xE7\xE3o").setDescription("Configura\xE7\xF5es opcionais e sites de leitura em portugu\xEAs.");
+  setPanelWatchFooter(configEmbed, "Configura\xE7\xE3o e links");
+  configEmbed.addFields(
     {
       name: "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n\u2699\uFE0F CONFIGURA\xC7\xC3O \u2014 AniDB (opcional)",
       value: "Por padr\xE3o, o AniDB funciona como **fallback de busca de t\xEDtulos** (sem detalhes).\nPara ativar sinopse, score, epis\xF3dios e capa do AniDB:\n\n**1.** Acesse https://anidb.net/software/add\n**2.** Registre um novo client (gratuito, aprova\xE7\xE3o em minutos)\n**3.** Adicione \xE0s vari\xE1veis de ambiente do bot:\n```\nANIDB_CLIENT=seu_client_name\nANIDB_CLIENT_VER=1\n```\n\u26A0\uFE0F **Limite:** 1 req/2s e 10 req/sess\xE3o (imposto pelo AniDB)",
@@ -159263,14 +159265,12 @@ async function execute(interaction) {
       inline: false
     }
   );
-  embed.addFields({
+  configEmbed.addFields({
     name: "\u{1F1E7}\u{1F1F7} Sites de leitura BR (manhwa/manga)",
     value: "BlackoutComics \u2022 Hiper.cool \u2022 TiaManhwa \u2022 NexusToons \u2022 InkApk \u2022 ReMangas \u2022 MangaHost \u2022 UnionMangas \u2022 MangaLivre",
     inline: false
-  }).setFooter({
-    text: "Dados: AniList \u2022 MangaDex \u2022 Comick \u2022 MangaUpdates \u2022 MAL \u2022 Kitsu \u2022 AniDB \u2022 VNDB \u2022 Sinopses traduzidas automaticamente"
   });
-  await interaction.reply({ embeds: [embed] });
+  await interaction.reply({ embeds: [embed, configEmbed] });
 }
 
 // src/bot/commands/autor.ts
