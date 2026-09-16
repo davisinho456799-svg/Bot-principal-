@@ -75,6 +75,20 @@ function registerGatewayDiagnostics(client: Client) {
   });
 }
 
+function gatewayState(client: Client) {
+  return {
+    managerStatus: client.ws.status,
+    managerPing: client.ws.ping,
+    gateway: client.ws.gateway,
+    shards: [...client.ws.shards.values()].map((shard) => ({
+      id: shard.id,
+      status: shard.status,
+      ping: shard.ping,
+      lastPingTimestamp: shard.lastPingTimestamp,
+    })),
+  };
+}
+
 async function loginAndWaitForReady(client: Client, token: string) {
   const ready = new Promise<void>((resolve, reject) => {
     const onReady = () => {
@@ -99,7 +113,9 @@ async function loginAndWaitForReady(client: Client, token: string) {
     Promise.all([login, ready]),
     new Promise<never>((_, reject) =>
       setTimeout(
-        () => reject(new Error(`Discord não emitiu ClientReady em ${LOGIN_TIMEOUT_MS / 1000}s`)),
+        () => reject(new Error(
+          `Discord não emitiu ClientReady em ${LOGIN_TIMEOUT_MS / 1000}s; estado=${JSON.stringify(gatewayState(client))}`,
+        )),
         LOGIN_TIMEOUT_MS,
       ),
     ),

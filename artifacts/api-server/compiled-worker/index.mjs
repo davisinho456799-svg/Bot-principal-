@@ -174762,6 +174762,19 @@ function registerGatewayDiagnostics(client) {
     }
   });
 }
+function gatewayState(client) {
+  return {
+    managerStatus: client.ws.status,
+    managerPing: client.ws.ping,
+    gateway: client.ws.gateway,
+    shards: [...client.ws.shards.values()].map((shard) => ({
+      id: shard.id,
+      status: shard.status,
+      ping: shard.ping,
+      lastPingTimestamp: shard.lastPingTimestamp
+    }))
+  };
+}
 async function loginAndWaitForReady(client, token) {
   const ready = new Promise((resolve, reject) => {
     const onReady = () => {
@@ -174784,7 +174797,9 @@ async function loginAndWaitForReady(client, token) {
     Promise.all([login, ready]),
     new Promise(
       (_, reject) => setTimeout(
-        () => reject(new Error(`Discord n\xE3o emitiu ClientReady em ${LOGIN_TIMEOUT_MS / 1e3}s`)),
+        () => reject(new Error(
+          `Discord n\xE3o emitiu ClientReady em ${LOGIN_TIMEOUT_MS / 1e3}s; estado=${JSON.stringify(gatewayState(client))}`
+        )),
         LOGIN_TIMEOUT_MS
       )
     )
