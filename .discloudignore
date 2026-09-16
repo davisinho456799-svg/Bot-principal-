@@ -18,3 +18,4 @@ dist
 # Discord gateway rate limit deploy sync
 # Discord gateway state diagnostics deploy sync
 # Discord gateway endpoint bypass deploy sync
+# Discord command interaction diagnostics deploy sync
