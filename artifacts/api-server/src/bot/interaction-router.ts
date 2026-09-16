@@ -14,6 +14,20 @@ import {
 
 export function registerInteractionRouter(client: Client) {
   client.on(Events.InteractionCreate, async (interaction) => {
+    const receivedAt = Date.now();
+    logger.info(
+      {
+        interactionType: interaction.type,
+        interactionId: interaction.id,
+        command: interaction.isChatInputCommand() || interaction.isAutocomplete()
+          ? interaction.commandName
+          : undefined,
+        customId: "customId" in interaction ? interaction.customId : undefined,
+        guildId: interaction.guildId,
+      },
+      "Interação do Discord recebida",
+    );
+
     if (interaction.isModalSubmit() && interaction.customId.startsWith("anst_modal_")) {
       const status = interaction.customId.replace("anst_modal_", "") as StatusLeitura;
       const capitulo = interaction.fields.getTextInputValue("capitulo").trim() || null;
@@ -154,6 +168,10 @@ export function registerInteractionRouter(client: Client) {
 
     const command = commands.get(interaction.commandName);
     if (!command) {
+      logger.warn(
+        { command: interaction.commandName, guildId: interaction.guildId },
+        "Comando recebido, mas ausente no registry local",
+      );
       await interaction
         .reply({
           content: "⚠️ Este comando está desatualizado. Aguarde a sincronização dos comandos do bot.",
@@ -182,6 +200,14 @@ export function registerInteractionRouter(client: Client) {
 
     try {
       await command.execute(interaction);
+      logger.info(
+        {
+          command: interaction.commandName,
+          guildId: interaction.guildId,
+          handlerDurationMs: Date.now() - receivedAt,
+        },
+        "Comando executado com sucesso",
+      );
     } catch (err) {
       logger.error({ err, command: interaction.commandName }, "Erro ao executar comando");
       void recordBotError({

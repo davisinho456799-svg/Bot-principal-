@@ -174551,6 +174551,17 @@ async function logUsage(opts) {
 // src/bot/interaction-router.ts
 function registerInteractionRouter(client) {
   client.on(import_discord38.Events.InteractionCreate, async (interaction) => {
+    const receivedAt = Date.now();
+    logger.info(
+      {
+        interactionType: interaction.type,
+        interactionId: interaction.id,
+        command: interaction.isChatInputCommand() || interaction.isAutocomplete() ? interaction.commandName : void 0,
+        customId: "customId" in interaction ? interaction.customId : void 0,
+        guildId: interaction.guildId
+      },
+      "Intera\xE7\xE3o do Discord recebida"
+    );
     if (interaction.isModalSubmit() && interaction.customId.startsWith("anst_modal_")) {
       const status = interaction.customId.replace("anst_modal_", "");
       const capitulo = interaction.fields.getTextInputValue("capitulo").trim() || null;
@@ -174636,12 +174647,12 @@ function registerInteractionRouter(client) {
       return;
     }
     if (interaction.isAutocomplete()) {
-      const receivedAt = Date.now();
+      const receivedAt2 = Date.now();
       const command2 = commandRegistry.get(interaction.commandName);
       logger.info(
         {
           command: interaction.commandName,
-          dispatchDelayMs: Math.max(0, receivedAt - interaction.createdTimestamp)
+          dispatchDelayMs: Math.max(0, receivedAt2 - interaction.createdTimestamp)
         },
         "Autocomplete recebido"
       );
@@ -174657,7 +174668,7 @@ function registerInteractionRouter(client) {
       logger.info(
         {
           command: interaction.commandName,
-          handlerDurationMs: Date.now() - receivedAt,
+          handlerDurationMs: Date.now() - receivedAt2,
           totalSinceDiscordMs: Math.max(0, Date.now() - interaction.createdTimestamp),
           responded: interaction.responded
         },
@@ -174668,6 +174679,10 @@ function registerInteractionRouter(client) {
     if (!interaction.isChatInputCommand()) return;
     const command = commandRegistry.get(interaction.commandName);
     if (!command) {
+      logger.warn(
+        { command: interaction.commandName, guildId: interaction.guildId },
+        "Comando recebido, mas ausente no registry local"
+      );
       await interaction.reply({
         content: "\u26A0\uFE0F Este comando est\xE1 desatualizado. Aguarde a sincroniza\xE7\xE3o dos comandos do bot.",
         ephemeral: true
@@ -174686,6 +174701,14 @@ function registerInteractionRouter(client) {
     });
     try {
       await command.execute(interaction);
+      logger.info(
+        {
+          command: interaction.commandName,
+          guildId: interaction.guildId,
+          handlerDurationMs: Date.now() - receivedAt
+        },
+        "Comando executado com sucesso"
+      );
     } catch (err) {
       logger.error({ err, command: interaction.commandName }, "Erro ao executar comando");
       void recordBotError({
