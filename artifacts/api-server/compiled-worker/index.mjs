@@ -174651,6 +174651,19 @@ function registerInteractionRouter(client) {
     if (interaction.isAutocomplete()) {
       const receivedAt2 = Date.now();
       const command2 = commandRegistry.get(interaction.commandName);
+      let responseAttempted = false;
+      const originalRespond = interaction.respond.bind(interaction);
+      interaction.respond = async (options) => {
+        if (interaction.responded || responseAttempted) {
+          logger.debug(
+            { command: interaction.commandName, interactionId: interaction.id },
+            "Resposta duplicada de autocomplete ignorada"
+          );
+          return;
+        }
+        responseAttempted = true;
+        return originalRespond(options);
+      };
       logger.info(
         {
           command: interaction.commandName,

@@ -136,6 +136,19 @@ export function registerInteractionRouter(client: Client) {
     if (interaction.isAutocomplete()) {
       const receivedAt = Date.now();
       const command = commands.get(interaction.commandName);
+      let responseAttempted = false;
+      const originalRespond = interaction.respond.bind(interaction);
+      interaction.respond = async (options) => {
+        if (interaction.responded || responseAttempted) {
+          logger.debug(
+            { command: interaction.commandName, interactionId: interaction.id },
+            "Resposta duplicada de autocomplete ignorada",
+          );
+          return;
+        }
+        responseAttempted = true;
+        return originalRespond(options);
+      };
       logger.info(
         {
           command: interaction.commandName,
