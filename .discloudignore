@@ -19,3 +19,4 @@ dist
 # Discord gateway state diagnostics deploy sync
 # Discord gateway endpoint bypass deploy sync
 # Discord command interaction diagnostics deploy sync
+# Split help embed within Discord field limit deploy sync
