@@ -181,6 +181,11 @@ export function registerInteractionRouter(client: Client) {
       return;
     }
 
+    logger.info(
+      { command: interaction.commandName, guildId: interaction.guildId },
+      "Despachando comando do Discord",
+    );
+
     void logUsage({
       discordUserId: interaction.user.id,
       discordUsername: interaction.user.username,

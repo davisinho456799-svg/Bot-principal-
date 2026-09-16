@@ -6,6 +6,7 @@ import { registerInteractionRouter } from "./interaction-router.js";
 const LOGIN_TIMEOUT_MS = 30_000;
 const RETRY_DELAY_MS = 10_000;
 const GATEWAY_PREFLIGHT_TIMEOUT_MS = 10_000;
+const DISCORD_REST_TIMEOUT_MS = 10_000;
 
 function sleep(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -122,7 +123,11 @@ async function loginAndWaitForReady(client: Client, token: string) {
 function createClient(token: string) {
   const client = new Client({
     intents: [GatewayIntentBits.Guilds],
-    rest: { retries: 5 },
+    rest: {
+      retries: 1,
+      timeout: DISCORD_REST_TIMEOUT_MS,
+      rejectOnRateLimit: (rateLimitData) => rateLimitData.timeToReset > 5_000,
+    },
   });
 
   const originalRestGet = client.rest.get.bind(client.rest);

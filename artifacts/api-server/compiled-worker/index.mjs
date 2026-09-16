@@ -174381,7 +174381,11 @@ async function deployCommands(clientId, token, guildIds = []) {
     commandsByName.set(command.name, command);
   }
   const commands = [...commandsByName.values()];
-  const rest = new import_discord36.REST().setToken(token);
+  const rest = new import_discord36.REST({
+    retries: 1,
+    timeout: 1e4,
+    rejectOnRateLimit: (rateLimitData) => rateLimitData.timeToReset > 5e3
+  }).setToken(token);
   const configuredGuildId = process.env.DISCORD_GUILD_ID?.trim() || null;
   const connectedGuildIds = [...new Set(guildIds.filter(Boolean))];
   const guildCommandIds = configuredGuildId ? [configuredGuildId] : connectedGuildIds;
@@ -174397,9 +174401,7 @@ async function deployCommands(clientId, token, guildIds = []) {
       },
       "Registrando slash commands..."
     );
-    if (useGuildCommands) {
-      await rest.put(import_discord36.Routes.applicationCommands(clientId), { body: [] });
-    } else {
+    if (!useGuildCommands) {
       await rest.put(import_discord36.Routes.applicationCommands(clientId), { body: commands });
     }
     await Promise.all(
@@ -174689,6 +174691,10 @@ function registerInteractionRouter(client) {
       }).catch(() => null);
       return;
     }
+    logger.info(
+      { command: interaction.commandName, guildId: interaction.guildId },
+      "Despachando comando do Discord"
+    );
     void logUsage({
       discordUserId: interaction.user.id,
       discordUsername: interaction.user.username,
@@ -174733,6 +174739,7 @@ function registerInteractionRouter(client) {
 var LOGIN_TIMEOUT_MS = 3e4;
 var RETRY_DELAY_MS = 1e4;
 var GATEWAY_PREFLIGHT_TIMEOUT_MS = 1e4;
+var DISCORD_REST_TIMEOUT_MS = 1e4;
 function sleep2(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -174828,7 +174835,11 @@ async function loginAndWaitForReady(client, token) {
 function createClient(token) {
   const client = new import_discord40.Client({
     intents: [import_discord40.GatewayIntentBits.Guilds],
-    rest: { retries: 5 }
+    rest: {
+      retries: 1,
+      timeout: DISCORD_REST_TIMEOUT_MS,
+      rejectOnRateLimit: (rateLimitData) => rateLimitData.timeToReset > 5e3
+    }
   });
   const originalRestGet = client.rest.get.bind(client.rest);
   client.rest.get = ((route, options) => {

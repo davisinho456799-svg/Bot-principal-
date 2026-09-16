@@ -15,7 +15,11 @@ export async function deployCommands(
     commandsByName.set(command.name, command);
   }
   const commands = [...commandsByName.values()];
-  const rest = new REST().setToken(token);
+  const rest = new REST({
+    retries: 1,
+    timeout: 10_000,
+    rejectOnRateLimit: (rateLimitData) => rateLimitData.timeToReset > 5_000,
+  }).setToken(token);
   const configuredGuildId = process.env.DISCORD_GUILD_ID?.trim() || null;
   const connectedGuildIds = [...new Set(guildIds.filter(Boolean))];
   const guildCommandIds = configuredGuildId
@@ -34,9 +38,7 @@ export async function deployCommands(
       },
       "Registrando slash commands...",
     );
-    if (useGuildCommands) {
-      await rest.put(Routes.applicationCommands(clientId), { body: [] });
-    } else {
+    if (!useGuildCommands) {
       await rest.put(Routes.applicationCommands(clientId), { body: commands });
     }
     await Promise.all(
