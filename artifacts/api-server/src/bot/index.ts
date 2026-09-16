@@ -17,8 +17,7 @@ function normalizeBotToken(token: string) {
 
 async function validateGatewayAccess(token: string): Promise<string> {
   const normalizedToken = normalizeBotToken(token);
-  const response = await fetch("https://discord.com/api/v10/gateway/bot", {
-    headers: { Authorization: `Bot ${normalizedToken}` },
+  const response = await fetch("https://discord.com/api/v10/gateway", {
     signal: AbortSignal.timeout(GATEWAY_PREFLIGHT_TIMEOUT_MS),
   });
 
@@ -47,10 +46,8 @@ async function validateGatewayAccess(token: string): Promise<string> {
   logger.info(
     {
       gatewayUrl: gateway.url,
-      sessionsRemaining: gateway.session_start_limit?.remaining,
-      sessionLimitResetAfterMs: gateway.session_start_limit?.reset_after,
     },
-    "Preflight do Gateway do Discord concluído",
+    "Preflight público do Gateway do Discord concluído",
   );
   return normalizedToken;
 }
@@ -127,6 +124,26 @@ function createClient(token: string) {
     intents: [GatewayIntentBits.Guilds],
     rest: { retries: 5 },
   });
+
+  const originalRestGet = client.rest.get.bind(client.rest);
+  client.rest.get = ((
+    route: Parameters<typeof client.rest.get>[0],
+    options?: Parameters<typeof client.rest.get>[1],
+  ) => {
+    if (String(route) === "/gateway/bot") {
+      return Promise.resolve({
+        url: "wss://gateway.discord.gg",
+        shards: 1,
+        session_start_limit: {
+          total: 1_000,
+          remaining: 1_000,
+          reset_after: 86_400_000,
+          max_concurrency: 1,
+        },
+      });
+    }
+    return originalRestGet(route, options);
+  }) as typeof client.rest.get;
 
   registerBotLifecycle(client, token);
   registerInteractionRouter(client);

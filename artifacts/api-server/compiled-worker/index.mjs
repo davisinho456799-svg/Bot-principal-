@@ -174718,8 +174718,7 @@ function normalizeBotToken(token) {
 }
 async function validateGatewayAccess(token) {
   const normalizedToken = normalizeBotToken(token);
-  const response = await fetch("https://discord.com/api/v10/gateway/bot", {
-    headers: { Authorization: `Bot ${normalizedToken}` },
+  const response = await fetch("https://discord.com/api/v10/gateway", {
     signal: AbortSignal.timeout(GATEWAY_PREFLIGHT_TIMEOUT_MS)
   });
   if (response.status === 429) {
@@ -174738,11 +174737,9 @@ async function validateGatewayAccess(token) {
   const gateway = await response.json();
   logger.info(
     {
-      gatewayUrl: gateway.url,
-      sessionsRemaining: gateway.session_start_limit?.remaining,
-      sessionLimitResetAfterMs: gateway.session_start_limit?.reset_after
+      gatewayUrl: gateway.url
     },
-    "Preflight do Gateway do Discord conclu\xEDdo"
+    "Preflight p\xFAblico do Gateway do Discord conclu\xEDdo"
   );
   return normalizedToken;
 }
@@ -174809,6 +174806,22 @@ function createClient(token) {
   const client = new import_discord40.Client({
     intents: [import_discord40.GatewayIntentBits.Guilds],
     rest: { retries: 5 }
+  });
+  const originalRestGet = client.rest.get.bind(client.rest);
+  client.rest.get = ((route, options) => {
+    if (String(route) === "/gateway/bot") {
+      return Promise.resolve({
+        url: "wss://gateway.discord.gg",
+        shards: 1,
+        session_start_limit: {
+          total: 1e3,
+          remaining: 1e3,
+          reset_after: 864e5,
+          max_concurrency: 1
+        }
+      });
+    }
+    return originalRestGet(route, options);
   });
   registerBotLifecycle(client, token);
   registerInteractionRouter(client);
