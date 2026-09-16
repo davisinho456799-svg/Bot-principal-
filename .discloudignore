@@ -15,3 +15,4 @@ dist
 # Discloud auto deploy sync marker
 # Monitor guard deploy sync
 # Discord gateway preflight deploy sync
+# Discord gateway rate limit deploy sync
