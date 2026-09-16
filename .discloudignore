@@ -16,3 +16,4 @@ dist
 # Monitor guard deploy sync
 # Discord gateway preflight deploy sync
 # Discord gateway rate limit deploy sync
+# Discord gateway state diagnostics deploy sync
