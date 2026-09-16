@@ -5,9 +5,48 @@ import { registerInteractionRouter } from "./interaction-router.js";
 
 const LOGIN_TIMEOUT_MS = 30_000;
 const RETRY_DELAY_MS = 10_000;
+const GATEWAY_PREFLIGHT_TIMEOUT_MS = 10_000;
 
 function sleep(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+function normalizeBotToken(token: string) {
+  return token.replace(/^Bot\s+/i, "").trim();
+}
+
+async function validateGatewayAccess(token: string): Promise<string> {
+  const normalizedToken = normalizeBotToken(token);
+  const response = await fetch("https://discord.com/api/v10/gateway/bot", {
+    headers: { Authorization: `Bot ${normalizedToken}` },
+    signal: AbortSignal.timeout(GATEWAY_PREFLIGHT_TIMEOUT_MS),
+  });
+
+  if (!response.ok) {
+    const retryAfter = response.headers.get("retry-after");
+    throw new Error(
+      `Discord rejeitou o token no preflight do Gateway (HTTP ${response.status})${
+        retryAfter ? `; retry-after=${retryAfter}s` : ""
+      }`,
+    );
+  }
+
+  const gateway = (await response.json()) as {
+    url?: string;
+    session_start_limit?: {
+      remaining?: number;
+      reset_after?: number;
+    };
+  };
+  logger.info(
+    {
+      gatewayUrl: gateway.url,
+      sessionsRemaining: gateway.session_start_limit?.remaining,
+      sessionLimitResetAfterMs: gateway.session_start_limit?.reset_after,
+    },
+    "Preflight do Gateway do Discord concluído",
+  );
+  return normalizedToken;
 }
 
 function registerGatewayDiagnostics(client: Client) {
@@ -85,18 +124,19 @@ export async function startBot() {
     return;
   }
 
-  logger.info({ tokenConfigured: true }, "Token do Discord encontrado, criando client Discord");
+  logger.info({ tokenConfigured: true }, "Token do Discord encontrado, validando acesso ao Gateway");
 
+  const normalizedToken = await validateGatewayAccess(token);
   logger.info("Iniciando conexão direta com o gateway do Discord");
 
   let attempt = 0;
   while (true) {
     attempt += 1;
-    const client = createClient(token);
+    const client = createClient(normalizedToken);
 
     try {
       logger.info({ attempt }, "Chamando client.login()...");
-      await loginAndWaitForReady(client, token);
+      await loginAndWaitForReady(client, normalizedToken);
       logger.info({ attempt }, "client.login() concluiu e ClientReady foi recebido");
       return;
     } catch (error) {
