@@ -21,3 +21,4 @@ dist
 # Discord command interaction diagnostics deploy sync
 # Split help embed within Discord field limit deploy sync
 # Force Discord worker restart for help embed fix
+# Prevent Discord REST rate limit hangs deploy sync
