@@ -17,3 +17,4 @@ dist
 # Discord gateway preflight deploy sync
 # Discord gateway rate limit deploy sync
 # Discord gateway state diagnostics deploy sync
+# Discord gateway endpoint bypass deploy sync
