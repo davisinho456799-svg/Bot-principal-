@@ -13,3 +13,4 @@ dist
 *.log
 *.tsbuildinfo
 # Discloud auto deploy sync marker
+# Monitor guard deploy sync
