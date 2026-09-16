@@ -158134,10 +158134,39 @@ async function openBrowserListing(listingUrl, platform, retryAfterCrash = true) 
   }
 }
 
-// src/services/monitor-service.ts
+// src/services/monitor-chapter-guard.ts
+var OUTLIER_MIN_GAP = 100;
+var OUTLIER_MULTIPLIER = 4;
 function chapterNumberIdentity(value) {
   return value.trim().replace(/^0+(?=\d)/, "");
 }
+function numericChapterNumber(value) {
+  const number4 = Number(value.replace(",", ".").trim());
+  return Number.isFinite(number4) ? number4 : null;
+}
+function trustedChapterNumbers(numbers) {
+  const sorted = [...new Set(
+    numbers.map(numericChapterNumber).filter((number4) => number4 !== null)
+  )].sort((left, right) => left - right);
+  for (let index = 1; index < sorted.length; index += 1) {
+    const previous = sorted[index - 1];
+    const current = sorted[index];
+    if (current - previous > OUTLIER_MIN_GAP && current > previous * OUTLIER_MULTIPLIER) {
+      return sorted.slice(0, index);
+    }
+  }
+  return sorted;
+}
+function highestTrustedChapterNumber(numbers) {
+  const trusted = trustedChapterNumbers(numbers);
+  return trusted.length ? trusted[trusted.length - 1] : null;
+}
+function isAbsurdChapterOutlier(value, highestKnown) {
+  const number4 = numericChapterNumber(value);
+  return highestKnown !== null && number4 !== null && number4 > highestKnown && number4 - highestKnown > OUTLIER_MIN_GAP && number4 > highestKnown * OUTLIER_MULTIPLIER;
+}
+
+// src/services/monitor-service.ts
 var HISTORICAL_RELEASE_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1e3;
 var sharpFactoryPromise = null;
 var sharpUnavailable = false;
@@ -158161,10 +158190,6 @@ async function getOptionalSharp() {
     }
     return null;
   }
-}
-function numericChapterNumber(value) {
-  const number4 = Number(value.replace(",", ".").trim());
-  return Number.isFinite(number4) ? number4 : null;
 }
 function isHistoricalRelease(chapter, checkedAt) {
   if (!chapter.releaseDate) return false;
@@ -158476,16 +158501,35 @@ async function runMonitor() {
       const existing = await db.select({
         id: detectedChaptersTable.id,
         key: detectedChaptersTable.chapterKey,
-        number: detectedChaptersTable.chapterNumber
+        number: detectedChaptersTable.chapterNumber,
+        thumbnailUrl: detectedChaptersTable.thumbnailUrl,
+        publishedAt: detectedChaptersTable.publishedAt
       }).from(detectedChaptersTable).where(eq(detectedChaptersTable.workId, work.id));
       const checkedAt = /* @__PURE__ */ new Date();
+      const highestExisting = highestTrustedChapterNumber(
+        existing.map((chapter) => chapter.number)
+      );
+      const safeCandidates = candidates.filter((candidate) => {
+        const outlier = isAbsurdChapterOutlier(candidate.number, highestExisting);
+        if (outlier) {
+          logger.warn(
+            {
+              workId: work.id,
+              title: work.title,
+              chapter: candidate.number,
+              highestKnownChapter: highestExisting,
+              parser
+            },
+            "Cap\xEDtulo absurdo ignorado pelo monitor"
+          );
+        }
+        return !outlier;
+      });
       const seenKeys = new Set(existing.map((item) => item.key));
       const seenNumbers = new Set(existing.map((item) => chapterNumberIdentity(item.number)));
-      const previouslyUnseen = candidates.filter(
+      const previouslyUnseen = safeCandidates.filter(
         (candidate) => !seenKeys.has(candidate.key) && !seenNumbers.has(chapterNumberIdentity(candidate.number))
       );
-      const existingNumbers = existing.map((chapter) => numericChapterNumber(chapter.number)).filter((number4) => number4 !== null);
-      const highestExisting = existingNumbers.length ? Math.max(...existingNumbers) : null;
       const isAtOrBelowKnownChapter = (chapter) => {
         const number4 = numericChapterNumber(chapter.number);
         return highestExisting !== null && number4 !== null && number4 <= highestExisting;
@@ -158505,14 +158549,35 @@ async function runMonitor() {
         historical.push(...fresh.filter((candidate) => candidate !== newest));
         fresh = [newest];
       }
+      const lastPublishedNumber = highestTrustedChapterNumber(
+        existing.filter((chapter) => chapter.publishedAt !== null).map((chapter) => chapter.number)
+      );
+      const candidateByNumber = new Map(
+        safeCandidates.map((chapter) => [
+          chapterNumberIdentity(chapter.number),
+          chapter
+        ])
+      );
+      const pending = lastPublishedNumber === null ? [] : existing.filter((chapter) => {
+        const number4 = numericChapterNumber(chapter.number);
+        return chapter.publishedAt === null && number4 !== null && number4 > lastPublishedNumber && !isAbsurdChapterOutlier(chapter.number, highestExisting);
+      }).map(
+        (chapter) => candidateByNumber.get(chapterNumberIdentity(chapter.number)) ?? {
+          key: chapter.key,
+          number: chapter.number,
+          thumbnailUrl: chapter.thumbnailUrl,
+          parser: `${parser} recovery`
+        }
+      );
+      const toPublish = [...pending, ...fresh];
       if (existing.length === 0 && work.lastCheckedAt == null) {
         await db.transaction(async (tx) => {
-          if (candidates.length) await tx.insert(detectedChaptersTable).values(candidates.map((chapter) => ({ workId: work.id, chapterKey: chapter.key, chapterNumber: chapter.number, thumbnailUrl: chapter.thumbnailUrl, detectedAt: checkedAt })));
-          await tx.update(monitoredWorksTable).set({ chaptersSeen: candidates.length, lastCheckedAt: checkedAt, lastStatus: candidates.length ? `${parser}: baseline captured` : `${parser}: no chapters found`, updatedAt: checkedAt }).where(eq(monitoredWorksTable.id, work.id));
+          if (safeCandidates.length) await tx.insert(detectedChaptersTable).values(safeCandidates.map((chapter) => ({ workId: work.id, chapterKey: chapter.key, chapterNumber: chapter.number, thumbnailUrl: chapter.thumbnailUrl, detectedAt: checkedAt })));
+          await tx.update(monitoredWorksTable).set({ chaptersSeen: safeCandidates.length, lastCheckedAt: checkedAt, lastStatus: safeCandidates.length ? `${parser}: baseline captured` : `${parser}: no chapters found`, updatedAt: checkedAt }).where(eq(monitoredWorksTable.id, work.id));
         });
         continue;
       }
-      if (!fresh.length) {
+      if (!toPublish.length) {
         await db.transaction(async (tx) => {
           await migrateLegacyKeys(tx, work, existing);
           if (historical.length) {
@@ -158527,13 +158592,13 @@ async function runMonitor() {
           await tx.update(monitoredWorksTable).set({
             chaptersSeen: existing.length + historical.length,
             lastCheckedAt: checkedAt,
-            lastStatus: historical.length ? `${parser}: historical chapters ignored` : `${parser}: no new chapters`,
+            lastStatus: historical.length ? `${parser}: historical chapters ignored` : safeCandidates.length < candidates.length ? `${parser}: absurd chapter ignored` : `${parser}: no new chapters`,
             updatedAt: checkedAt
           }).where(eq(monitoredWorksTable.id, work.id));
         });
         continue;
       }
-      chaptersFound += fresh.length;
+      chaptersFound += toPublish.length;
       if (historical.length) {
         await db.insert(detectedChaptersTable).values(historical.map((chapter) => ({
           workId: work.id,
@@ -158556,7 +158621,7 @@ async function runMonitor() {
       if (listing.captureSession) {
         try {
           capturedGroups = await listing.captureSession.captureGroups(
-            fresh.map((chapter) => chapter.captureId).filter(Boolean)
+            toPublish.map((chapter) => chapter.captureId).filter(Boolean)
           );
         } catch (error40) {
           logger.warn(
@@ -158577,7 +158642,7 @@ async function runMonitor() {
         }
       }
       const freshByNumber = new Map(
-        fresh.map((chapter) => [chapter.number, chapter])
+        toPublish.map((chapter) => [chapter.number, chapter])
       );
       const browserGroups = validCapturedGroups.map((group) => ({
         chapters: group.chapterNumbers.map((number4) => freshByNumber.get(number4)).filter(Boolean),
@@ -158598,17 +158663,17 @@ async function runMonitor() {
         }
         fallbackChapters = [];
       };
-      if (directByKey.size < fresh.length) {
+      if (directByKey.size < toPublish.length) {
         logger.warn(
           {
             workId: work.id,
-            freshCount: fresh.length,
+            freshCount: toPublish.length,
             capturedCount: directByKey.size
           },
           "Captura do monitor ficou parcial \u2014 cap\xEDtulos restantes ir\xE3o para o fallback"
         );
       }
-      for (const chapter of fresh) {
+      for (const chapter of toPublish) {
         const direct = directByKey.get(chapter.key);
         if (!direct) {
           fallbackChapters.push(chapter);
@@ -158637,15 +158702,54 @@ async function runMonitor() {
       }
       await db.transaction(async (tx) => {
         await migrateLegacyKeys(tx, work, existing);
-        await tx.insert(detectedChaptersTable).values(fresh.map((chapter) => ({ workId: work.id, chapterKey: chapter.key, chapterNumber: chapter.number, thumbnailUrl: chapter.thumbnailUrl, detectedAt: checkedAt, publishedAt: checkedAt })));
-        await tx.insert(monitorHistoryTable).values(fresh.map((chapter) => ({
+        if (fresh.length) {
+          await tx.insert(detectedChaptersTable).values(fresh.map((chapter) => ({
+            workId: work.id,
+            chapterKey: chapter.key,
+            chapterNumber: chapter.number,
+            thumbnailUrl: chapter.thumbnailUrl,
+            detectedAt: checkedAt,
+            publishedAt: checkedAt
+          })));
+        }
+        for (const chapter of pending) {
+          const existingChapter = existing.find(
+            (item) => chapterNumberIdentity(item.number) === chapterNumberIdentity(chapter.number)
+          );
+          if (existingChapter) {
+            await tx.update(detectedChaptersTable).set({ publishedAt: checkedAt }).where(eq(detectedChaptersTable.id, existingChapter.id));
+          }
+        }
+        const previousHistory = await tx.select({ chapterNumber: monitorHistoryTable.chapterNumber }).from(monitorHistoryTable).where(eq(monitorHistoryTable.workId, work.id));
+        const historyKeys = new Set(
+          previousHistory.map((item) => chapterNumberIdentity(item.chapterNumber))
+        );
+        const historyToInsert = toPublish.filter((chapter) => {
+          const key = chapterNumberIdentity(chapter.number);
+          if (historyKeys.has(key)) return false;
+          historyKeys.add(key);
+          return true;
+        });
+        if (historyToInsert.length) {
+          await tx.insert(monitorHistoryTable).values(historyToInsert.map((chapter) => ({
+            workId: work.id,
+            chapterNumber: chapter.number,
+            releaseDate: chapter.releaseDate ?? null,
+            notifiedAt: checkedAt
+          })));
+        }
+        await tx.insert(monitorActivityTable).values({
           workId: work.id,
-          chapterNumber: chapter.number,
-          releaseDate: chapter.releaseDate ?? null,
-          notifiedAt: checkedAt
-        })));
-        await tx.insert(monitorActivityTable).values({ workId: work.id, chapterCount: fresh.length, status: "Published" });
-        await tx.update(monitoredWorksTable).set({ chaptersSeen: existing.length + historical.length + fresh.length, lastCheckedAt: checkedAt, lastPublishedAt: checkedAt, lastStatus: `${fresh.length} new chapter${fresh.length === 1 ? "" : "s"} published`, updatedAt: checkedAt }).where(eq(monitoredWorksTable.id, work.id));
+          chapterCount: toPublish.length,
+          status: "Published"
+        });
+        await tx.update(monitoredWorksTable).set({
+          chaptersSeen: existing.length + historical.length + fresh.length,
+          lastCheckedAt: checkedAt,
+          lastPublishedAt: checkedAt,
+          lastStatus: `${toPublish.length} new chapter${toPublish.length === 1 ? "" : "s"} published`,
+          updatedAt: checkedAt
+        }).where(eq(monitoredWorksTable.id, work.id));
       });
     } catch (error40) {
       logger.warn({ err: error40, workId: work.id }, "Work monitor failed");
