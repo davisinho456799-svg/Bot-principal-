@@ -159208,7 +159208,7 @@ async function execute(interaction) {
     },
     {
       name: "\u{1F4FA} /anime titulo:<nome>",
-      value: "Pesquisa um anime em **4 fontes simult\xE2neas** com autocomplete.\nExibe: sinopse PT-BR, epis\xF3dios, tipo (TV/Movie/OVA), temporada, est\xFAdios, links de streaming global e **7 sites PT-BR** (AnimeFire, GoAnimes, Goyabu, BetterAnime\u2026).",
+      value: "Pesquisa um anime em **4 fontes simult\xE2neas** pelo t\xEDtulo digitado.\nExibe: sinopse PT-BR, epis\xF3dios, tipo (TV/Movie/OVA), temporada, est\xFAdios, links de streaming global e **7 sites PT-BR** (AnimeFire, GoAnimes, Goyabu, BetterAnime\u2026).",
       inline: false
     },
     {
@@ -164176,137 +164176,15 @@ function isDiscordRateLimitError(error40) {
 
 // src/bot/commands/anime.ts
 var data4 = new import_discord5.SlashCommandBuilder().setName("anime").setDescription("Pesquisa um anime com sinopse traduzida, epis\xF3dios, est\xFAdios e onde assistir").addStringOption(
-  (opt) => opt.setName("titulo").setDescription("Nome do anime para pesquisar").setRequired(false).setAutocomplete(true)
+  (opt) => opt.setName("titulo").setDescription("Nome do anime para pesquisar").setRequired(false)
 ).addStringOption(
   (opt) => opt.setName("descricao").setDescription('Descreva o anime que voc\xEA quer achar (ex: "dois irm\xE3os alquimistas procuram pedra filosofal")').setRequired(false)
 );
-var autocompleteCache = /* @__PURE__ */ new Map();
-var CACHE_TTL2 = 3e4;
-var AUTOCOMPLETE_SOURCE_TIMEOUT = 1200;
-async function withAutocompleteTimeout(source, promise2, fallback) {
-  const startedAt = Date.now();
-  let timedOut = false;
-  let timer;
-  try {
-    return await Promise.race([
-      promise2,
-      new Promise((resolve) => {
-        timer = setTimeout(() => {
-          timedOut = true;
-          resolve(fallback);
-        }, AUTOCOMPLETE_SOURCE_TIMEOUT);
-      })
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-    logger.info({
-      source,
-      durationMs: Date.now() - startedAt,
-      timedOut
-    }, "Fonte de autocomplete finalizada");
-  }
-}
-async function respondAutocomplete2(interaction, results, source) {
-  const startedAt = Date.now();
-  try {
-    await interaction.respond(results);
-    logger.info({
-      command: source,
-      optionCount: results.length,
-      respondDurationMs: Date.now() - startedAt
-    }, "Resposta de autocomplete enviada");
-  } catch (err) {
-    if (!isDiscordRateLimitError(err)) {
-      logger.warn({ err, command: source }, "Falha ao enviar resposta de autocomplete");
-    }
-    throw err;
-  }
-}
-function autocompleteRelevance(query, title) {
-  const normalize2 = (value) => value.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
-  const q = normalize2(query);
-  const t = normalize2(title.replace(/\s*·\s*Tenrai$/i, ""));
-  if (!q || !t) return 0;
-  if (q === t) return 1;
-  if (t.startsWith(q)) return 0.92;
-  if (t.includes(q)) return 0.78;
-  const words = q.split(/\s+/).filter((word) => word.length > 1);
-  const hits = words.filter((word) => t.includes(word)).length;
-  return words.length ? hits / words.length * 0.65 : 0;
-}
 async function autocomplete2(interaction) {
-  const focused = interaction.options.getFocused();
-  if (!focused || focused.length < 2) {
-    return;
-  }
-  const cached2 = autocompleteCache.get(focused);
-  if (cached2 && Date.now() - cached2.ts < CACHE_TTL2) {
-    await respondAutocomplete2(interaction, cached2.results, "anime");
-    return;
-  }
-  try {
-    const [anilistResults, kitsuResults, anisearchResults, malResults, tenraiResults] = await Promise.allSettled([
-      withAutocompleteTimeout("anilist", searchAnime(focused), []),
-      withAutocompleteTimeout("kitsu", searchKitsu(focused), []),
-      withAutocompleteTimeout("anisearch", searchAniSearch(focused), []),
-      withAutocompleteTimeout("jikan", searchJikanAnimeAny(focused), []),
-      withAutocompleteTimeout("tenrai", searchTenraiAnime(focused), [])
-    ]);
-    const seen = /* @__PURE__ */ new Set();
-    const options = [];
-    if (anilistResults.status === "fulfilled") {
-      for (const r of anilistResults.value) {
-        const t = r.title.english ?? r.title.romaji;
-        if (t && !seen.has(t.toLowerCase())) {
-          seen.add(t.toLowerCase());
-          options.push({ name: t.slice(0, 100), value: `anilist-anime:${r.id}` });
-        }
-      }
-    }
-    if (kitsuResults.status === "fulfilled") {
-      for (const r of kitsuResults.value) {
-        if (!seen.has(r.mainTitle.toLowerCase())) {
-          seen.add(r.mainTitle.toLowerCase());
-          options.push({ name: r.mainTitle.slice(0, 100), value: `kitsu:${r.kitsuId}` });
-        }
-      }
-    }
-    if (malResults.status === "fulfilled") {
-      for (const r of malResults.value) {
-        const t = r.mainTitle;
-        if (t && !seen.has(t.toLowerCase())) {
-          seen.add(t.toLowerCase());
-          options.push({ name: t.slice(0, 100), value: `jikan:${r.malId}` });
-        }
-      }
-    }
-    if (tenraiResults.status === "fulfilled") {
-      for (const r of tenraiResults.value) {
-        const t = r.title_english ?? r.title;
-        if (t && !seen.has(t.toLowerCase())) {
-          seen.add(t.toLowerCase());
-          options.push({ name: `${t.slice(0, 90)} \xB7 Tenrai`, value: `tenrai:${r.mal_id}` });
-        }
-      }
-    }
-    if (anisearchResults.status === "fulfilled") {
-      for (const r of anisearchResults.value) {
-        if (!seen.has(r.mainTitle.toLowerCase())) {
-          seen.add(r.mainTitle.toLowerCase());
-          options.push({ name: r.mainTitle.slice(0, 100), value: `anisearch:${r.id}` });
-        }
-      }
-    }
-    const top = options.map((option, index) => ({
-      option,
-      index,
-      relevance: autocompleteRelevance(focused, option.name)
-    })).sort((a, b) => b.relevance - a.relevance || a.index - b.index).slice(0, 25).map(({ option }) => option);
-    autocompleteCache.set(focused, { results: top, ts: Date.now() });
-    await respondAutocomplete2(interaction, top, "anime");
-  } catch {
-    await respondAutocomplete2(interaction, [], "anime");
-  }
+  logger.debug(
+    { interactionId: interaction.id },
+    "Autocomplete de /anime desativado"
+  );
 }
 var SOURCE_LABELS3 = {
   "anilist-anime": "AniList",
@@ -164625,10 +164503,10 @@ var data5 = new import_discord6.SlashCommandBuilder().setName("manga").setDescri
     { name: "Slice of Life", value: "e5301a23-ebd9-49dd-a0cb-2add944c7fe9" }
   )
 );
-var autocompleteCache2 = /* @__PURE__ */ new Map();
-var CACHE_TTL3 = 3e4;
-var AUTOCOMPLETE_SOURCE_TIMEOUT2 = 1200;
-async function withAutocompleteTimeout2(source, promise2, fallback) {
+var autocompleteCache = /* @__PURE__ */ new Map();
+var CACHE_TTL2 = 3e4;
+var AUTOCOMPLETE_SOURCE_TIMEOUT = 1200;
+async function withAutocompleteTimeout(source, promise2, fallback) {
   const startedAt = Date.now();
   let timedOut = false;
   let timer;
@@ -164639,7 +164517,7 @@ async function withAutocompleteTimeout2(source, promise2, fallback) {
         timer = setTimeout(() => {
           timedOut = true;
           resolve(fallback);
-        }, AUTOCOMPLETE_SOURCE_TIMEOUT2);
+        }, AUTOCOMPLETE_SOURCE_TIMEOUT);
       })
     ]);
   } finally {
@@ -164651,7 +164529,7 @@ async function withAutocompleteTimeout2(source, promise2, fallback) {
     }, "Fonte de autocomplete finalizada");
   }
 }
-async function respondAutocomplete3(interaction, results) {
+async function respondAutocomplete2(interaction, results) {
   const startedAt = Date.now();
   try {
     await interaction.respond(results);
@@ -164668,18 +164546,18 @@ async function respondAutocomplete3(interaction, results) {
 async function autocomplete3(interaction) {
   const focused = interaction.options.getFocused();
   if (!focused || focused.length < 2) {
-    await respondAutocomplete3(interaction, []);
+    await respondAutocomplete2(interaction, []);
     return;
   }
-  const cached2 = autocompleteCache2.get(focused);
-  if (cached2 && Date.now() - cached2.ts < CACHE_TTL3) {
-    await respondAutocomplete3(interaction, cached2.results);
+  const cached2 = autocompleteCache.get(focused);
+  if (cached2 && Date.now() - cached2.ts < CACHE_TTL2) {
+    await respondAutocomplete2(interaction, cached2.results);
     return;
   }
   try {
     const [mangaDexResult, tenraiResult] = await Promise.allSettled([
-      withAutocompleteTimeout2("mangadex", searchMangaDexJp(focused, 10), []),
-      withAutocompleteTimeout2("tenrai", searchTenraiManga(focused, "manga"), [])
+      withAutocompleteTimeout("mangadex", searchMangaDexJp(focused, 10), []),
+      withAutocompleteTimeout("tenrai", searchTenraiManga(focused, "manga"), [])
     ]);
     const options = [];
     if (mangaDexResult.status === "fulfilled") {
@@ -164697,10 +164575,10 @@ async function autocomplete3(interaction) {
     const deduped = options.filter(
       (option, index, all) => all.findIndex((item) => item.name.toLowerCase() === option.name.toLowerCase()) === index
     ).slice(0, 25);
-    autocompleteCache2.set(focused, { results: deduped, ts: Date.now() });
-    await respondAutocomplete3(interaction, deduped);
+    autocompleteCache.set(focused, { results: deduped, ts: Date.now() });
+    await respondAutocomplete2(interaction, deduped);
   } catch {
-    await respondAutocomplete3(interaction, []);
+    await respondAutocomplete2(interaction, []);
   }
 }
 function statusLabel2(status) {
@@ -166898,8 +166776,8 @@ ${info.desc}`,
   embed.setFooter({ text: `\u{1F4CB} Tipo: ${typeLabel} \u2022 Fonte: AniList` });
   return embed;
 }
-var autocompleteCache3 = /* @__PURE__ */ new Map();
-var CACHE_TTL4 = 3e4;
+var autocompleteCache2 = /* @__PURE__ */ new Map();
+var CACHE_TTL3 = 3e4;
 async function autocomplete5(interaction) {
   const focused = interaction.options.getFocused();
   if (!focused || focused.length < 2) {
@@ -166908,8 +166786,8 @@ async function autocomplete5(interaction) {
   }
   const tipo = interaction.options.getString("tipo") ?? "ambos";
   const cacheKey = `${tipo}:${focused}`;
-  const cached2 = autocompleteCache3.get(cacheKey);
-  if (cached2 && Date.now() - cached2.ts < CACHE_TTL4) {
+  const cached2 = autocompleteCache2.get(cacheKey);
+  if (cached2 && Date.now() - cached2.ts < CACHE_TTL3) {
     await interaction.respond(cached2.results);
     return;
   }
@@ -166920,7 +166798,7 @@ async function autocomplete5(interaction) {
       name: (m.title.english ?? m.title.romaji).slice(0, 100),
       value: `al:${m.id}:${m.type}`
     }));
-    autocompleteCache3.set(cacheKey, { results: options, ts: Date.now() });
+    autocompleteCache2.set(cacheKey, { results: options, ts: Date.now() });
     await interaction.respond(options);
   } catch {
     await interaction.respond([]);
@@ -168543,7 +168421,7 @@ async function searchByImageUpload(imageUrl) {
 // src/bot/saucenao.ts
 var SAUCENAO_API = "https://saucenao.com/search.php";
 var cache2 = /* @__PURE__ */ new Map();
-var CACHE_TTL5 = 6e4;
+var CACHE_TTL4 = 6e4;
 function parseResult(raw) {
   const sim = parseFloat(raw.header.similarity) / 100;
   if (sim < 0.5) return null;
@@ -168599,7 +168477,7 @@ async function searchByUrlSauceNAO(imageUrl) {
   const params = baseParams();
   params.set("url", imageUrl);
   const result = await callSauceNAO(params);
-  cache2.set(imageUrl, { result, expires: Date.now() + CACHE_TTL5 });
+  cache2.set(imageUrl, { result, expires: Date.now() + CACHE_TTL4 });
   return result;
 }
 async function searchByUploadSauceNAO(imageUrl) {
@@ -168628,7 +168506,7 @@ async function searchByUploadSauceNAO(imageUrl) {
     if (parsed) results.push(parsed);
   }
   results.sort((a, b) => b.similarity - a.similarity);
-  cache2.set(cacheKey, { result: results, expires: Date.now() + CACHE_TTL5 });
+  cache2.set(cacheKey, { result: results, expires: Date.now() + CACHE_TTL4 });
   return results;
 }
 
@@ -168636,7 +168514,7 @@ async function searchByUploadSauceNAO(imageUrl) {
 var IQDB_URL = "https://iqdb.org/";
 var DANBOORU_API = "https://danbooru.donmai.us/posts";
 var cache3 = /* @__PURE__ */ new Map();
-var CACHE_TTL6 = 6e4;
+var CACHE_TTL5 = 6e4;
 function tagToTitle(tag) {
   return tag.replace(/_/g, " ").trim();
 }
@@ -168727,7 +168605,7 @@ async function searchByUrlIQDB(imageUrl) {
   const form = new FormData();
   form.append("url", imageUrl);
   const result = await postAndParse(form);
-  cache3.set(imageUrl, { result, expires: Date.now() + CACHE_TTL6 });
+  cache3.set(imageUrl, { result, expires: Date.now() + CACHE_TTL5 });
   return result;
 }
 async function searchByUploadIQDB(imageUrl) {
@@ -168740,7 +168618,7 @@ async function searchByUploadIQDB(imageUrl) {
   const form = new FormData();
   form.append("file", blob, "image.jpg");
   const result = await postAndParse(form);
-  cache3.set(cacheKey, { result, expires: Date.now() + CACHE_TTL6 });
+  cache3.set(cacheKey, { result, expires: Date.now() + CACHE_TTL5 });
   return result;
 }
 
@@ -168748,7 +168626,7 @@ async function searchByUploadIQDB(imageUrl) {
 var OCR_SPACE_API = "https://api.ocr.space/parse/imageurl";
 var OCR_SPACE_UPLOAD = "https://api.ocr.space/parse/image";
 var cache4 = /* @__PURE__ */ new Map();
-var CACHE_TTL7 = 12e4;
+var CACHE_TTL6 = 12e4;
 var SOCIAL_STOPWORDS = /* @__PURE__ */ new Set([
   // TikTok / Reels UI
   "tiktok",
@@ -168843,7 +168721,7 @@ async function extractTextFromUrl(imageUrl) {
     });
     const raw = await parseOCRResponse(res);
     const text2 = cleanOCRText(raw);
-    cache4.set(imageUrl, { text: text2, expires: Date.now() + CACHE_TTL7 });
+    cache4.set(imageUrl, { text: text2, expires: Date.now() + CACHE_TTL6 });
     return text2;
   } catch (err) {
     console.error("[OCR] extractTextFromUrl falhou:", err);
@@ -168874,7 +168752,7 @@ async function extractTextFromUpload(imageUrl) {
     });
     const raw = await parseOCRResponse(res);
     const text2 = cleanOCRText(raw);
-    cache4.set(cacheKey, { text: text2, expires: Date.now() + CACHE_TTL7 });
+    cache4.set(cacheKey, { text: text2, expires: Date.now() + CACHE_TTL6 });
     return text2;
   } catch (err) {
     console.error("[OCR] extractTextFromUpload falhou:", err);
@@ -169009,7 +168887,7 @@ async function getAnimeMovieDetails(tmdbId) {
 // src/bot/identificar-engine.ts
 var CONFIDENCE_THRESHOLD = 0.9;
 var OCR_SCORE_THRESHOLD = 0.3;
-var CACHE_TTL8 = 6e4;
+var CACHE_TTL7 = 6e4;
 var cache5 = /* @__PURE__ */ new Map();
 function wordOverlapScore(query, target) {
   const norm = (s) => s.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, " ").split(/\s+/).filter((w) => w.length > 1);
@@ -169390,7 +169268,7 @@ async function identifyImage(imageUrl, isAttachment) {
   let lowConfFallback = null;
   const traceResult = await tryTraceMoe(imageUrl, isAttachment);
   if (traceResult) {
-    cache5.set(cacheKey, { result: traceResult, expires: Date.now() + CACHE_TTL8 });
+    cache5.set(cacheKey, { result: traceResult, expires: Date.now() + CACHE_TTL7 });
     return traceResult;
   }
   const [traceLow, sauceResult, iqdbResult, ocrResult] = await Promise.all([
@@ -169401,22 +169279,22 @@ async function identifyImage(imageUrl, isAttachment) {
   ]);
   lowConfFallback = traceLow;
   if (sauceResult) {
-    cache5.set(cacheKey, { result: sauceResult, expires: Date.now() + CACHE_TTL8 });
+    cache5.set(cacheKey, { result: sauceResult, expires: Date.now() + CACHE_TTL7 });
     return sauceResult;
   }
   if (iqdbResult) {
-    cache5.set(cacheKey, { result: iqdbResult, expires: Date.now() + CACHE_TTL8 });
+    cache5.set(cacheKey, { result: iqdbResult, expires: Date.now() + CACHE_TTL7 });
     return iqdbResult;
   }
   if (ocrResult) {
-    cache5.set(cacheKey, { result: ocrResult, expires: Date.now() + CACHE_TTL8 });
+    cache5.set(cacheKey, { result: ocrResult, expires: Date.now() + CACHE_TTL7 });
     return ocrResult;
   }
   if (lowConfFallback) {
-    cache5.set(cacheKey, { result: lowConfFallback, expires: Date.now() + CACHE_TTL8 });
+    cache5.set(cacheKey, { result: lowConfFallback, expires: Date.now() + CACHE_TTL7 });
     return lowConfFallback;
   }
-  cache5.set(cacheKey, { result: null, expires: Date.now() + CACHE_TTL8 });
+  cache5.set(cacheKey, { result: null, expires: Date.now() + CACHE_TTL7 });
   return null;
 }
 
@@ -172873,7 +172751,7 @@ var SOURCE_ICONS4 = {
   vndb: "\u{1F4D6}",
   erogamescape: "\u{1F51E}"
 };
-var autocompleteCache4 = /* @__PURE__ */ new Map();
+var autocompleteCache3 = /* @__PURE__ */ new Map();
 var CACHE_TTL_MS2 = 3e4;
 function sourceLabel(source) {
   return SOURCE_LABELS5[source] ?? source;
@@ -172897,7 +172775,7 @@ async function autocomplete8(interaction) {
     return;
   }
   const cacheKey = `${interaction.user.id}:${guildId}:${focused.toLowerCase()}`;
-  const cached2 = autocompleteCache4.get(cacheKey);
+  const cached2 = autocompleteCache3.get(cacheKey);
   if (cached2 && cached2.expires > Date.now()) {
     await interaction.respond(cached2.results);
     return;
@@ -172940,7 +172818,7 @@ async function autocomplete8(interaction) {
     });
     if (results.length >= 25) break;
   }
-  autocompleteCache4.set(cacheKey, {
+  autocompleteCache3.set(cacheKey, {
     results,
     expires: Date.now() + CACHE_TTL_MS2
   });

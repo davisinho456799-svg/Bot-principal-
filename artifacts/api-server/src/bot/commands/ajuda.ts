@@ -111,7 +111,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     {
       name: "📺 /anime titulo:<nome>",
       value:
-        "Pesquisa um anime em **4 fontes simultâneas** com autocomplete.\n" +
+        "Pesquisa um anime em **4 fontes simultâneas** pelo título digitado.\n" +
         "Exibe: sinopse PT-BR, episódios, tipo (TV/Movie/OVA), temporada, estúdios, links de streaming global e **7 sites PT-BR** (AnimeFire, GoAnimes, Goyabu, BetterAnime…).",
       inline: false,
     },
