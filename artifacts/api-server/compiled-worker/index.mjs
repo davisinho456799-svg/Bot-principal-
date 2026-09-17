@@ -164157,13 +164157,6 @@ init_anilist();
 // src/bot/interaction-rate-limit.ts
 var INTERACTION_CALLBACK_ROUTE = "/interactions/:id/:token/callback";
 var interactionCallbackBlockedUntil = 0;
-var InteractionCallbackCooldownError = class extends Error {
-  constructor(remainingMs) {
-    super(`Callbacks do Discord em cooldown por mais ${remainingMs}ms`);
-    this.remainingMs = remainingMs;
-    this.name = "InteractionCallbackCooldownError";
-  }
-};
 function isInteractionCallbackRoute(route) {
   return String(route).includes(INTERACTION_CALLBACK_ROUTE);
 }
@@ -164179,9 +164172,6 @@ function interactionCallbackCooldownRemaining() {
 }
 function isDiscordRateLimitError(error40) {
   return error40 instanceof Error && error40.name === "RateLimitError";
-}
-function isInteractionCallbackUnavailable(error40) {
-  return isDiscordRateLimitError(error40) || error40 instanceof InteractionCallbackCooldownError;
 }
 
 // src/bot/commands/anime.ts
@@ -174781,7 +174771,7 @@ function registerInteractionRouter(client) {
           try {
             await command2.autocomplete(interaction);
           } catch (err) {
-            if (!isInteractionCallbackUnavailable(err)) {
+            if (!isDiscordRateLimitError(err)) {
               logger.warn(
                 { err, command: interaction.commandName },
                 "Autocomplete falhou no despacho"
@@ -174828,18 +174818,10 @@ function registerInteractionRouter(client) {
     const trackedInteraction = interaction;
     trackedInteraction.reply = async (options) => {
       initialResponseAttempted = true;
-      const cooldownRemainingMs = interactionCallbackCooldownRemaining();
-      if (cooldownRemainingMs > 0) {
-        throw new InteractionCallbackCooldownError(cooldownRemainingMs);
-      }
       return originalReply(options);
     };
     trackedInteraction.deferReply = async (options) => {
       initialResponseAttempted = true;
-      const cooldownRemainingMs = interactionCallbackCooldownRemaining();
-      if (cooldownRemainingMs > 0) {
-        throw new InteractionCallbackCooldownError(cooldownRemainingMs);
-      }
       return originalDeferReply(options);
     };
     void logUsage({
@@ -174863,7 +174845,7 @@ function registerInteractionRouter(client) {
         "Comando executado com sucesso"
       );
     } catch (err) {
-      const callbackUnavailable = isInteractionCallbackUnavailable(err);
+      const callbackUnavailable = isDiscordRateLimitError(err);
       if (callbackUnavailable) {
         logger.warn(
           {

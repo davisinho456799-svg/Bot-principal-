@@ -12,9 +12,8 @@ import {
   getConfiguredSeasonPage,
 } from "../routes/discord.js";
 import {
-  InteractionCallbackCooldownError,
   interactionCallbackCooldownRemaining,
-  isInteractionCallbackUnavailable,
+  isDiscordRateLimitError,
 } from "./interaction-rate-limit.js";
 
 const AUTOCOMPLETE_DEBOUNCE_MS = 250;
@@ -246,7 +245,7 @@ export function registerInteractionRouter(client: Client) {
           try {
             await command.autocomplete(interaction);
           } catch (err) {
-            if (!isInteractionCallbackUnavailable(err)) {
+            if (!isDiscordRateLimitError(err)) {
               logger.warn(
                 { err, command: interaction.commandName },
                 "Autocomplete falhou no despacho",
@@ -302,18 +301,10 @@ export function registerInteractionRouter(client: Client) {
     };
     trackedInteraction.reply = async (options: any) => {
       initialResponseAttempted = true;
-      const cooldownRemainingMs = interactionCallbackCooldownRemaining();
-      if (cooldownRemainingMs > 0) {
-        throw new InteractionCallbackCooldownError(cooldownRemainingMs);
-      }
       return originalReply(options);
     };
     trackedInteraction.deferReply = async (options?: any) => {
       initialResponseAttempted = true;
-      const cooldownRemainingMs = interactionCallbackCooldownRemaining();
-      if (cooldownRemainingMs > 0) {
-        throw new InteractionCallbackCooldownError(cooldownRemainingMs);
-      }
       return originalDeferReply(options);
     };
 
@@ -345,7 +336,7 @@ export function registerInteractionRouter(client: Client) {
         "Comando executado com sucesso",
       );
     } catch (err) {
-      const callbackUnavailable = isInteractionCallbackUnavailable(err);
+      const callbackUnavailable = isDiscordRateLimitError(err);
       if (callbackUnavailable) {
         logger.warn(
           {
