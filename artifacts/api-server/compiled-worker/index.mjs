@@ -164153,6 +164153,38 @@ function deletePendingAnime(userId) {
 
 // src/bot/commands/anime.ts
 init_anilist();
+
+// src/bot/interaction-rate-limit.ts
+var INTERACTION_CALLBACK_ROUTE = "/interactions/:id/:token/callback";
+var interactionCallbackBlockedUntil = 0;
+var InteractionCallbackCooldownError = class extends Error {
+  constructor(remainingMs) {
+    super(`Callbacks do Discord em cooldown por mais ${remainingMs}ms`);
+    this.remainingMs = remainingMs;
+    this.name = "InteractionCallbackCooldownError";
+  }
+};
+function isInteractionCallbackRoute(route) {
+  return String(route).includes(INTERACTION_CALLBACK_ROUTE);
+}
+function blockInteractionCallbacks(durationMs) {
+  if (!Number.isFinite(durationMs) || durationMs <= 0) return;
+  interactionCallbackBlockedUntil = Math.max(
+    interactionCallbackBlockedUntil,
+    Date.now() + Math.ceil(durationMs)
+  );
+}
+function interactionCallbackCooldownRemaining() {
+  return Math.max(0, interactionCallbackBlockedUntil - Date.now());
+}
+function isDiscordRateLimitError(error40) {
+  return error40 instanceof Error && error40.name === "RateLimitError";
+}
+function isInteractionCallbackUnavailable(error40) {
+  return isDiscordRateLimitError(error40) || error40 instanceof InteractionCallbackCooldownError;
+}
+
+// src/bot/commands/anime.ts
 var data4 = new import_discord5.SlashCommandBuilder().setName("anime").setDescription("Pesquisa um anime com sinopse traduzida, epis\xF3dios, est\xFAdios e onde assistir").addStringOption(
   (opt) => opt.setName("titulo").setDescription("Nome do anime para pesquisar").setRequired(false).setAutocomplete(true)
 ).addStringOption(
@@ -164194,7 +164226,9 @@ async function respondAutocomplete2(interaction, results, source) {
       respondDurationMs: Date.now() - startedAt
     }, "Resposta de autocomplete enviada");
   } catch (err) {
-    logger.warn({ err, command: source }, "Falha ao enviar resposta de autocomplete");
+    if (!isDiscordRateLimitError(err)) {
+      logger.warn({ err, command: source }, "Falha ao enviar resposta de autocomplete");
+    }
     throw err;
   }
 }
@@ -164213,7 +164247,6 @@ function autocompleteRelevance(query, title) {
 async function autocomplete2(interaction) {
   const focused = interaction.options.getFocused();
   if (!focused || focused.length < 2) {
-    await respondAutocomplete2(interaction, [], "anime");
     return;
   }
   const cached2 = autocompleteCache.get(focused);
@@ -174489,7 +174522,7 @@ async function runBotStartupTasks(readyClient) {
 }
 
 // src/bot/bootstrap.ts
-function isDiscordRateLimitError(error40) {
+function isDiscordRateLimitError2(error40) {
   return error40 instanceof Error && error40.name === "RateLimitError";
 }
 function registerBotLifecycle(client, token) {
@@ -174522,7 +174555,7 @@ function registerBotLifecycle(client, token) {
     logger.info({ shardId, replayedEvents }, "Bot reconectado ao Discord.");
   });
   client.on("error", (err) => {
-    if (isDiscordRateLimitError(err)) {
+    if (isDiscordRateLimitError2(err)) {
       logger.warn({ err }, "Rate limit do Discord emitido pelo cliente");
       return;
     }
@@ -174559,7 +174592,9 @@ async function logUsage(opts) {
 
 // src/bot/interaction-router.ts
 var AUTOCOMPLETE_DEBOUNCE_MS = 250;
+var AUTOCOMPLETE_RESPONSE_INTERVAL_MS = 1e3;
 var latestAutocompleteRequest = /* @__PURE__ */ new Map();
+var lastAutocompleteResponse = /* @__PURE__ */ new Map();
 var autocompleteRequestSequence = 0;
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -174665,6 +174700,14 @@ function registerInteractionRouter(client) {
       const receivedAt2 = Date.now();
       const command2 = commandRegistry.get(interaction.commandName);
       const autocompleteKey = `${interaction.user.id}:${interaction.commandName}`;
+      const focusedValue = interaction.options.getFocused();
+      if (interaction.commandName === "anime" && typeof focusedValue === "string" && focusedValue.trim().length < 2) {
+        logger.debug(
+          { command: interaction.commandName, interactionId: interaction.id },
+          "Autocomplete sem consulta suficiente ignorado"
+        );
+        return;
+      }
       const requestSequence = ++autocompleteRequestSequence;
       latestAutocompleteRequest.set(autocompleteKey, requestSequence);
       await wait(AUTOCOMPLETE_DEBOUNCE_MS);
@@ -174690,7 +174733,40 @@ function registerInteractionRouter(client) {
           );
           return;
         }
+        const cooldownRemainingMs = interactionCallbackCooldownRemaining();
+        if (cooldownRemainingMs > 0) {
+          responseAttempted = true;
+          logger.debug(
+            {
+              command: interaction.commandName,
+              interactionId: interaction.id,
+              cooldownRemainingMs
+            },
+            "Autocomplete ignorado durante cooldown do Discord"
+          );
+          return;
+        }
+        const now = Date.now();
+        const previousResponseAt = lastAutocompleteResponse.get(autocompleteKey) ?? 0;
+        if (now - previousResponseAt < AUTOCOMPLETE_RESPONSE_INTERVAL_MS) {
+          responseAttempted = true;
+          logger.debug(
+            {
+              command: interaction.commandName,
+              interactionId: interaction.id,
+              minIntervalMs: AUTOCOMPLETE_RESPONSE_INTERVAL_MS
+            },
+            "Autocomplete ignorado para limitar callbacks"
+          );
+          return;
+        }
         responseAttempted = true;
+        lastAutocompleteResponse.set(autocompleteKey, now);
+        setTimeout(() => {
+          if (lastAutocompleteResponse.get(autocompleteKey) === now) {
+            lastAutocompleteResponse.delete(autocompleteKey);
+          }
+        }, AUTOCOMPLETE_RESPONSE_INTERVAL_MS);
         return originalRespond(options);
       };
       try {
@@ -174705,7 +174781,12 @@ function registerInteractionRouter(client) {
           try {
             await command2.autocomplete(interaction);
           } catch (err) {
-            logger.warn({ err, command: interaction.commandName }, "Autocomplete falhou no despacho");
+            if (!isInteractionCallbackUnavailable(err)) {
+              logger.warn(
+                { err, command: interaction.commandName },
+                "Autocomplete falhou no despacho"
+              );
+            }
           }
         } else {
           await interaction.respond([]).catch(() => null);
@@ -174747,10 +174828,18 @@ function registerInteractionRouter(client) {
     const trackedInteraction = interaction;
     trackedInteraction.reply = async (options) => {
       initialResponseAttempted = true;
+      const cooldownRemainingMs = interactionCallbackCooldownRemaining();
+      if (cooldownRemainingMs > 0) {
+        throw new InteractionCallbackCooldownError(cooldownRemainingMs);
+      }
       return originalReply(options);
     };
     trackedInteraction.deferReply = async (options) => {
       initialResponseAttempted = true;
+      const cooldownRemainingMs = interactionCallbackCooldownRemaining();
+      if (cooldownRemainingMs > 0) {
+        throw new InteractionCallbackCooldownError(cooldownRemainingMs);
+      }
       return originalDeferReply(options);
     };
     void logUsage({
@@ -174774,17 +174863,33 @@ function registerInteractionRouter(client) {
         "Comando executado com sucesso"
       );
     } catch (err) {
-      logger.error({ err, command: interaction.commandName }, "Erro ao executar comando");
-      void recordBotError({
-        source: "command",
-        errorCode: "COMMAND_EXECUTION_FAILED",
-        error: err,
-        discordGuildId: interaction.guildId,
-        discordUserId: interaction.user.id,
-        command: interaction.commandName
-      });
+      const callbackUnavailable = isInteractionCallbackUnavailable(err);
+      if (callbackUnavailable) {
+        logger.warn(
+          {
+            command: interaction.commandName,
+            cooldownRemainingMs: interactionCallbackCooldownRemaining()
+          },
+          "Comando n\xE3o respondeu durante rate limit de callbacks do Discord"
+        );
+      } else {
+        logger.error({ err, command: interaction.commandName }, "Erro ao executar comando");
+        void recordBotError({
+          source: "command",
+          errorCode: "COMMAND_EXECUTION_FAILED",
+          error: err,
+          discordGuildId: interaction.guildId,
+          discordUserId: interaction.user.id,
+          command: interaction.commandName
+        });
+      }
       const msg = { content: "\u274C Ocorreu um erro ao executar esse comando.", ephemeral: true };
-      if (interaction.replied || interaction.deferred) {
+      if (callbackUnavailable) {
+        logger.debug(
+          { command: interaction.commandName },
+          "Resposta de erro suprimida durante rate limit de callbacks"
+        );
+      } else if (interaction.replied || interaction.deferred) {
         await interaction.followUp(msg).catch((followUpError) => {
           logger.warn(
             { err: followUpError, command: interaction.commandName },
@@ -174915,6 +175020,11 @@ function createClient(token) {
     }
   });
   client.rest.on("rateLimited", (rateLimitData) => {
+    if (isInteractionCallbackRoute(rateLimitData.route)) {
+      blockInteractionCallbacks(
+        Math.max(rateLimitData.timeToReset, rateLimitData.retryAfter)
+      );
+    }
     logger.warn(
       {
         route: rateLimitData.route,

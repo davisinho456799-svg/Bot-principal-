@@ -35,6 +35,7 @@ import { searchJikanAnimeAny } from "../jikan.js";
 import { jikanAnimeToUnified } from "../unified.js";
 import { searchTenraiAnime } from "../tenrai-fallback.js";
 import { logger } from "../../lib/logger.js";
+import { isDiscordRateLimitError } from "../interaction-rate-limit.js";
 
 export const data = new SlashCommandBuilder()
   .setName("anime")
@@ -104,7 +105,9 @@ async function respondAutocomplete(
       respondDurationMs: Date.now() - startedAt,
     }, "Resposta de autocomplete enviada");
   } catch (err) {
-    logger.warn({ err, command: source }, "Falha ao enviar resposta de autocomplete");
+    if (!isDiscordRateLimitError(err)) {
+      logger.warn({ err, command: source }, "Falha ao enviar resposta de autocomplete");
+    }
     throw err;
   }
 }
@@ -126,7 +129,6 @@ function autocompleteRelevance(query: string, title: string): number {
 export async function autocomplete(interaction: AutocompleteInteraction): Promise<void> {
   const focused = interaction.options.getFocused();
   if (!focused || focused.length < 2) {
-    await respondAutocomplete(interaction, [], "anime");
     return;
   }
 

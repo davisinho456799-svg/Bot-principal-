@@ -11,9 +11,16 @@ import {
   config as getDiscordConfig,
   getConfiguredSeasonPage,
 } from "../routes/discord.js";
+import {
+  InteractionCallbackCooldownError,
+  interactionCallbackCooldownRemaining,
+  isInteractionCallbackUnavailable,
+} from "./interaction-rate-limit.js";
 
 const AUTOCOMPLETE_DEBOUNCE_MS = 250;
+const AUTOCOMPLETE_RESPONSE_INTERVAL_MS = 1_000;
 const latestAutocompleteRequest = new Map<string, number>();
+const lastAutocompleteResponse = new Map<string, number>();
 let autocompleteRequestSequence = 0;
 
 function wait(ms: number): Promise<void> {
@@ -145,6 +152,20 @@ export function registerInteractionRouter(client: Client) {
       const receivedAt = Date.now();
       const command = commands.get(interaction.commandName);
       const autocompleteKey = `${interaction.user.id}:${interaction.commandName}`;
+      const focusedValue = interaction.options.getFocused();
+
+      if (
+        interaction.commandName === "anime" &&
+        typeof focusedValue === "string" &&
+        focusedValue.trim().length < 2
+      ) {
+        logger.debug(
+          { command: interaction.commandName, interactionId: interaction.id },
+          "Autocomplete sem consulta suficiente ignorado",
+        );
+        return;
+      }
+
       const requestSequence = ++autocompleteRequestSequence;
       latestAutocompleteRequest.set(autocompleteKey, requestSequence);
 
@@ -173,7 +194,43 @@ export function registerInteractionRouter(client: Client) {
           );
           return;
         }
+
+        const cooldownRemainingMs = interactionCallbackCooldownRemaining();
+        if (cooldownRemainingMs > 0) {
+          responseAttempted = true;
+          logger.debug(
+            {
+              command: interaction.commandName,
+              interactionId: interaction.id,
+              cooldownRemainingMs,
+            },
+            "Autocomplete ignorado durante cooldown do Discord",
+          );
+          return;
+        }
+
+        const now = Date.now();
+        const previousResponseAt = lastAutocompleteResponse.get(autocompleteKey) ?? 0;
+        if (now - previousResponseAt < AUTOCOMPLETE_RESPONSE_INTERVAL_MS) {
+          responseAttempted = true;
+          logger.debug(
+            {
+              command: interaction.commandName,
+              interactionId: interaction.id,
+              minIntervalMs: AUTOCOMPLETE_RESPONSE_INTERVAL_MS,
+            },
+            "Autocomplete ignorado para limitar callbacks",
+          );
+          return;
+        }
+
         responseAttempted = true;
+        lastAutocompleteResponse.set(autocompleteKey, now);
+        setTimeout(() => {
+          if (lastAutocompleteResponse.get(autocompleteKey) === now) {
+            lastAutocompleteResponse.delete(autocompleteKey);
+          }
+        }, AUTOCOMPLETE_RESPONSE_INTERVAL_MS);
         return originalRespond(options);
       };
 
@@ -189,7 +246,12 @@ export function registerInteractionRouter(client: Client) {
           try {
             await command.autocomplete(interaction);
           } catch (err) {
-            logger.warn({ err, command: interaction.commandName }, "Autocomplete falhou no despacho");
+            if (!isInteractionCallbackUnavailable(err)) {
+              logger.warn(
+                { err, command: interaction.commandName },
+                "Autocomplete falhou no despacho",
+              );
+            }
           }
         } else {
           await interaction.respond([]).catch(() => null);
@@ -240,10 +302,18 @@ export function registerInteractionRouter(client: Client) {
     };
     trackedInteraction.reply = async (options: any) => {
       initialResponseAttempted = true;
+      const cooldownRemainingMs = interactionCallbackCooldownRemaining();
+      if (cooldownRemainingMs > 0) {
+        throw new InteractionCallbackCooldownError(cooldownRemainingMs);
+      }
       return originalReply(options);
     };
     trackedInteraction.deferReply = async (options?: any) => {
       initialResponseAttempted = true;
+      const cooldownRemainingMs = interactionCallbackCooldownRemaining();
+      if (cooldownRemainingMs > 0) {
+        throw new InteractionCallbackCooldownError(cooldownRemainingMs);
+      }
       return originalDeferReply(options);
     };
 
@@ -275,17 +345,33 @@ export function registerInteractionRouter(client: Client) {
         "Comando executado com sucesso",
       );
     } catch (err) {
-      logger.error({ err, command: interaction.commandName }, "Erro ao executar comando");
-      void recordBotError({
-        source: "command",
-        errorCode: "COMMAND_EXECUTION_FAILED",
-        error: err,
-        discordGuildId: interaction.guildId,
-        discordUserId: interaction.user.id,
-        command: interaction.commandName,
-      });
+      const callbackUnavailable = isInteractionCallbackUnavailable(err);
+      if (callbackUnavailable) {
+        logger.warn(
+          {
+            command: interaction.commandName,
+            cooldownRemainingMs: interactionCallbackCooldownRemaining(),
+          },
+          "Comando não respondeu durante rate limit de callbacks do Discord",
+        );
+      } else {
+        logger.error({ err, command: interaction.commandName }, "Erro ao executar comando");
+        void recordBotError({
+          source: "command",
+          errorCode: "COMMAND_EXECUTION_FAILED",
+          error: err,
+          discordGuildId: interaction.guildId,
+          discordUserId: interaction.user.id,
+          command: interaction.commandName,
+        });
+      }
       const msg = { content: "❌ Ocorreu um erro ao executar esse comando.", ephemeral: true };
-      if (interaction.replied || interaction.deferred) {
+      if (callbackUnavailable) {
+        logger.debug(
+          { command: interaction.commandName },
+          "Resposta de erro suprimida durante rate limit de callbacks",
+        );
+      } else if (interaction.replied || interaction.deferred) {
         await interaction.followUp(msg).catch((followUpError) => {
           logger.warn(
             { err: followUpError, command: interaction.commandName },
