@@ -26,3 +26,4 @@ dist
 # Throttle Discord interaction callbacks deploy sync
 # Interaction callback cooldown deploy sync
 # Restore Discord command callbacks b9348b78
+# Disable anime autocomplete f0fb2ea0
