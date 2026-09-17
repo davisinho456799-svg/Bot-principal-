@@ -25,3 +25,4 @@ dist
 # Prevent duplicate autocomplete callbacks deploy sync
 # Throttle Discord interaction callbacks deploy sync
 # Interaction callback cooldown deploy sync
+# Restore Discord command callbacks b9348b78
