@@ -12,6 +12,14 @@ import {
   getConfiguredSeasonPage,
 } from "../routes/discord.js";
 
+const AUTOCOMPLETE_DEBOUNCE_MS = 250;
+const latestAutocompleteRequest = new Map<string, number>();
+let autocompleteRequestSequence = 0;
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export function registerInteractionRouter(client: Client) {
   client.on(Events.InteractionCreate, async (interaction) => {
     const receivedAt = Date.now();
@@ -136,44 +144,68 @@ export function registerInteractionRouter(client: Client) {
     if (interaction.isAutocomplete()) {
       const receivedAt = Date.now();
       const command = commands.get(interaction.commandName);
+      const autocompleteKey = `${interaction.user.id}:${interaction.commandName}`;
+      const requestSequence = ++autocompleteRequestSequence;
+      latestAutocompleteRequest.set(autocompleteKey, requestSequence);
+
+      await wait(AUTOCOMPLETE_DEBOUNCE_MS);
+      const isLatestAutocomplete = () =>
+        latestAutocompleteRequest.get(autocompleteKey) === requestSequence;
+      if (!isLatestAutocomplete()) {
+        logger.debug(
+          {
+            command: interaction.commandName,
+            interactionId: interaction.id,
+            debounceMs: AUTOCOMPLETE_DEBOUNCE_MS,
+          },
+          "Autocomplete intermediário ignorado",
+        );
+        return;
+      }
+
       let responseAttempted = false;
       const originalRespond = interaction.respond.bind(interaction);
       interaction.respond = async (options) => {
-        if (interaction.responded || responseAttempted) {
+        if (!isLatestAutocomplete() || interaction.responded || responseAttempted) {
           logger.debug(
             { command: interaction.commandName, interactionId: interaction.id },
-            "Resposta duplicada de autocomplete ignorada",
+            "Resposta obsoleta ou duplicada de autocomplete ignorada",
           );
           return;
         }
         responseAttempted = true;
         return originalRespond(options);
       };
-      logger.info(
-        {
-          command: interaction.commandName,
-          dispatchDelayMs: Math.max(0, receivedAt - interaction.createdTimestamp),
-        },
-        "Autocomplete recebido",
-      );
-      if (command?.autocomplete) {
-        try {
-          await command.autocomplete(interaction);
-        } catch (err) {
-          logger.warn({ err, command: interaction.commandName }, "Autocomplete falhou no despacho");
+
+      try {
+        logger.info(
+          {
+            command: interaction.commandName,
+            dispatchDelayMs: Math.max(0, receivedAt - interaction.createdTimestamp),
+          },
+          "Autocomplete recebido",
+        );
+        if (command?.autocomplete) {
+          try {
+            await command.autocomplete(interaction);
+          } catch (err) {
+            logger.warn({ err, command: interaction.commandName }, "Autocomplete falhou no despacho");
+          }
+        } else {
+          await interaction.respond([]).catch(() => null);
         }
-      } else {
-        await interaction.respond([]).catch(() => null);
+        logger.info(
+          {
+            command: interaction.commandName,
+            handlerDurationMs: Date.now() - receivedAt,
+            totalSinceDiscordMs: Math.max(0, Date.now() - interaction.createdTimestamp),
+            responded: interaction.responded,
+          },
+          "Autocomplete finalizado",
+        );
+      } finally {
+        if (isLatestAutocomplete()) latestAutocompleteRequest.delete(autocompleteKey);
       }
-      logger.info(
-        {
-          command: interaction.commandName,
-          handlerDurationMs: Date.now() - receivedAt,
-          totalSinceDiscordMs: Math.max(0, Date.now() - interaction.createdTimestamp),
-          responded: interaction.responded,
-        },
-        "Autocomplete finalizado",
-      );
       return;
     }
 
@@ -198,6 +230,22 @@ export function registerInteractionRouter(client: Client) {
       { command: interaction.commandName, guildId: interaction.guildId },
       "Despachando comando do Discord",
     );
+
+    let initialResponseAttempted = false;
+    const originalReply = interaction.reply.bind(interaction);
+    const originalDeferReply = interaction.deferReply.bind(interaction);
+    const trackedInteraction = interaction as unknown as {
+      reply: (options: any) => Promise<unknown>;
+      deferReply: (options?: any) => Promise<unknown>;
+    };
+    trackedInteraction.reply = async (options: any) => {
+      initialResponseAttempted = true;
+      return originalReply(options);
+    };
+    trackedInteraction.deferReply = async (options?: any) => {
+      initialResponseAttempted = true;
+      return originalDeferReply(options);
+    };
 
     void logUsage({
       discordUserId: interaction.user.id,
@@ -238,9 +286,24 @@ export function registerInteractionRouter(client: Client) {
       });
       const msg = { content: "❌ Ocorreu um erro ao executar esse comando.", ephemeral: true };
       if (interaction.replied || interaction.deferred) {
-        await interaction.followUp(msg);
+        await interaction.followUp(msg).catch((followUpError) => {
+          logger.warn(
+            { err: followUpError, command: interaction.commandName },
+            "Falha ao enviar erro após resposta deferida",
+          );
+        });
+      } else if (!initialResponseAttempted) {
+        await interaction.reply(msg).catch((replyError) => {
+          logger.warn(
+            { err: replyError, command: interaction.commandName },
+            "Falha ao enviar resposta de erro do comando",
+          );
+        });
       } else {
-        await interaction.reply(msg);
+        logger.warn(
+          { command: interaction.commandName },
+          "Resposta inicial já tentada; callback de erro não será repetido",
+        );
       }
     }
   });

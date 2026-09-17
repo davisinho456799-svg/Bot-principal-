@@ -130,6 +130,20 @@ function createClient(token: string) {
     },
   });
 
+  client.rest.on("rateLimited", (rateLimitData) => {
+    logger.warn(
+      {
+        route: rateLimitData.route,
+        method: rateLimitData.method,
+        timeToResetMs: rateLimitData.timeToReset,
+        retryAfterMs: rateLimitData.retryAfter,
+        limit: rateLimitData.limit,
+        global: rateLimitData.global,
+      },
+      "Rate limit recebido no REST do Discord",
+    );
+  });
+
   const originalRestGet = client.rest.get.bind(client.rest);
   client.rest.get = ((
     route: Parameters<typeof client.rest.get>[0],

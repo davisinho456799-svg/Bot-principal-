@@ -26025,7 +26025,7 @@ var require_wait = __commonJS({
   "../../node_modules/.pnpm/thread-stream@3.1.0/node_modules/thread-stream/lib/wait.js"(exports2, module2) {
     "use strict";
     var MAX_TIMEOUT = 1e3;
-    function wait(state, index, expected, timeout, done) {
+    function wait2(state, index, expected, timeout, done) {
       const max2 = Date.now() + timeout;
       let current = Atomics.load(state, index);
       if (current === expected) {
@@ -26074,7 +26074,7 @@ var require_wait = __commonJS({
       };
       check2(1);
     }
-    module2.exports = { wait, waitDiff };
+    module2.exports = { wait: wait2, waitDiff };
   }
 });
 
@@ -26100,7 +26100,7 @@ var require_thread_stream = __commonJS({
     var { Worker } = __require("worker_threads");
     var { join } = __require("path");
     var { pathToFileURL } = __require("url");
-    var { wait } = require_wait();
+    var { wait: wait2 } = require_wait();
     var {
       WRITE_INDEX,
       READ_INDEX
@@ -26329,7 +26329,7 @@ var require_thread_stream = __commonJS({
           return;
         }
         const writeIndex = Atomics.load(this[kImpl].state, WRITE_INDEX);
-        wait(this[kImpl].state, READ_INDEX, writeIndex, Infinity, (err, res) => {
+        wait2(this[kImpl].state, READ_INDEX, writeIndex, Infinity, (err, res) => {
           if (err) {
             destroy(this, err);
             process.nextTick(cb, err);
@@ -83949,9 +83949,9 @@ ${flattened}` : error40.message || flattened || "Unknown Error";
         if (queueType === 0) {
           if (this.#sublimitedQueue && hasSublimit(routeId.bucketRoute, requestData.body, options.method)) {
             queue = this.#sublimitedQueue;
-            const wait = queue.wait();
+            const wait2 = queue.wait();
             this.#asyncQueue.shift();
-            await wait;
+            await wait2;
           } else if (this.#sublimitPromise) {
             await this.#sublimitPromise.promise;
           }
@@ -159846,8 +159846,8 @@ function toJikanResult(manga) {
 }
 var lastJikanCall = 0;
 async function throttle() {
-  const wait = 350 - (Date.now() - lastJikanCall);
-  if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+  const wait2 = 350 - (Date.now() - lastJikanCall);
+  if (wait2 > 0) await new Promise((r) => setTimeout(r, wait2));
   lastJikanCall = Date.now();
 }
 var JIKAN_RETRYABLE = /* @__PURE__ */ new Set([408, 425, 429, 500, 502, 503, 504]);
@@ -160062,8 +160062,8 @@ function toKitsuResult(item) {
 }
 var lastKitsuCall = 0;
 async function throttle2() {
-  const wait = 250 - (Date.now() - lastKitsuCall);
-  if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+  const wait2 = 250 - (Date.now() - lastKitsuCall);
+  if (wait2 > 0) await new Promise((r) => setTimeout(r, wait2));
   lastKitsuCall = Date.now();
 }
 async function searchKitsu(query) {
@@ -160266,8 +160266,8 @@ function parseAnimeXML(xml, aid) {
 }
 async function getAniDBById(aid) {
   if (!canUseHttpApi()) return null;
-  const wait = httpApiThrottle + 2100 - Date.now();
-  if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+  const wait2 = httpApiThrottle + 2100 - Date.now();
+  if (wait2 > 0) await new Promise((r) => setTimeout(r, wait2));
   httpApiThrottle = Date.now();
   try {
     const params = getAniDBApiParams(aid);
@@ -160330,8 +160330,8 @@ function toVNDBResult(raw) {
 }
 var lastVNDBCall = 0;
 async function throttle3() {
-  const wait = 300 - (Date.now() - lastVNDBCall);
-  if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+  const wait2 = 300 - (Date.now() - lastVNDBCall);
+  if (wait2 > 0) await new Promise((r) => setTimeout(r, wait2));
   lastVNDBCall = Date.now();
 }
 async function searchVNDB(query) {
@@ -174489,6 +174489,9 @@ async function runBotStartupTasks(readyClient) {
 }
 
 // src/bot/bootstrap.ts
+function isDiscordRateLimitError(error40) {
+  return error40 instanceof Error && error40.name === "RateLimitError";
+}
 function registerBotLifecycle(client, token) {
   client.once(import_discord37.Events.ClientReady, async (readyClient) => {
     logger.info(
@@ -174519,6 +174522,10 @@ function registerBotLifecycle(client, token) {
     logger.info({ shardId, replayedEvents }, "Bot reconectado ao Discord.");
   });
   client.on("error", (err) => {
+    if (isDiscordRateLimitError(err)) {
+      logger.warn({ err }, "Rate limit do Discord emitido pelo cliente");
+      return;
+    }
     logger.error({ err }, "Erro no cliente do Discord");
     void recordBotError({
       source: "discord_client",
@@ -174551,6 +174558,12 @@ async function logUsage(opts) {
 }
 
 // src/bot/interaction-router.ts
+var AUTOCOMPLETE_DEBOUNCE_MS = 250;
+var latestAutocompleteRequest = /* @__PURE__ */ new Map();
+var autocompleteRequestSequence = 0;
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 function registerInteractionRouter(client) {
   client.on(import_discord38.Events.InteractionCreate, async (interaction) => {
     const receivedAt = Date.now();
@@ -174651,44 +174664,64 @@ function registerInteractionRouter(client) {
     if (interaction.isAutocomplete()) {
       const receivedAt2 = Date.now();
       const command2 = commandRegistry.get(interaction.commandName);
+      const autocompleteKey = `${interaction.user.id}:${interaction.commandName}`;
+      const requestSequence = ++autocompleteRequestSequence;
+      latestAutocompleteRequest.set(autocompleteKey, requestSequence);
+      await wait(AUTOCOMPLETE_DEBOUNCE_MS);
+      const isLatestAutocomplete = () => latestAutocompleteRequest.get(autocompleteKey) === requestSequence;
+      if (!isLatestAutocomplete()) {
+        logger.debug(
+          {
+            command: interaction.commandName,
+            interactionId: interaction.id,
+            debounceMs: AUTOCOMPLETE_DEBOUNCE_MS
+          },
+          "Autocomplete intermedi\xE1rio ignorado"
+        );
+        return;
+      }
       let responseAttempted = false;
       const originalRespond = interaction.respond.bind(interaction);
       interaction.respond = async (options) => {
-        if (interaction.responded || responseAttempted) {
+        if (!isLatestAutocomplete() || interaction.responded || responseAttempted) {
           logger.debug(
             { command: interaction.commandName, interactionId: interaction.id },
-            "Resposta duplicada de autocomplete ignorada"
+            "Resposta obsoleta ou duplicada de autocomplete ignorada"
           );
           return;
         }
         responseAttempted = true;
         return originalRespond(options);
       };
-      logger.info(
-        {
-          command: interaction.commandName,
-          dispatchDelayMs: Math.max(0, receivedAt2 - interaction.createdTimestamp)
-        },
-        "Autocomplete recebido"
-      );
-      if (command2?.autocomplete) {
-        try {
-          await command2.autocomplete(interaction);
-        } catch (err) {
-          logger.warn({ err, command: interaction.commandName }, "Autocomplete falhou no despacho");
+      try {
+        logger.info(
+          {
+            command: interaction.commandName,
+            dispatchDelayMs: Math.max(0, receivedAt2 - interaction.createdTimestamp)
+          },
+          "Autocomplete recebido"
+        );
+        if (command2?.autocomplete) {
+          try {
+            await command2.autocomplete(interaction);
+          } catch (err) {
+            logger.warn({ err, command: interaction.commandName }, "Autocomplete falhou no despacho");
+          }
+        } else {
+          await interaction.respond([]).catch(() => null);
         }
-      } else {
-        await interaction.respond([]).catch(() => null);
+        logger.info(
+          {
+            command: interaction.commandName,
+            handlerDurationMs: Date.now() - receivedAt2,
+            totalSinceDiscordMs: Math.max(0, Date.now() - interaction.createdTimestamp),
+            responded: interaction.responded
+          },
+          "Autocomplete finalizado"
+        );
+      } finally {
+        if (isLatestAutocomplete()) latestAutocompleteRequest.delete(autocompleteKey);
       }
-      logger.info(
-        {
-          command: interaction.commandName,
-          handlerDurationMs: Date.now() - receivedAt2,
-          totalSinceDiscordMs: Math.max(0, Date.now() - interaction.createdTimestamp),
-          responded: interaction.responded
-        },
-        "Autocomplete finalizado"
-      );
       return;
     }
     if (!interaction.isChatInputCommand()) return;
@@ -174708,6 +174741,18 @@ function registerInteractionRouter(client) {
       { command: interaction.commandName, guildId: interaction.guildId },
       "Despachando comando do Discord"
     );
+    let initialResponseAttempted = false;
+    const originalReply = interaction.reply.bind(interaction);
+    const originalDeferReply = interaction.deferReply.bind(interaction);
+    const trackedInteraction = interaction;
+    trackedInteraction.reply = async (options) => {
+      initialResponseAttempted = true;
+      return originalReply(options);
+    };
+    trackedInteraction.deferReply = async (options) => {
+      initialResponseAttempted = true;
+      return originalDeferReply(options);
+    };
     void logUsage({
       discordUserId: interaction.user.id,
       discordUsername: interaction.user.username,
@@ -174740,9 +174785,24 @@ function registerInteractionRouter(client) {
       });
       const msg = { content: "\u274C Ocorreu um erro ao executar esse comando.", ephemeral: true };
       if (interaction.replied || interaction.deferred) {
-        await interaction.followUp(msg);
+        await interaction.followUp(msg).catch((followUpError) => {
+          logger.warn(
+            { err: followUpError, command: interaction.commandName },
+            "Falha ao enviar erro ap\xF3s resposta deferida"
+          );
+        });
+      } else if (!initialResponseAttempted) {
+        await interaction.reply(msg).catch((replyError2) => {
+          logger.warn(
+            { err: replyError2, command: interaction.commandName },
+            "Falha ao enviar resposta de erro do comando"
+          );
+        });
       } else {
-        await interaction.reply(msg);
+        logger.warn(
+          { command: interaction.commandName },
+          "Resposta inicial j\xE1 tentada; callback de erro n\xE3o ser\xE1 repetido"
+        );
       }
     }
   });
@@ -174853,6 +174913,19 @@ function createClient(token) {
       timeout: DISCORD_REST_TIMEOUT_MS,
       rejectOnRateLimit: (rateLimitData) => rateLimitData.timeToReset > 5e3
     }
+  });
+  client.rest.on("rateLimited", (rateLimitData) => {
+    logger.warn(
+      {
+        route: rateLimitData.route,
+        method: rateLimitData.method,
+        timeToResetMs: rateLimitData.timeToReset,
+        retryAfterMs: rateLimitData.retryAfter,
+        limit: rateLimitData.limit,
+        global: rateLimitData.global
+      },
+      "Rate limit recebido no REST do Discord"
+    );
   });
   const originalRestGet = client.rest.get.bind(client.rest);
   client.rest.get = ((route, options) => {
