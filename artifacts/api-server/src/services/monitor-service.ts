@@ -1,9 +1,10 @@
 import { and, eq } from "drizzle-orm";
-import sharp from "sharp";
+import type sharp from "sharp";
 import { db } from "@workspace/db";
 import {
   detectedChaptersTable,
   monitorActivityTable,
+  monitorHistoryTable,
   monitorConfigTable,
   monitoredWorksTable,
 } from "@workspace/db/schema";
@@ -22,6 +23,12 @@ import {
   type BrowserListingSession,
   type CapturedChapterGroup,
 } from "./browser-chapter-capture";
+import {
+  chapterNumberIdentity,
+  highestTrustedChapterNumber,
+  isAbsurdChapterOutlier,
+  numericChapterNumber,
+} from "./monitor-chapter-guard";
 
 type ChapterCandidate = ParsedChapter & {
   key: string;
@@ -29,21 +36,42 @@ type ChapterCandidate = ParsedChapter & {
   captureId?: string;
 };
 
-function chapterNumberIdentity(value: string): string {
-  return value.trim().replace(/^0+(?=\d)/, "");
-}
-
 type ExistingChapter = {
   id: number;
   key: string;
   number: string;
+  thumbnailUrl: string;
+  publishedAt: Date | null;
 };
 
 const HISTORICAL_RELEASE_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1_000;
 
-function numericChapterNumber(value: string): number | null {
-  const number = Number(value.replace(",", ".").trim());
-  return Number.isFinite(number) ? number : null;
+type SharpFactory = typeof sharp;
+
+let sharpFactoryPromise: Promise<SharpFactory> | null = null;
+let sharpUnavailable = false;
+let sharpWarningLogged = false;
+
+async function getSharp(): Promise<SharpFactory> {
+  sharpFactoryPromise ??= import("sharp").then((module) => module.default);
+  return sharpFactoryPromise;
+}
+
+async function getOptionalSharp(): Promise<SharpFactory | null> {
+  if (sharpUnavailable) return null;
+  try {
+    return await getSharp();
+  } catch (error) {
+    sharpUnavailable = true;
+    if (!sharpWarningLogged) {
+      sharpWarningLogged = true;
+      logger.warn(
+        { err: error },
+        "Sharp não está disponível; o monitor continuará sem gerar imagens de fallback",
+      );
+    }
+    return null;
+  }
 }
 
 function isHistoricalRelease(
@@ -237,6 +265,8 @@ async function downloadThumbnail(url: string): Promise<Buffer | null> {
     if (/fullversion|full[-_ ]?version|download[-_ ]?app|app[-_ ]?version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)|(?:^|[/._-])(?:banner|bnr)(?:[/._-]|$)/i.test(url)) {
       return null;
     }
+    const sharp = await getOptionalSharp();
+    if (!sharp) return null;
     const response = await fetch(url, { headers: { "User-Agent": "ChapterMonitor/1.0" } });
     if (!response.ok) return null;
     const bytes = Buffer.from(await response.arrayBuffer());
@@ -261,7 +291,9 @@ async function downloadThumbnail(url: string): Promise<Buffer | null> {
 async function buildStrip(
   title: string,
   chapters: ChapterCandidate[],
-): Promise<Buffer> {
+): Promise<Buffer | null> {
+  const sharp = await getOptionalSharp();
+  if (!sharp) return null;
   const rowHeight = 164;
   const width = 920;
   const headerHeight = 92;
@@ -324,14 +356,22 @@ async function postStrip(
   const chapterSummary = chapters.length === 1
     ? `1 capítulo novo · capítulo ${chapters[0].number}`
     : `${chapters.length} capítulos novos · capítulos ${chapters.map((chapter) => chapter.number).join(", ")}`;
+  if (!png) {
+    logger.warn(
+      { title, chapterNumbers: chapters.map((chapter) => chapter.number) },
+      "Sharp indisponível e nenhuma captura do navegador foi obtida; enviando notificação sem anexo",
+    );
+  }
   form.append("payload_json", JSON.stringify({
-    content: `${isTest ? "🧪 **TESTE** · " : ""}**${title}** · ${chapterSummary}${total > 1 ? ` · parte ${part}/${total}` : ""}`,
+    content: `${isTest ? "🧪 **TESTE** · " : ""}**${title}** · ${chapterSummary}${total > 1 ? ` · parte ${part}/${total}` : ""}${png ? "" : " · imagem indisponível no modo leve"}`,
     allowed_mentions: { parse: [] },
   }));
-  const pngArrayBuffer = new ArrayBuffer(png.byteLength);
-  new Uint8Array(pngArrayBuffer).set(png);
-  const pngBlob = new Blob([pngArrayBuffer], { type: "image/png" });
-  form.append("files[0]", pngBlob, `chapter-release-${isTest ? "test-" : ""}${Date.now()}-${part}.png`);
+  if (png) {
+    const pngArrayBuffer = new ArrayBuffer(png.byteLength);
+    new Uint8Array(pngArrayBuffer).set(png);
+    const pngBlob = new Blob([pngArrayBuffer], { type: "image/png" });
+    form.append("files[0]", pngBlob, `chapter-release-${isTest ? "test-" : ""}${Date.now()}-${part}.png`);
+  }
   const response = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
     method: "POST",
     headers: { Authorization: `Bot ${token}` },
@@ -342,12 +382,20 @@ async function postStrip(
 
 async function isUsableBrowserCapture(image: Buffer | undefined): Promise<boolean> {
   if (!image) return false;
-  try {
-    const metadata = await sharp(image).metadata();
-    return (metadata.width ?? 0) >= 240 && (metadata.height ?? 0) >= 90;
-  } catch {
-    return false;
-  }
+  // Browser captures are always requested as PNG. Read the IHDR dimensions
+  // directly so a valid capture does not depend on Sharp being installed.
+  const isPng =
+    image.length >= 24 &&
+    image[0] === 0x89 &&
+    image[1] === 0x50 &&
+    image[2] === 0x4e &&
+    image[3] === 0x47 &&
+    image[4] === 0x0d &&
+    image[5] === 0x0a &&
+    image[6] === 0x1a &&
+    image[7] === 0x0a;
+  if (!isPng) return false;
+  return image.readUInt32BE(16) >= 240 && image.readUInt32BE(20) >= 90;
 }
 
 export async function runTestNotification(
@@ -427,7 +475,9 @@ export async function runTestNotification(
       title: work.title,
       chapter: chapter.number,
       parser,
-      captureMode: capturedImage ? "captura direta do card" : "fallback SVG/Sharp",
+      captureMode: capturedImage
+        ? "captura direta do card"
+        : "fallback SVG/Sharp ou mensagem sem anexo",
       channelId: config.discordChannelId,
     };
   } finally {
@@ -450,20 +500,37 @@ export async function runMonitor() {
           id: detectedChaptersTable.id,
           key: detectedChaptersTable.chapterKey,
           number: detectedChaptersTable.chapterNumber,
+        thumbnailUrl: detectedChaptersTable.thumbnailUrl,
+        publishedAt: detectedChaptersTable.publishedAt,
         })
         .from(detectedChaptersTable)
         .where(eq(detectedChaptersTable.workId, work.id));
       const checkedAt = new Date();
+      const highestExisting = highestTrustedChapterNumber(
+        existing.map((chapter) => chapter.number),
+      );
+      const safeCandidates = candidates.filter((candidate) => {
+        const outlier = isAbsurdChapterOutlier(candidate.number, highestExisting);
+        if (outlier) {
+          logger.warn(
+            {
+              workId: work.id,
+              title: work.title,
+              chapter: candidate.number,
+              highestKnownChapter: highestExisting,
+              parser,
+            },
+            "Capítulo absurdo ignorado pelo monitor",
+          );
+        }
+        return !outlier;
+      });
       const seenKeys = new Set(existing.map((item) => item.key));
       const seenNumbers = new Set(existing.map((item) => chapterNumberIdentity(item.number)));
-      const previouslyUnseen = candidates.filter((candidate) =>
+      const previouslyUnseen = safeCandidates.filter((candidate) =>
         !seenKeys.has(candidate.key) &&
         !seenNumbers.has(chapterNumberIdentity(candidate.number)),
       );
-      const existingNumbers = existing
-        .map((chapter) => numericChapterNumber(chapter.number))
-        .filter((number): number is number => number !== null);
-      const highestExisting = existingNumbers.length ? Math.max(...existingNumbers) : null;
       const isAtOrBelowKnownChapter = (chapter: ChapterCandidate) => {
         const number = numericChapterNumber(chapter.number);
         return highestExisting !== null && number !== null && number <= highestExisting;
@@ -505,14 +572,45 @@ export async function runMonitor() {
         fresh = [newest];
       }
 
+      const lastPublishedNumber = highestTrustedChapterNumber(
+        existing
+          .filter((chapter) => chapter.publishedAt !== null)
+          .map((chapter) => chapter.number),
+      );
+      const candidateByNumber = new Map(
+        safeCandidates.map((chapter) => [
+          chapterNumberIdentity(chapter.number),
+          chapter,
+        ]),
+      );
+      const pending = lastPublishedNumber === null
+        ? []
+        : existing
+          .filter((chapter) => {
+            const number = numericChapterNumber(chapter.number);
+            return chapter.publishedAt === null &&
+              number !== null &&
+              number > lastPublishedNumber &&
+              !isAbsurdChapterOutlier(chapter.number, highestExisting);
+          })
+          .map((chapter): ChapterCandidate =>
+            candidateByNumber.get(chapterNumberIdentity(chapter.number)) ?? {
+              key: chapter.key,
+              number: chapter.number,
+              thumbnailUrl: chapter.thumbnailUrl,
+              parser: `${parser} recovery`,
+            },
+          );
+      const toPublish = [...pending, ...fresh];
+
       if (existing.length === 0 && work.lastCheckedAt == null) {
         await db.transaction(async (tx) => {
-          if (candidates.length) await tx.insert(detectedChaptersTable).values(candidates.map((chapter) => ({ workId: work.id, chapterKey: chapter.key, chapterNumber: chapter.number, thumbnailUrl: chapter.thumbnailUrl, detectedAt: checkedAt })));
-          await tx.update(monitoredWorksTable).set({ chaptersSeen: candidates.length, lastCheckedAt: checkedAt, lastStatus: candidates.length ? `${parser}: baseline captured` : `${parser}: no chapters found`, updatedAt: checkedAt }).where(eq(monitoredWorksTable.id, work.id));
+          if (safeCandidates.length) await tx.insert(detectedChaptersTable).values(safeCandidates.map((chapter) => ({ workId: work.id, chapterKey: chapter.key, chapterNumber: chapter.number, thumbnailUrl: chapter.thumbnailUrl, detectedAt: checkedAt })));
+          await tx.update(monitoredWorksTable).set({ chaptersSeen: safeCandidates.length, lastCheckedAt: checkedAt, lastStatus: safeCandidates.length ? `${parser}: baseline captured` : `${parser}: no chapters found`, updatedAt: checkedAt }).where(eq(monitoredWorksTable.id, work.id));
         });
         continue;
       }
-      if (!fresh.length) {
+      if (!toPublish.length) {
         await db.transaction(async (tx) => {
           await migrateLegacyKeys(tx, work, existing);
           if (historical.length) {
@@ -529,13 +627,15 @@ export async function runMonitor() {
             lastCheckedAt: checkedAt,
             lastStatus: historical.length
               ? `${parser}: historical chapters ignored`
+              : safeCandidates.length < candidates.length
+                ? `${parser}: absurd chapter ignored`
               : `${parser}: no new chapters`,
             updatedAt: checkedAt,
           }).where(eq(monitoredWorksTable.id, work.id));
         });
         continue;
       }
-      chaptersFound += fresh.length;
+      chaptersFound += toPublish.length;
       if (historical.length) {
         await db.insert(detectedChaptersTable).values(historical.map((chapter) => ({
           workId: work.id,
@@ -558,7 +658,7 @@ export async function runMonitor() {
       if (listing.captureSession) {
         try {
           capturedGroups = await listing.captureSession.captureGroups(
-            fresh.map((chapter) => chapter.captureId).filter(Boolean) as string[],
+            toPublish.map((chapter) => chapter.captureId).filter(Boolean) as string[],
           );
         } catch (error) {
           logger.warn(
@@ -579,7 +679,7 @@ export async function runMonitor() {
         }
       }
       const freshByNumber = new Map(
-        fresh.map((chapter) => [chapter.number, chapter]),
+        toPublish.map((chapter) => [chapter.number, chapter]),
       );
       const browserGroups = validCapturedGroups
         .map((group) => ({
@@ -610,18 +710,18 @@ export async function runMonitor() {
       // Do not discard the remaining fresh chapters just because one direct
       // capture succeeded; send uncovered chapters through the normal 5-item
       // fallback batches.
-      if (directByKey.size < fresh.length) {
+      if (directByKey.size < toPublish.length) {
         logger.warn(
           {
             workId: work.id,
-            freshCount: fresh.length,
+            freshCount: toPublish.length,
             capturedCount: directByKey.size,
           },
           "Captura do monitor ficou parcial — capítulos restantes irão para o fallback",
         );
       }
 
-      for (const chapter of fresh) {
+      for (const chapter of toPublish) {
         const direct = directByKey.get(chapter.key);
         if (!direct) {
           fallbackChapters.push(chapter);
@@ -651,9 +751,61 @@ export async function runMonitor() {
       }
       await db.transaction(async (tx) => {
         await migrateLegacyKeys(tx, work, existing);
-        await tx.insert(detectedChaptersTable).values(fresh.map((chapter) => ({ workId: work.id, chapterKey: chapter.key, chapterNumber: chapter.number, thumbnailUrl: chapter.thumbnailUrl, detectedAt: checkedAt, publishedAt: checkedAt })));
-        await tx.insert(monitorActivityTable).values({ workId: work.id, chapterCount: fresh.length, status: "Published" });
-        await tx.update(monitoredWorksTable).set({ chaptersSeen: existing.length + historical.length + fresh.length, lastCheckedAt: checkedAt, lastPublishedAt: checkedAt, lastStatus: `${fresh.length} new chapter${fresh.length === 1 ? "" : "s"} published`, updatedAt: checkedAt }).where(eq(monitoredWorksTable.id, work.id));
+        if (fresh.length) {
+          await tx.insert(detectedChaptersTable).values(fresh.map((chapter) => ({
+            workId: work.id,
+            chapterKey: chapter.key,
+            chapterNumber: chapter.number,
+            thumbnailUrl: chapter.thumbnailUrl,
+            detectedAt: checkedAt,
+            publishedAt: checkedAt,
+          })));
+        }
+        for (const chapter of pending) {
+          const existingChapter = existing.find((item) =>
+            chapterNumberIdentity(item.number) === chapterNumberIdentity(chapter.number),
+          );
+          if (existingChapter) {
+            await tx
+              .update(detectedChaptersTable)
+              .set({ publishedAt: checkedAt })
+              .where(eq(detectedChaptersTable.id, existingChapter.id));
+          }
+        }
+
+        const previousHistory = await tx
+          .select({ chapterNumber: monitorHistoryTable.chapterNumber })
+          .from(monitorHistoryTable)
+          .where(eq(monitorHistoryTable.workId, work.id));
+        const historyKeys = new Set(
+          previousHistory.map((item) => chapterNumberIdentity(item.chapterNumber)),
+        );
+        const historyToInsert = toPublish.filter((chapter) => {
+          const key = chapterNumberIdentity(chapter.number);
+          if (historyKeys.has(key)) return false;
+          historyKeys.add(key);
+          return true;
+        });
+        if (historyToInsert.length) {
+          await tx.insert(monitorHistoryTable).values(historyToInsert.map((chapter) => ({
+            workId: work.id,
+            chapterNumber: chapter.number,
+            releaseDate: chapter.releaseDate ?? null,
+            notifiedAt: checkedAt,
+          })));
+        }
+        await tx.insert(monitorActivityTable).values({
+          workId: work.id,
+          chapterCount: toPublish.length,
+          status: "Published",
+        });
+        await tx.update(monitoredWorksTable).set({
+          chaptersSeen: existing.length + historical.length + fresh.length,
+          lastCheckedAt: checkedAt,
+          lastPublishedAt: checkedAt,
+          lastStatus: `${toPublish.length} new chapter${toPublish.length === 1 ? "" : "s"} published`,
+          updatedAt: checkedAt,
+        }).where(eq(monitoredWorksTable.id, work.id));
       });
     } catch (error) {
       logger.warn({ err: error, workId: work.id }, "Work monitor failed");

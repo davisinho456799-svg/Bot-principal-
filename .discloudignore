@@ -1,0 +1,29 @@
+.git
+.github
+.agents
+.local
+.cache
+attached_assets
+exports
+node_modules
+**/node_modules
+dist
+**/dist
+*.zip
+*.log
+*.tsbuildinfo
+# Discloud auto deploy sync marker
+# Monitor guard deploy sync
+# Discord gateway preflight deploy sync
+# Discord gateway rate limit deploy sync
+# Discord gateway state diagnostics deploy sync
+# Discord gateway endpoint bypass deploy sync
+# Discord command interaction diagnostics deploy sync
+# Split help embed within Discord field limit deploy sync
+# Force Discord worker restart for help embed fix
+# Prevent Discord REST rate limit hangs deploy sync
+# Prevent duplicate autocomplete callbacks deploy sync
+# Throttle Discord interaction callbacks deploy sync
+# Interaction callback cooldown deploy sync
+# Restore Discord command callbacks b9348b78
+# Disable anime autocomplete f0fb2ea0

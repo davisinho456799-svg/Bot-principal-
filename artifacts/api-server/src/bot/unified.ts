@@ -46,10 +46,12 @@ import { searchErogamescape, getErogamescapeDetail, type ErogamescapeResult } fr
 import { searchAniSearch, getAniSearchById, type AniSearchResult } from "./anisearch.js";
 import {
   getTenraiAnimeById,
-  searchTenraiAnime,
+  getTenraiMangaById,
   genresOfTenrai,
+  searchTenraiAnime,
   titleOfTenrai,
   type TenraiAnime,
+  type TenraiManga,
 } from "./tenrai-fallback.js";
 import {
   searchAnimeByConceptsPtBr,
@@ -300,6 +302,28 @@ export function tenraiAnimeToUnified(m: TenraiAnime): UnifiedResult {
     ptBrUrl: null,
     mediaType: "anime",
     episodes: m.episodes ?? null,
+  };
+}
+
+export function tenraiMangaToUnified(m: TenraiManga): UnifiedResult {
+  return {
+    source: "tenrai",
+    id: String(m.mal_id),
+    mainTitle: titleOfTenrai(m),
+    nativeTitle: m.title,
+    romajiTitle: null,
+    synonyms: [],
+    description: m.synopsis ?? null,
+    coverUrl: null,
+    accentColor: 0x5b8def,
+    score: m.score != null ? Math.round(m.score * 10) : null,
+    genres: genresOfTenrai(m),
+    chapters: m.chapters ?? null,
+    status: m.status?.toLowerCase().includes("publishing") ? "RELEASING" : (m.status ?? null),
+    siteUrl: m.url ?? `https://myanimelist.net/manga/${m.mal_id}`,
+    year: m.published?.from ? Number(m.published.from.slice(0, 4)) : null,
+    ptBrUrl: null,
+    mediaType: "manga",
   };
 }
 
@@ -1304,7 +1328,7 @@ export async function getUnifiedVNById(id: string): Promise<VNDBResult | null> {
 }
 
 export async function getUnifiedById(
-  source: "anilist" | "mangadex" | "comick" | "mangaupdates" | "jikan" | "vndb" | "erogamescape",
+  source: "anilist" | "mangadex" | "comick" | "mangaupdates" | "jikan" | "tenrai" | "vndb" | "erogamescape",
   id: string
 ): Promise<UnifiedResult | null> {
   let result: UnifiedResult | null = null;
@@ -1324,6 +1348,9 @@ export async function getUnifiedById(
   } else if (source === "jikan") {
     const m = await getJikanMangaById(parseInt(id, 10));
     result = m ? jikanToUnified(m) : null;
+  } else if (source === "tenrai") {
+    const m = await getTenraiMangaById(parseInt(id, 10));
+    result = m ? tenraiMangaToUnified(m) : null;
   } else if (source === "vndb") {
     const m = await getVNDBById(id);
     result = m ? vndbToUnified(m) : null;

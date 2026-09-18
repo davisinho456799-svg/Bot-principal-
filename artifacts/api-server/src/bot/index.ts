@@ -1,11 +1,190 @@
-import { Client, GatewayIntentBits } from "discord.js";
+import { Client, Events, GatewayIntentBits } from "discord.js";
 import { logger } from "../lib/logger.js";
 import { registerBotLifecycle } from "./bootstrap.js";
 import { registerInteractionRouter } from "./interaction-router.js";
+import {
+  blockInteractionCallbacks,
+  isInteractionCallbackRoute,
+} from "./interaction-rate-limit.js";
+
+const LOGIN_TIMEOUT_MS = 30_000;
+const RETRY_DELAY_MS = 10_000;
+const GATEWAY_PREFLIGHT_TIMEOUT_MS = 10_000;
+const DISCORD_REST_TIMEOUT_MS = 10_000;
+
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+function normalizeBotToken(token: string) {
+  return token.replace(/^Bot\s+/i, "").trim();
+}
+
+async function validateGatewayAccess(token: string): Promise<string> {
+  const normalizedToken = normalizeBotToken(token);
+  const response = await fetch("https://discord.com/api/v10/gateway", {
+    signal: AbortSignal.timeout(GATEWAY_PREFLIGHT_TIMEOUT_MS),
+  });
+
+  if (response.status === 429) {
+    const retryAfter = response.headers.get("retry-after");
+    logger.warn(
+      { retryAfter },
+      "Preflight do Gateway limitado pelo Discord; seguindo para o login direto",
+    );
+    return normalizedToken;
+  }
+
+  if (!response.ok) {
+    throw new Error(
+      `Discord rejeitou o token no preflight do Gateway (HTTP ${response.status})`,
+    );
+  }
+
+  const gateway = (await response.json()) as {
+    url?: string;
+    session_start_limit?: {
+      remaining?: number;
+      reset_after?: number;
+    };
+  };
+  logger.info(
+    {
+      gatewayUrl: gateway.url,
+    },
+    "Preflight público do Gateway do Discord concluído",
+  );
+  return normalizedToken;
+}
+
+function registerGatewayDiagnostics(client: Client) {
+  client.on("warn", (message) => {
+    logger.warn({ message }, "Aviso do gateway do Discord");
+  });
+
+  client.on("shardError", (error, shardId) => {
+    logger.error({ err: error, shardId }, "Erro de conexão com o gateway do Discord");
+  });
+
+  client.on("invalidated", () => {
+    logger.error("A sessão do bot foi invalidada pelo Discord");
+  });
+
+  client.on("debug", (message) => {
+    if (/invalid|error|close|disconnect|identify|resume|gateway/i.test(message)) {
+      logger.info({ message }, "Diagnóstico do gateway do Discord");
+    }
+  });
+}
+
+function gatewayState(client: Client) {
+  return {
+    managerStatus: client.ws.status,
+    managerPing: client.ws.ping,
+    gateway: client.ws.gateway,
+    shards: [...client.ws.shards.values()].map((shard) => ({
+      id: shard.id,
+      status: shard.status,
+      ping: shard.ping,
+      lastPingTimestamp: shard.lastPingTimestamp,
+    })),
+  };
+}
+
+async function loginAndWaitForReady(client: Client, token: string) {
+  const ready = new Promise<void>((resolve, reject) => {
+    const onReady = () => {
+      cleanup();
+      resolve();
+    };
+    const onError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+    const cleanup = () => {
+      client.off(Events.ClientReady, onReady);
+      client.off(Events.Error, onError);
+    };
+
+    client.once(Events.ClientReady, onReady);
+    client.once(Events.Error, onError);
+  });
+
+  const login = client.login(token);
+  await Promise.race([
+    Promise.all([login, ready]),
+    new Promise<never>((_, reject) =>
+      setTimeout(
+        () => reject(new Error(
+          `Discord não emitiu ClientReady em ${LOGIN_TIMEOUT_MS / 1000}s; estado=${JSON.stringify(gatewayState(client))}`,
+        )),
+        LOGIN_TIMEOUT_MS,
+      ),
+    ),
+  ]);
+}
+
+function createClient(token: string) {
+  const client = new Client({
+    intents: [GatewayIntentBits.Guilds],
+    rest: {
+      retries: 1,
+      timeout: DISCORD_REST_TIMEOUT_MS,
+      rejectOnRateLimit: (rateLimitData) => rateLimitData.timeToReset > 5_000,
+    },
+  });
+
+  client.rest.on("rateLimited", (rateLimitData) => {
+    if (isInteractionCallbackRoute(rateLimitData.route)) {
+      blockInteractionCallbacks(
+        Math.max(rateLimitData.timeToReset, rateLimitData.retryAfter),
+      );
+    }
+
+    logger.warn(
+      {
+        route: rateLimitData.route,
+        method: rateLimitData.method,
+        timeToResetMs: rateLimitData.timeToReset,
+        retryAfterMs: rateLimitData.retryAfter,
+        limit: rateLimitData.limit,
+        global: rateLimitData.global,
+      },
+      "Rate limit recebido no REST do Discord",
+    );
+  });
+
+  const originalRestGet = client.rest.get.bind(client.rest);
+  client.rest.get = ((
+    route: Parameters<typeof client.rest.get>[0],
+    options?: Parameters<typeof client.rest.get>[1],
+  ) => {
+    if (String(route) === "/gateway/bot") {
+      return Promise.resolve({
+        url: "wss://gateway.discord.gg",
+        shards: 1,
+        session_start_limit: {
+          total: 1_000,
+          remaining: 1_000,
+          reset_after: 86_400_000,
+          max_concurrency: 1,
+        },
+      });
+    }
+    return originalRestGet(route, options);
+  }) as typeof client.rest.get;
+
+  registerBotLifecycle(client, token);
+  registerInteractionRouter(client);
+  registerGatewayDiagnostics(client);
+  return client;
+}
 
 export async function startBot() {
   const token =
     process.env["DISCORD_BOT_TOKEN"] ??
+    process.env["DISCORD_TOKEN"] ??
+    process.env["DISCORD_BOT_KEY"] ??
     process.env["Discord_bot_key"] ??
     process.env["Discord_key"];
   if (!token) {
@@ -13,17 +192,28 @@ export async function startBot() {
     return;
   }
 
-  logger.info({ tokenConfigured: true }, "Token do Discord encontrado, criando client Discord");
+  logger.info({ tokenConfigured: true }, "Token do Discord encontrado, validando acesso ao Gateway");
 
-  const client = new Client({
-    intents: [GatewayIntentBits.Guilds],
-    rest: { retries: 5 },
-  });
+  const normalizedToken = await validateGatewayAccess(token);
+  logger.info("Iniciando conexão direta com o gateway do Discord");
 
-  registerBotLifecycle(client, token);
-  registerInteractionRouter(client);
+  let attempt = 0;
+  while (true) {
+    attempt += 1;
+    const client = createClient(normalizedToken);
 
-  logger.info("Chamando client.login()...");
-  await client.login(token);
-  logger.info("client.login() retornou — aguardando ClientReady");
+    try {
+      logger.info({ attempt }, "Chamando client.login()...");
+      await loginAndWaitForReady(client, normalizedToken);
+      logger.info({ attempt }, "client.login() concluiu e ClientReady foi recebido");
+      return;
+    } catch (error) {
+      logger.error(
+        { err: error, attempt },
+        "Falha ao conectar ao gateway do Discord; nova tentativa será feita",
+      );
+      client.destroy();
+      await sleep(RETRY_DELAY_MS);
+    }
+  }
 }

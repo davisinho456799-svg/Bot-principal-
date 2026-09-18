@@ -24,6 +24,7 @@ import type {
   HealthStatus,
   MonitorConfig,
   MonitorConfigUpdate,
+  MonitorHistoryItem,
   MonitorOverview,
   MonitoredWork,
   MonitoredWorkInput,
@@ -157,6 +158,40 @@ export const getMonitorOverview = async ( options?: Parameters<typeof customFetc
 
   }
 );}
+
+export const getListMonitorHistoryUrl = (params?: { limit?: number; workId?: number }) => {
+  const search = new URLSearchParams();
+  if (params?.limit !== undefined) search.set('limit', String(params.limit));
+  if (params?.workId !== undefined) search.set('workId', String(params.workId));
+  const query = search.toString();
+  return `/api/monitor/history${query ? `?${query}` : ''}`;
+}
+
+export const listMonitorHistory = async (
+  params?: { limit?: number; workId?: number },
+  options?: Parameters<typeof customFetch>[1],
+): Promise<MonitorHistoryItem[]> => {
+  return customFetch<MonitorHistoryItem[]>(getListMonitorHistoryUrl(params), {
+    ...options,
+    method: 'GET',
+  });
+}
+
+export const getListMonitorHistoryQueryKey = (params?: { limit?: number; workId?: number }) => [
+  `/api/monitor/history`,
+  ...(params ? [params] : []),
+] as const;
+
+export const useListMonitorHistory = (
+  params?: { limit?: number; workId?: number },
+  options?: { query?: UseQueryOptions<Awaited<ReturnType<typeof listMonitorHistory>>, ErrorType<unknown>>, request?: SecondParameter<typeof customFetch> },
+) => {
+  const queryOptions = options?.query;
+  const queryKey = queryOptions?.queryKey ?? getListMonitorHistoryQueryKey(params);
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof listMonitorHistory>>> = ({ signal }) =>
+    listMonitorHistory(params, { signal, ...options?.request });
+  return useQuery({ queryKey, queryFn, ...queryOptions }) as UseQueryResult<MonitorHistoryItem[], ErrorType<unknown>> & { queryKey: QueryKey };
+}
 
 
 

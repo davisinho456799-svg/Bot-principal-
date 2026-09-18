@@ -1,11 +1,6 @@
 /// <reference lib="dom" />
 
-import {
-  chromium,
-  type Browser,
-  type BrowserContext,
-  type Page,
-} from "playwright";
+import type { Browser, BrowserContext, Page } from "playwright";
 import type { MonitorPlatform, ParsedChapter } from "./parsers/index";
 
 const PAGE_TIMEOUT_MS = 30_000;
@@ -54,11 +49,19 @@ type BrowserChapterSnapshot = BrowserChapter & {
 
 let browserPromise: Promise<Browser> | null = null;
 let contextPromise: Promise<BrowserContext> | null = null;
+type Chromium = typeof import("playwright").chromium;
+let chromiumPromise: Promise<Chromium> | null = null;
+
+async function getChromium(): Promise<Chromium> {
+  chromiumPromise ??= import("playwright").then((module) => module.chromium);
+  return chromiumPromise;
+}
 
 async function getBrowser(): Promise<Browser> {
   if (!browserPromise) {
-    browserPromise = chromium
-      .launch({
+    browserPromise = getChromium()
+      .then((chromium) =>
+        chromium.launch({
         headless: true,
         executablePath: process.env.PLAYWRIGHT_EXECUTABLE_PATH || undefined,
         args: [
@@ -71,7 +74,8 @@ async function getBrowser(): Promise<Browser> {
           "--no-sandbox",
           "--disable-setuid-sandbox",
         ],
-      })
+        }),
+      )
       .catch((error) => {
         browserPromise = null;
         throw error;

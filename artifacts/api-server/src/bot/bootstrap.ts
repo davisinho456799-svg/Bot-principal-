@@ -4,6 +4,10 @@ import { deployCommands } from "./deploy-commands.js";
 import { runBotStartupTasks } from "./startup-tasks.js";
 import { recordBotError } from "./error-log.js";
 
+function isDiscordRateLimitError(error: unknown): boolean {
+  return error instanceof Error && error.name === "RateLimitError";
+}
+
 export function registerBotLifecycle(client: Client, token: string) {
   client.once(Events.ClientReady, async (readyClient) => {
     logger.info(
@@ -40,6 +44,11 @@ export function registerBotLifecycle(client: Client, token: string) {
   });
 
   client.on("error", (err) => {
+    if (isDiscordRateLimitError(err)) {
+      logger.warn({ err }, "Rate limit do Discord emitido pelo cliente");
+      return;
+    }
+
     logger.error({ err }, "Erro no cliente do Discord");
     void recordBotError({
       source: "discord_client",

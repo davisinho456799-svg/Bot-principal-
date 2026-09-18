@@ -3,13 +3,15 @@
   "version": "0.0.0",
   "license": "MIT",
   "scripts": {
-    "preinstall": "sh -c 'rm -f package-lock.json yarn.lock; case \"$npm_config_user_agent\" in pnpm/*) ;; *) echo \"Use pnpm instead\" >&2; exit 1 ;; esac'",
-    "build": "pnpm run typecheck && pnpm -r --if-present run build",
-    "typecheck:libs": "tsc --build",
-    "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck",
-    "railway:build": "NODE_ENV=production PORT=4173 BASE_PATH=/ pnpm --filter @workspace/chapter-monitor run build && pnpm --filter @workspace/api-server run build",
+    "preinstall": "sh -c 'rm -f package-lock.json yarn.lock; case \"$npm_config_user_agent\" in pnpm/*|npm/*) ;; *) echo \"Use pnpm or npm with the pnpm bridge\" >&2; exit 1 ;; esac'",
+    "build": "PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 corepack pnpm install --frozen-lockfile && PORT=${PORT:-8080} BASE_PATH=${BASE_PATH:-/} corepack pnpm run typecheck && PORT=${PORT:-8080} BASE_PATH=${BASE_PATH:-/} corepack pnpm -r --if-present run build",
+    "start": "node --enable-source-maps main.js",
+    "typecheck:libs": "corepack pnpm exec tsc --build",
+    "typecheck": "corepack pnpm run typecheck:libs && corepack pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck",
+    "railway:build": "NODE_ENV=production PORT=4173 BASE_PATH=/ corepack pnpm --filter @workspace/chapter-monitor run build && corepack pnpm --filter @workspace/api-server run build",
     "railway:start": "NODE_ENV=production SERVE_FRONTEND=true node --enable-source-maps ./artifacts/api-server/dist/index.mjs"
   },
+  "packageManager": "pnpm@10.26.1",
   "private": true,
   "dependencies": {
     "@replit/connectors-sdk": "^0.4.1"

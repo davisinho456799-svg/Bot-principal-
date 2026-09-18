@@ -11,9 +11,37 @@ import {
   config as getDiscordConfig,
   getConfiguredSeasonPage,
 } from "../routes/discord.js";
+import {
+  interactionCallbackCooldownRemaining,
+  isDiscordRateLimitError,
+} from "./interaction-rate-limit.js";
+
+const AUTOCOMPLETE_DEBOUNCE_MS = 250;
+const AUTOCOMPLETE_RESPONSE_INTERVAL_MS = 1_000;
+const latestAutocompleteRequest = new Map<string, number>();
+const lastAutocompleteResponse = new Map<string, number>();
+let autocompleteRequestSequence = 0;
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 export function registerInteractionRouter(client: Client) {
   client.on(Events.InteractionCreate, async (interaction) => {
+    const receivedAt = Date.now();
+    logger.info(
+      {
+        interactionType: interaction.type,
+        interactionId: interaction.id,
+        command: interaction.isChatInputCommand() || interaction.isAutocomplete()
+          ? interaction.commandName
+          : undefined,
+        customId: "customId" in interaction ? interaction.customId : undefined,
+        guildId: interaction.guildId,
+      },
+      "Interação do Discord recebida",
+    );
+
     if (interaction.isModalSubmit() && interaction.customId.startsWith("anst_modal_")) {
       const status = interaction.customId.replace("anst_modal_", "") as StatusLeitura;
       const capitulo = interaction.fields.getTextInputValue("capitulo").trim() || null;
@@ -122,31 +150,123 @@ export function registerInteractionRouter(client: Client) {
     if (interaction.isAutocomplete()) {
       const receivedAt = Date.now();
       const command = commands.get(interaction.commandName);
-      logger.info(
-        {
-          command: interaction.commandName,
-          dispatchDelayMs: Math.max(0, receivedAt - interaction.createdTimestamp),
-        },
-        "Autocomplete recebido",
-      );
-      if (command?.autocomplete) {
-        try {
-          await command.autocomplete(interaction);
-        } catch (err) {
-          logger.warn({ err, command: interaction.commandName }, "Autocomplete falhou no despacho");
-        }
-      } else {
-        await interaction.respond([]).catch(() => null);
+      const autocompleteKey = `${interaction.user.id}:${interaction.commandName}`;
+      const focusedValue = interaction.options.getFocused();
+
+      if (
+        interaction.commandName === "anime" &&
+        typeof focusedValue === "string" &&
+        focusedValue.trim().length < 2
+      ) {
+        logger.debug(
+          { command: interaction.commandName, interactionId: interaction.id },
+          "Autocomplete sem consulta suficiente ignorado",
+        );
+        return;
       }
-      logger.info(
-        {
-          command: interaction.commandName,
-          handlerDurationMs: Date.now() - receivedAt,
-          totalSinceDiscordMs: Math.max(0, Date.now() - interaction.createdTimestamp),
-          responded: interaction.responded,
-        },
-        "Autocomplete finalizado",
-      );
+
+      const requestSequence = ++autocompleteRequestSequence;
+      latestAutocompleteRequest.set(autocompleteKey, requestSequence);
+
+      await wait(AUTOCOMPLETE_DEBOUNCE_MS);
+      const isLatestAutocomplete = () =>
+        latestAutocompleteRequest.get(autocompleteKey) === requestSequence;
+      if (!isLatestAutocomplete()) {
+        logger.debug(
+          {
+            command: interaction.commandName,
+            interactionId: interaction.id,
+            debounceMs: AUTOCOMPLETE_DEBOUNCE_MS,
+          },
+          "Autocomplete intermediário ignorado",
+        );
+        return;
+      }
+
+      let responseAttempted = false;
+      const originalRespond = interaction.respond.bind(interaction);
+      interaction.respond = async (options) => {
+        if (!isLatestAutocomplete() || interaction.responded || responseAttempted) {
+          logger.debug(
+            { command: interaction.commandName, interactionId: interaction.id },
+            "Resposta obsoleta ou duplicada de autocomplete ignorada",
+          );
+          return;
+        }
+
+        const cooldownRemainingMs = interactionCallbackCooldownRemaining();
+        if (cooldownRemainingMs > 0) {
+          responseAttempted = true;
+          logger.debug(
+            {
+              command: interaction.commandName,
+              interactionId: interaction.id,
+              cooldownRemainingMs,
+            },
+            "Autocomplete ignorado durante cooldown do Discord",
+          );
+          return;
+        }
+
+        const now = Date.now();
+        const previousResponseAt = lastAutocompleteResponse.get(autocompleteKey) ?? 0;
+        if (now - previousResponseAt < AUTOCOMPLETE_RESPONSE_INTERVAL_MS) {
+          responseAttempted = true;
+          logger.debug(
+            {
+              command: interaction.commandName,
+              interactionId: interaction.id,
+              minIntervalMs: AUTOCOMPLETE_RESPONSE_INTERVAL_MS,
+            },
+            "Autocomplete ignorado para limitar callbacks",
+          );
+          return;
+        }
+
+        responseAttempted = true;
+        lastAutocompleteResponse.set(autocompleteKey, now);
+        setTimeout(() => {
+          if (lastAutocompleteResponse.get(autocompleteKey) === now) {
+            lastAutocompleteResponse.delete(autocompleteKey);
+          }
+        }, AUTOCOMPLETE_RESPONSE_INTERVAL_MS);
+        return originalRespond(options);
+      };
+
+      try {
+        logger.info(
+          {
+            command: interaction.commandName,
+            dispatchDelayMs: Math.max(0, receivedAt - interaction.createdTimestamp),
+          },
+          "Autocomplete recebido",
+        );
+        if (command?.autocomplete) {
+          try {
+            await command.autocomplete(interaction);
+          } catch (err) {
+            if (!isDiscordRateLimitError(err)) {
+              logger.warn(
+                { err, command: interaction.commandName },
+                "Autocomplete falhou no despacho",
+              );
+            }
+          }
+        } else {
+          await interaction.respond([]).catch(() => null);
+        }
+        logger.info(
+          {
+            command: interaction.commandName,
+            handlerDurationMs: Date.now() - receivedAt,
+            totalSinceDiscordMs: Math.max(0, Date.now() - interaction.createdTimestamp),
+            responded: interaction.responded,
+          },
+          "Autocomplete finalizado",
+        );
+      } finally {
+        if (isLatestAutocomplete()) latestAutocompleteRequest.delete(autocompleteKey);
+      }
       return;
     }
 
@@ -154,6 +274,10 @@ export function registerInteractionRouter(client: Client) {
 
     const command = commands.get(interaction.commandName);
     if (!command) {
+      logger.warn(
+        { command: interaction.commandName, guildId: interaction.guildId },
+        "Comando recebido, mas ausente no registry local",
+      );
       await interaction
         .reply({
           content: "⚠️ Este comando está desatualizado. Aguarde a sincronização dos comandos do bot.",
@@ -162,6 +286,27 @@ export function registerInteractionRouter(client: Client) {
         .catch(() => null);
       return;
     }
+
+    logger.info(
+      { command: interaction.commandName, guildId: interaction.guildId },
+      "Despachando comando do Discord",
+    );
+
+    let initialResponseAttempted = false;
+    const originalReply = interaction.reply.bind(interaction);
+    const originalDeferReply = interaction.deferReply.bind(interaction);
+    const trackedInteraction = interaction as unknown as {
+      reply: (options: any) => Promise<unknown>;
+      deferReply: (options?: any) => Promise<unknown>;
+    };
+    trackedInteraction.reply = async (options: any) => {
+      initialResponseAttempted = true;
+      return originalReply(options);
+    };
+    trackedInteraction.deferReply = async (options?: any) => {
+      initialResponseAttempted = true;
+      return originalDeferReply(options);
+    };
 
     void logUsage({
       discordUserId: interaction.user.id,
@@ -182,21 +327,60 @@ export function registerInteractionRouter(client: Client) {
 
     try {
       await command.execute(interaction);
+      logger.info(
+        {
+          command: interaction.commandName,
+          guildId: interaction.guildId,
+          handlerDurationMs: Date.now() - receivedAt,
+        },
+        "Comando executado com sucesso",
+      );
     } catch (err) {
-      logger.error({ err, command: interaction.commandName }, "Erro ao executar comando");
-      void recordBotError({
-        source: "command",
-        errorCode: "COMMAND_EXECUTION_FAILED",
-        error: err,
-        discordGuildId: interaction.guildId,
-        discordUserId: interaction.user.id,
-        command: interaction.commandName,
-      });
-      const msg = { content: "❌ Ocorreu um erro ao executar esse comando.", ephemeral: true };
-      if (interaction.replied || interaction.deferred) {
-        await interaction.followUp(msg);
+      const callbackUnavailable = isDiscordRateLimitError(err);
+      if (callbackUnavailable) {
+        logger.warn(
+          {
+            command: interaction.commandName,
+            cooldownRemainingMs: interactionCallbackCooldownRemaining(),
+          },
+          "Comando não respondeu durante rate limit de callbacks do Discord",
+        );
       } else {
-        await interaction.reply(msg);
+        logger.error({ err, command: interaction.commandName }, "Erro ao executar comando");
+        void recordBotError({
+          source: "command",
+          errorCode: "COMMAND_EXECUTION_FAILED",
+          error: err,
+          discordGuildId: interaction.guildId,
+          discordUserId: interaction.user.id,
+          command: interaction.commandName,
+        });
+      }
+      const msg = { content: "❌ Ocorreu um erro ao executar esse comando.", ephemeral: true };
+      if (callbackUnavailable) {
+        logger.debug(
+          { command: interaction.commandName },
+          "Resposta de erro suprimida durante rate limit de callbacks",
+        );
+      } else if (interaction.replied || interaction.deferred) {
+        await interaction.followUp(msg).catch((followUpError) => {
+          logger.warn(
+            { err: followUpError, command: interaction.commandName },
+            "Falha ao enviar erro após resposta deferida",
+          );
+        });
+      } else if (!initialResponseAttempted) {
+        await interaction.reply(msg).catch((replyError) => {
+          logger.warn(
+            { err: replyError, command: interaction.commandName },
+            "Falha ao enviar resposta de erro do comando",
+          );
+        });
+      } else {
+        logger.warn(
+          { command: interaction.commandName },
+          "Resposta inicial já tentada; callback de erro não será repetido",
+        );
       }
     }
   });

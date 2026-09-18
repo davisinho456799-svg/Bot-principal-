@@ -35,6 +35,7 @@ import { searchJikanAnimeAny } from "../jikan.js";
 import { jikanAnimeToUnified } from "../unified.js";
 import { searchTenraiAnime } from "../tenrai-fallback.js";
 import { logger } from "../../lib/logger.js";
+import { isDiscordRateLimitError } from "../interaction-rate-limit.js";
 
 export const data = new SlashCommandBuilder()
   .setName("anime")
@@ -44,7 +45,6 @@ export const data = new SlashCommandBuilder()
       .setName("titulo")
       .setDescription("Nome do anime para pesquisar")
       .setRequired(false)
-      .setAutocomplete(true)
   )
   .addStringOption((opt) =>
     opt
@@ -104,7 +104,9 @@ async function respondAutocomplete(
       respondDurationMs: Date.now() - startedAt,
     }, "Resposta de autocomplete enviada");
   } catch (err) {
-    logger.warn({ err, command: source }, "Falha ao enviar resposta de autocomplete");
+    if (!isDiscordRateLimitError(err)) {
+      logger.warn({ err, command: source }, "Falha ao enviar resposta de autocomplete");
+    }
     throw err;
   }
 }
@@ -124,94 +126,10 @@ function autocompleteRelevance(query: string, title: string): number {
 }
 
 export async function autocomplete(interaction: AutocompleteInteraction): Promise<void> {
-  const focused = interaction.options.getFocused();
-  if (!focused || focused.length < 2) {
-    await respondAutocomplete(interaction, [], "anime");
-    return;
-  }
-
-  const cached = autocompleteCache.get(focused);
-  if (cached && Date.now() - cached.ts < CACHE_TTL) {
-    await respondAutocomplete(interaction, cached.results, "anime");
-    return;
-  }
-
-  try {
-    const [anilistResults, kitsuResults, anisearchResults, malResults, tenraiResults] = await Promise.allSettled([
-      withAutocompleteTimeout("anilist", searchAnime(focused), []),
-      withAutocompleteTimeout("kitsu", searchKitsu(focused), []),
-      withAutocompleteTimeout("anisearch", searchAniSearch(focused), []),
-      withAutocompleteTimeout("jikan", searchJikanAnimeAny(focused), []),
-      withAutocompleteTimeout("tenrai", searchTenraiAnime(focused), []),
-    ]);
-
-    const seen = new Set<string>();
-    const options: AutocompleteOption[] = [];
-
-    // AniList: value = "anilist-anime:<id>"
-    if (anilistResults.status === "fulfilled") {
-      for (const r of anilistResults.value) {
-        const t = r.title.english ?? r.title.romaji;
-        if (t && !seen.has(t.toLowerCase())) {
-          seen.add(t.toLowerCase());
-          options.push({ name: t.slice(0, 100), value: `anilist-anime:${r.id}` });
-        }
-      }
-    }
-    // Kitsu: value = "kitsu:<kitsuId>"
-    if (kitsuResults.status === "fulfilled") {
-      for (const r of kitsuResults.value) {
-        if (!seen.has(r.mainTitle.toLowerCase())) {
-          seen.add(r.mainTitle.toLowerCase());
-          options.push({ name: r.mainTitle.slice(0, 100), value: `kitsu:${r.kitsuId}` });
-        }
-      }
-    }
-    // MAL/Tenrai: value = "jikan:<malId>"
-    if (malResults.status === "fulfilled") {
-      for (const r of malResults.value) {
-        const t = r.mainTitle;
-        if (t && !seen.has(t.toLowerCase())) {
-          seen.add(t.toLowerCase());
-          options.push({ name: t.slice(0, 100), value: `jikan:${r.malId}` });
-        }
-      }
-    }
-    // Tenrai/MAL: value = "tenrai:<malId>"
-    if (tenraiResults.status === "fulfilled") {
-      for (const r of tenraiResults.value) {
-        const t = r.title_english ?? r.title;
-        if (t && !seen.has(t.toLowerCase())) {
-          seen.add(t.toLowerCase());
-          options.push({ name: `${t.slice(0, 90)} · Tenrai`, value: `tenrai:${r.mal_id}` });
-        }
-      }
-    }
-
-    // AniSearch: value = "anisearch:<id>"
-    if (anisearchResults.status === "fulfilled") {
-      for (const r of anisearchResults.value) {
-        if (!seen.has(r.mainTitle.toLowerCase())) {
-          seen.add(r.mainTitle.toLowerCase());
-          options.push({ name: r.mainTitle.slice(0, 100), value: `anisearch:${r.id}` });
-        }
-      }
-    }
-
-    const top = options
-      .map((option, index) => ({
-        option,
-        index,
-        relevance: autocompleteRelevance(focused, option.name),
-      }))
-      .sort((a, b) => b.relevance - a.relevance || a.index - b.index)
-      .slice(0, 25)
-      .map(({ option }) => option);
-    autocompleteCache.set(focused, { results: top, ts: Date.now() });
-    await respondAutocomplete(interaction, top, "anime");
-  } catch {
-    await respondAutocomplete(interaction, [], "anime");
-  }
+  logger.debug(
+    { interactionId: interaction.id },
+    "Autocomplete de /anime desativado",
+  );
 }
 
 // ─── Labels e ícones ──────────────────────────────────────────────────────────

@@ -38,6 +38,27 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/MonitorOverview"
+  /monitor/history:
+    get:
+      operationId: listMonitorHistory
+      tags: [monitor]
+      summary: List monitor history
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+        - name: workId
+          in: query
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Recent monitor decisions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/MonitorHistoryItem"
   /monitor/works:
     get:
       operationId: listMonitoredWorks
@@ -216,6 +237,17 @@ components:
         chapterCount: { type: number }
         status: { type: string }
         createdAt: { type: string, format: date-time }
+    MonitorHistoryItem:
+      type: object
+      required: [id, workId, workTitle, platform, chapterNumber, notifiedAt]
+      properties:
+        id: { type: number }
+        workId: { type: number }
+        workTitle: { type: string }
+        platform: { type: string }
+        chapterNumber: { type: string }
+        releaseDate: { type: ["string", "null"] }
+        notifiedAt: { type: string, format: date-time }
     MonitorOverview:
       type: object
       required: [activeWorks, chaptersTracked, postsSent, lastRunAt, nextRunAt, recentActivity]
