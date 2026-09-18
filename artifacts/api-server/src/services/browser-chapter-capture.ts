@@ -481,25 +481,38 @@ async function findRenderedChapters(
           media.getAttribute("class") || "",
           media.getAttribute("style") || "",
         ].join(" ");
-        const thumbnail = mediaElements.find((media) =>
-          !blockedWords.test(mediaContext(media)),
-        ) ?? mediaElements[0];
-        const thumbnailContext = thumbnail ? mediaContext(thumbnail) : "";
-         const thumbnailValue = thumbnail && !blockedWords.test(thumbnailContext)
-           ? (thumbnail.currentSrc ||
-             thumbnail.getAttribute("src") ||
-             thumbnail.getAttribute("data-src") ||
-             thumbnail.getAttribute("data-original") ||
-             thumbnail.getAttribute("data-lazy-src") ||
-             thumbnail.getAttribute("data-image") ||
-              thumbnail.getAttribute("data-bg") ||
-              thumbnail.getAttribute("data-ep_thumb1") ||
-             thumbnail.getAttribute("data-ep_thumb2") ||
-             thumbnail.getAttribute("data-ep_thumb3") ||
-             thumbnail.getAttribute("data-thumbnail") ||
-             thumbnail.getAttribute("data-thumb") ||
-             "")
-          : "";
+         const mediaValues = (media) => {
+           const values = [
+             media.currentSrc || "",
+             media.getAttribute("src") || "",
+             media.getAttribute("data-src") || "",
+             media.getAttribute("data-original") || "",
+             media.getAttribute("data-lazy-src") || "",
+             media.getAttribute("data-image") || "",
+             media.getAttribute("data-bg") || "",
+             media.getAttribute("data-ep_thumb1") || "",
+             media.getAttribute("data-ep_thumb2") || "",
+             media.getAttribute("data-ep_thumb3") || "",
+             media.getAttribute("data-thumbnail") || "",
+             media.getAttribute("data-thumb") || "",
+           ];
+           const style = media.getAttribute("style") || "";
+           for (const match of style.matchAll(/url\\((?:"|')?([^"')]+)(?:"|')?\\)/ig)) {
+             if (match[1]) values.push(match[1]);
+           }
+           return values;
+         };
+         const isPlaceholderImage = (value) => {
+           const normalized = String(value || "").trim().toLowerCase();
+           return !normalized ||
+             normalized.startsWith("data:image/") ||
+             /placeholder|no[-_ ]?image|transparent|spacer|blank[-_ ]?image/.test(normalized);
+         };
+         const thumbnailValue = mediaElements
+           .flatMap((media) => mediaValues(media))
+           .find((value) =>
+             !blockedWords.test(String(value)) && !isPlaceholderImage(value),
+           ) || "";
 
          // Schedule/status labels and internal episode links can carry a
          // chapter-like number without being a visual release card. A
