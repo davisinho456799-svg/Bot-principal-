@@ -344,7 +344,7 @@ async function postStrip(
   total: number,
   isTest = false,
   capturedImage?: Buffer,
-) {
+): Promise<"browser" | "sharp" | "none"> {
   const token = process.env.DISCORD_BOT_TOKEN;
   if (!token) throw new Error("DISCORD_BOT_TOKEN is not configured");
   // The browser path sends the pixels rendered by the platform. The SVG/Sharp
@@ -352,6 +352,7 @@ async function postStrip(
   // is unavailable or a page does not expose a stable card.
   const png =
     capturedImage ?? await buildStrip(title, chapters);
+  const imageMode = capturedImage ? "browser" : png ? "sharp" : "none";
   const form = new FormData();
   const chapterSummary = chapters.length === 1
     ? `1 capítulo novo · capítulo ${chapters[0].number}`
@@ -378,6 +379,7 @@ async function postStrip(
     body: form,
   });
   if (!response.ok) throw new Error(`Discord returned ${response.status}`);
+  return imageMode;
 }
 
 async function isUsableBrowserCapture(image: Buffer | undefined): Promise<boolean> {
@@ -460,7 +462,7 @@ export async function runTestNotification(
       await reportProgress(progress, "Não houve sessão de captura; usando fallback SVG/Sharp.");
     }
     await reportProgress(progress, "Montando e enviando a imagem para o canal do monitor.");
-    await postStrip(
+    const imageMode = await postStrip(
       config.discordChannelId,
       work.title,
       [chapter],
@@ -469,15 +471,13 @@ export async function runTestNotification(
       true,
       capturedImage,
     );
-    await reportProgress(progress, "Mensagem enviada ao Discord.");
+    await reportProgress(progress, `Mensagem enviada ao Discord (${imageMode}).`);
 
     return {
       title: work.title,
       chapter: chapter.number,
       parser,
-      captureMode: capturedImage
-        ? "captura direta do card"
-        : "fallback SVG/Sharp ou mensagem sem anexo",
+      captureMode: imageMode,
       channelId: config.discordChannelId,
     };
   } finally {
@@ -697,6 +697,7 @@ export async function runMonitor() {
       }
 
       const groups: Array<{ chapters: ChapterCandidate[]; image?: Buffer }> = [];
+      const imageModes = new Set<"browser" | "sharp" | "none">();
       const emittedDirectKeys = new Set<string>();
       let fallbackChapters: ChapterCandidate[] = [];
       const flushFallback = () => {
@@ -738,7 +739,7 @@ export async function runMonitor() {
 
       for (let index = 0; index < groups.length; index++) {
         const group = groups[index]!;
-        await postStrip(
+        const imageMode = await postStrip(
           config.discordChannelId,
           work.title,
           group.chapters,
@@ -747,6 +748,7 @@ export async function runMonitor() {
           false,
           group.image,
         );
+        imageModes.add(imageMode);
         postsSent++;
       }
       await db.transaction(async (tx) => {
@@ -797,13 +799,13 @@ export async function runMonitor() {
         await tx.insert(monitorActivityTable).values({
           workId: work.id,
           chapterCount: toPublish.length,
-          status: "Published",
+          status: `Published (image: ${[...imageModes].join("+")})`,
         });
         await tx.update(monitoredWorksTable).set({
           chaptersSeen: existing.length + historical.length + fresh.length,
           lastCheckedAt: checkedAt,
           lastPublishedAt: checkedAt,
-          lastStatus: `${toPublish.length} new chapter${toPublish.length === 1 ? "" : "s"} published`,
+          lastStatus: `${toPublish.length} new chapter${toPublish.length === 1 ? "" : "s"} published (image: ${[...imageModes].join("+")})`,
           updatedAt: checkedAt,
         }).where(eq(monitoredWorksTable.id, work.id));
       });
