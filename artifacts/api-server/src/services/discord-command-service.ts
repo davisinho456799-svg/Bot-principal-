@@ -12,7 +12,7 @@ import {
   monitoredWorksTable,
 } from "@workspace/db/schema";
 import { logger } from "../lib/logger";
-import { runMonitor, runTestNotification } from "./monitor-service.js";
+import { runMonitor, runResendNotification, runTestNotification } from "./monitor-service.js";
 
 export const monitorCommandDefinition = new SlashCommandBuilder()
     .setName("monitor")
@@ -53,6 +53,23 @@ export const monitorCommandDefinition = new SlashCommandBuilder()
       command
         .setName("historico")
         .setDescription("Lista os últimos capítulos enviados ao Discord"),
+    )
+    .addSubcommand((command) =>
+      command
+        .setName("reenviar")
+        .setDescription("Reenvia um capítulo monitorado, tentando recuperar a imagem")
+        .addIntegerOption((option) =>
+          option
+            .setName("obra")
+            .setDescription("ID da obra exibido pelo /monitor listar")
+            .setRequired(true),
+        )
+        .addStringOption((option) =>
+          option
+            .setName("capitulo")
+            .setDescription("Número do capítulo a reenviar, por exemplo 12 ou 12.5")
+            .setRequired(true),
+        ),
     )
     .addSubcommand((command) =>
       command
@@ -293,6 +310,39 @@ export async function executeManhwaCommand(interaction: ChatInputCommandInteract
   }
   if (subcommand === "historico") {
     await handleHistory(interaction);
+    return;
+  }
+  if (subcommand === "reenviar") {
+    const workId = interaction.options.getInteger("obra", true);
+    const chapterNumber = interaction.options.getString("capitulo", true);
+    const progress: string[] = [];
+    const updateProgress = async (message: string) => {
+      progress.push(message);
+      await interaction.editReply({
+        content: [
+          "🔁 **Reenvio do capítulo**",
+          ...progress.map((step, index) => `${index + 1}. ${step}`),
+        ].join("\n"),
+      });
+    };
+
+    try {
+      const result = await runResendNotification(workId, chapterNumber, updateProgress);
+      await interaction.editReply({
+        content: [
+          "✅ **Capítulo reenviado**",
+          `Obra: **${result.title}**`,
+          `Capítulo: **${result.chapter}**`,
+          `Imagem: **${result.imageMode === "none" ? "indisponível" : result.imageMode}**`,
+          `Parser: **${result.parser}**`,
+        ].join("\n"),
+      });
+    } catch (error) {
+      await replyError(
+        interaction,
+        error instanceof Error ? error.message : "Não foi possível reenviar o capítulo.",
+      );
+    }
     return;
   }
   if (subcommand === "canal") {

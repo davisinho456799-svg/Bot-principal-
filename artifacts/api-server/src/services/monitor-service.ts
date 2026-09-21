@@ -457,6 +457,114 @@ async function isUsableBrowserCapture(image: Buffer | undefined): Promise<boolea
   return image.readUInt32BE(16) >= 240 && image.readUInt32BE(20) >= 90;
 }
 
+export async function runResendNotification(
+  workId: number,
+  requestedChapter: string,
+  progress?: MonitorProgressReporter,
+): Promise<{ title: string; chapter: string; imageMode: "browser" | "sharp" | "none"; parser: string }> {
+  const [config] = await db.select().from(monitorConfigTable).limit(1);
+  if (!config?.discordChannelId) {
+    throw new Error("Nenhum canal do Discord foi configurado para o monitor.");
+  }
+
+  const [work] = await db
+    .select()
+    .from(monitoredWorksTable)
+    .where(eq(monitoredWorksTable.id, workId))
+    .limit(1);
+  if (!work) {
+    throw new Error(`Não encontrei nenhuma obra com o ID ${workId}. Use /monitor listar para conferir os IDs.`);
+  }
+
+  const wanted = chapterNumberIdentity(requestedChapter);
+  if (!wanted) {
+    throw new Error("Informe um número de capítulo válido.");
+  }
+
+  let listing: ListingSession | undefined;
+  try {
+    await reportProgress(progress, `Procurando o capítulo ${requestedChapter} de ${work.title}.`);
+    listing = await fetchListing(work, progress);
+
+    let chapter = listing.candidates.find(
+      (candidate) => chapterNumberIdentity(candidate.number) === wanted,
+    );
+
+    if (!chapter) {
+      const storedChapters = await db
+        .select({
+          chapterNumber: detectedChaptersTable.chapterNumber,
+          thumbnailUrl: detectedChaptersTable.thumbnailUrl,
+          chapterKey: detectedChaptersTable.chapterKey,
+        })
+        .from(detectedChaptersTable)
+        .where(eq(detectedChaptersTable.workId, work.id));
+      const stored = storedChapters.find(
+        (candidate) => chapterNumberIdentity(candidate.chapterNumber) === wanted,
+      );
+      if (stored) {
+        chapter = {
+          number: stored.chapterNumber,
+          thumbnailUrl: stored.thumbnailUrl,
+          key: stored.chapterKey,
+          parser: "histórico salvo",
+        };
+        await reportProgress(
+          progress,
+          "O capítulo não está na lista atual; usando a imagem salva no histórico do monitor.",
+        );
+      }
+    }
+
+    if (!chapter) {
+      throw new Error(
+        `Não encontrei o capítulo ${requestedChapter} na lista atual nem no histórico salvo de **${work.title}**.`,
+      );
+    }
+
+    let capturedImage: Buffer | undefined;
+    if (listing.captureSession && chapter.captureId) {
+      await reportProgress(progress, "Tentando capturar novamente o card renderizado.");
+      try {
+        const groups = await listing.captureSession.captureGroups([chapter.captureId]);
+        const group = groups.find((candidate) =>
+          candidate.chapterNumbers.some((number) => chapterNumberIdentity(number) === wanted),
+        );
+        if (group?.image && await isUsableBrowserCapture(group.image)) {
+          capturedImage = group.image;
+        }
+      } catch (error) {
+        logger.warn(
+          { err: error, workId: work.id, chapter: chapter.number },
+          "Falha ao recapturar capítulo para reenvio; usando thumbnail salva",
+        );
+      }
+    }
+
+    await reportProgress(progress, "Enviando novamente a notificação.");
+    const imageMode = await postStrip(
+      config.discordChannelId,
+      work.title,
+      [chapter],
+      1,
+      1,
+      false,
+      capturedImage,
+    );
+
+    return {
+      title: work.title,
+      chapter: chapter.number,
+      imageMode,
+      parser: listing.parser,
+    };
+  } finally {
+    await listing?.captureSession?.close().catch((error) => {
+      logger.warn({ err: error, workId: work.id }, "Falha ao fechar captura após reenvio");
+    });
+  }
+}
+
 export async function runTestNotification(
   progress?: MonitorProgressReporter,
   workId?: number,
