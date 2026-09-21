@@ -9,6 +9,8 @@ const MAX_CAPTURE_HEIGHT = 4_800;
 // Keep the pixels of the real platform card. Padding here would make the
 // Discord attachment look like a reconstructed strip instead of the source UI.
 const CARD_PADDING = 0;
+const CARD_MEDIA_WAIT_MS = 8_000;
+const CARD_MEDIA_POLL_MS = 150;
 
 type ChapterBox = {
   x: number;
@@ -654,8 +656,7 @@ async function captureGroup(
   page: Page,
   chapters: BrowserChapterSnapshot[],
 ): Promise<Buffer> {
-  const first = chapters[0];
-  if (!first) throw new Error("Cannot capture an empty chapter group");
+  if (!chapters.length) throw new Error("Cannot capture an empty chapter group");
 
   // Playwright clip coordinates are viewport-relative, while detection stores
   // document-relative boxes. Make the whole selected run fit in the viewport
@@ -670,12 +671,6 @@ async function captureGroup(
       Math.max(1_200, Math.ceil(documentBox.height + 24)),
     ),
   });
-
-  await page
-    .locator(`[data-monitor-capture-card="${first.captureId}"]`)
-    .scrollIntoViewIfNeeded()
-    .catch(() => undefined);
-  await page.waitForTimeout(100);
 
   await page
     .evaluate(
@@ -704,6 +699,112 @@ async function captureGroup(
       })(${JSON.stringify(chapters.map((chapter) => chapter.captureId))})`,
     )
     .catch(() => undefined);
+
+  // A card can be detected before its lazy thumbnail is ready. Scroll to
+  // every selected card and wait for a real image (or a CSS background) before
+  // taking the screenshot. Without this, a valid PNG containing only the card
+  // text is accepted and sent to Discord.
+  const cardIds = chapters.map((chapter) => chapter.captureId);
+  for (const cardId of cardIds) {
+    await page
+      .locator(`[data-monitor-capture-card="${cardId}"]`)
+      .scrollIntoViewIfNeeded()
+      .catch(() => undefined);
+    await page.waitForTimeout(100);
+  }
+
+  const mediaReady = await page.evaluate(
+    `((ids, timeoutMs, pollMs) => {
+      const blockedWords = /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)|(?:^|[/._-])(?:banner|bnr)(?:[/._-]|$)/i;
+      const mediaAttributes = [
+        "src",
+        "srcset",
+        "data-src",
+        "data-srcset",
+        "data-original",
+        "data-lazy-src",
+        "data-image",
+        "data-bg",
+        "data-ep_thumb1",
+        "data-ep_thumb2",
+        "data-ep_thumb3",
+        "data-thumbnail",
+        "data-thumb",
+        "alt",
+        "title",
+        "class",
+      ];
+
+      const visible = (element) => {
+        const style = getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+        return style.display !== "none" &&
+          style.visibility !== "hidden" &&
+          Number.parseFloat(style.opacity || "1") > 0 &&
+          rect.width > 2 &&
+          rect.height > 2;
+      };
+
+      const contextOf = (element) => mediaAttributes
+        .map((attribute) => element.getAttribute(attribute) || "")
+        .join(" ");
+
+      const hasReadyMedia = (card) => {
+        const images = Array.from(card.querySelectorAll("img")).some((image) =>
+          visible(image) &&
+          image.complete &&
+          image.naturalWidth > 0 &&
+          !blockedWords.test(contextOf(image)),
+        );
+        if (images) return true;
+
+        const backgroundNodes = [card, ...Array.from(card.querySelectorAll(
+          "[data-bg], [data-ep_thumb1], [data-ep_thumb2], [data-ep_thumb3], picture, source",
+        ))];
+        return backgroundNodes.some((node) => {
+          if (!visible(node)) return false;
+          const context = contextOf(node);
+          if (blockedWords.test(context)) return false;
+          const style = getComputedStyle(node);
+          const before = getComputedStyle(node, "::before").backgroundImage;
+          const after = getComputedStyle(node, "::after").backgroundImage;
+          return [style.backgroundImage, before, after].some((value) =>
+            Boolean(value && value !== "none" && /url\\(/i.test(value)),
+          );
+        });
+      };
+
+      const check = () => {
+        const cards = ids.map((id) =>
+          document.querySelector('[data-monitor-capture-card="' + id + '"]'),
+        );
+        return cards.length === ids.length &&
+          cards.every((card) => card && hasReadyMedia(card));
+      };
+
+      return new Promise((resolve) => {
+        const deadline = Date.now() + timeoutMs;
+        const poll = () => {
+          if (check()) {
+            resolve(true);
+            return;
+          }
+          if (Date.now() >= deadline) {
+            resolve(false);
+            return;
+          }
+          setTimeout(poll, pollMs);
+        };
+        poll();
+      });
+    })(${JSON.stringify(cardIds)}, ${CARD_MEDIA_WAIT_MS}, ${CARD_MEDIA_POLL_MS})`,
+  );
+
+  if (!mediaReady) {
+    throw new Error("Selected chapter cards did not finish loading their thumbnails");
+  }
+
+  await page.waitForTimeout(150);
 
   const boxes = (
     await Promise.all(
