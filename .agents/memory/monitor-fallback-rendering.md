@@ -9,6 +9,18 @@ The monitor should prefer sending a direct screenshot of the real chapter card. 
 
 **How to apply:** Select the complete visual card container before taking the screenshot and send that PNG unchanged. Do not reject a chapter card solely because promotional text appears inside it; filter promotional media at the image level and hide it only during capture. Toptoon cards may use Korean `제N화` labels and `data-episode-id`/`data-ep_thumb2` attributes instead of English labels and `<img>` tags. If browser capture is unavailable, keep the SVG responsible for the fallback background and text, validate downloaded image bytes with Sharp, resize them, and composite them into the rasterized base PNG. Filter promotional terms from URL/alt/context and use an explicit unavailable label when no usable thumbnail remains.
 
+All delivery modes must include the same release banner. A direct browser card capture is only the platform card and must be decorated with the banner before Discord upload; if that composition is unavailable, use the Sharp fallback rather than sending the raw capture.
+
+**Why:** Sending browser captures unchanged made only some notifications show the “NEW CHAPTERS” header, depending on whether the browser or Sharp path handled the release.
+
+**How to apply:** Keep the final image composition in the shared Discord posting path and test that decorating a browser PNG preserves its width while increasing its height by the banner height.
+
+Image generation is non-fatal to notification delivery: if both browser decoration and the Sharp fallback fail, send the chapter summary as text without an attachment.
+
+**Why:** A missing image should not suppress a valid chapter-release alert or leave the monitor state inconsistent.
+
+**How to apply:** Catch failures around both image paths, keep the payload text-only, and log the image failure without throwing from the Discord post.
+
 Toomics may include the login form in the page HTML while keeping it inside a hidden modal, and the browser may serve different login markup from the locale and global origins. When the browser detects login-required content but no visible password field, try `/por/login` on the current origin and `https://global.toomics.com/por/login`, then use the real fields (`#user_id` and `#user_pw`) before returning to the chapter listing.
 
 **Why:** Looking only for visible login controls on the chapter page reports “formulário de login não encontrado” even though the site has a usable login form; the hidden modal is not the login flow the browser can fill reliably.

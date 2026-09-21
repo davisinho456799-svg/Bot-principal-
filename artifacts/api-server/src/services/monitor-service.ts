@@ -296,7 +296,7 @@ async function buildStrip(
   if (!sharp) return null;
   const rowHeight = 164;
   const width = 920;
-  const headerHeight = 92;
+  const headerHeight = RELEASE_BANNER_HEIGHT;
   const height = headerHeight + chapters.length * rowHeight + 24;
   const images = await Promise.all(chapters.map(async (chapter) => ({
     chapter,
@@ -306,7 +306,7 @@ async function buildStrip(
     const y = headerHeight + index * rowHeight;
     return `<rect x="24" y="${y}" width="872" height="140" rx="14" fill="#f5f0e8" stroke="#ded5c8"/><text x="52" y="${y + 78}" fill="#132b3f" font-family="Arial,sans-serif" font-size="25" font-weight="700">EP ${escapeXml(chapter.number)}</text>${data ? "" : `<text x="185" y="${y + 78}" fill="#7a746c" font-family="Arial,sans-serif" font-size="18">Thumbnail unavailable</text>`}`;
   }).join("");
-  const baseSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="100%" height="100%" fill="#fffaf3"/><text x="34" y="44" fill="#132b3f" font-family="Arial,sans-serif" font-size="25" font-weight="700">${escapeXml(title)}</text><text x="34" y="70" fill="#d8624c" font-family="Arial,sans-serif" font-size="13" letter-spacing="2">NEW CHAPTERS · ${chapters.length}</text>${imageRows}</svg>`;
+  const baseSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="100%" height="100%" fill="#fffaf3"/>${buildReleaseBannerMarkup(title, chapters.length)}${imageRows}</svg>`;
   let output = await sharp(Buffer.from(baseSvg)).png().toBuffer();
   const composites = await Promise.all(images.map(async ({ data }, index) => {
     if (!data) return null;
@@ -332,6 +332,45 @@ async function buildStrip(
   return output;
 }
 
+const RELEASE_BANNER_HEIGHT = 92;
+
+function buildReleaseBannerMarkup(title: string, chapterCount: number): string {
+  return `<text x="34" y="44" fill="#132b3f" font-family="Arial,sans-serif" font-size="25" font-weight="700">${escapeXml(title)}</text><text x="34" y="70" fill="#d8624c" font-family="Arial,sans-serif" font-size="13" letter-spacing="2">NEW CHAPTERS · ${chapterCount}</text>`;
+}
+
+export async function addReleaseBanner(
+  image: Buffer,
+  title: string,
+  chapterCount: number,
+): Promise<Buffer | null> {
+  const sharp = await getOptionalSharp();
+  if (!sharp) return null;
+
+  try {
+    const metadata = await sharp(image).metadata();
+    if (!metadata.width || !metadata.height) return null;
+
+    const banner = Buffer.from(
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${metadata.width}" height="${RELEASE_BANNER_HEIGHT}" viewBox="0 0 ${metadata.width} ${RELEASE_BANNER_HEIGHT}"><rect width="100%" height="100%" fill="#fffaf3"/>${buildReleaseBannerMarkup(title, chapterCount)}</svg>`,
+    );
+
+    return await sharp(image)
+      .extend({
+        top: RELEASE_BANNER_HEIGHT,
+        bottom: 0,
+        left: 0,
+        right: 0,
+        background: "#fffaf3",
+      })
+      .composite([{ input: banner, left: 0, top: 0 }])
+      .png()
+      .toBuffer();
+  } catch (error) {
+    logger.warn({ err: error }, "Não foi possível adicionar o banner à captura do navegador");
+    return null;
+  }
+}
+
 function escapeXml(value: string) {
   return value.replace(/[<>&'"]/g, (character) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", "'": "&apos;", "\"": "&quot;" })[character] ?? character);
 }
@@ -347,12 +386,30 @@ async function postStrip(
 ): Promise<"browser" | "sharp" | "none"> {
   const token = process.env.DISCORD_BOT_TOKEN;
   if (!token) throw new Error("DISCORD_BOT_TOKEN is not configured");
-  // The browser path sends the pixels rendered by the platform. The SVG/Sharp
-  // renderer remains as a last-resort compatibility fallback when a browser
-  // is unavailable or a page does not expose a stable card.
-  const png =
-    capturedImage ?? await buildStrip(title, chapters);
-  const imageMode = capturedImage ? "browser" : png ? "sharp" : "none";
+  // Both paths must use the same release banner. Browser captures contain only
+  // the real platform cards, while the Sharp path already renders its banner.
+  // Never send a raw browser capture: that was the source of inconsistent
+  // notifications where only some images showed "NEW CHAPTERS".
+  let browserImage: Buffer | null = null;
+  if (capturedImage) {
+    try {
+      browserImage = await addReleaseBanner(capturedImage, title, chapters.length);
+    } catch (error) {
+      logger.warn({ err: error, title }, "Falha ao adicionar banner à captura; tentando fallback");
+    }
+  }
+
+  let png = browserImage;
+  if (!png) {
+    try {
+      png = await buildStrip(title, chapters);
+    } catch (error) {
+      // A falha das duas imagens não deve impedir o aviso textual.
+      logger.warn({ err: error, title }, "Falha ao gerar imagem do monitor; enviando aviso sem anexo");
+      png = null;
+    }
+  }
+  const imageMode = browserImage ? "browser" : png ? "sharp" : "none";
   const form = new FormData();
   const chapterSummary = chapters.length === 1
     ? `1 capítulo novo · capítulo ${chapters[0].number}`
@@ -360,7 +417,7 @@ async function postStrip(
   if (!png) {
     logger.warn(
       { title, chapterNumbers: chapters.map((chapter) => chapter.number) },
-      "Sharp indisponível e nenhuma captura do navegador foi obtida; enviando notificação sem anexo",
+      "Nenhuma imagem do monitor foi obtida; enviando notificação sem anexo",
     );
   }
   form.append("payload_json", JSON.stringify({
