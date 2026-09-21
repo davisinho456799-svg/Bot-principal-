@@ -157825,25 +157825,38 @@ async function findRenderedChapters(page, platform) {
           media.getAttribute("class") || "",
           media.getAttribute("style") || "",
         ].join(" ");
-        const thumbnail = mediaElements.find((media) =>
-          !blockedWords.test(mediaContext(media)),
-        ) ?? mediaElements[0];
-        const thumbnailContext = thumbnail ? mediaContext(thumbnail) : "";
-         const thumbnailValue = thumbnail && !blockedWords.test(thumbnailContext)
-           ? (thumbnail.currentSrc ||
-             thumbnail.getAttribute("src") ||
-             thumbnail.getAttribute("data-src") ||
-             thumbnail.getAttribute("data-original") ||
-             thumbnail.getAttribute("data-lazy-src") ||
-             thumbnail.getAttribute("data-image") ||
-              thumbnail.getAttribute("data-bg") ||
-              thumbnail.getAttribute("data-ep_thumb1") ||
-             thumbnail.getAttribute("data-ep_thumb2") ||
-             thumbnail.getAttribute("data-ep_thumb3") ||
-             thumbnail.getAttribute("data-thumbnail") ||
-             thumbnail.getAttribute("data-thumb") ||
-             "")
-          : "";
+         const mediaValues = (media) => {
+           const values = [
+             media.currentSrc || "",
+             media.getAttribute("src") || "",
+             media.getAttribute("data-src") || "",
+             media.getAttribute("data-original") || "",
+             media.getAttribute("data-lazy-src") || "",
+             media.getAttribute("data-image") || "",
+             media.getAttribute("data-bg") || "",
+             media.getAttribute("data-ep_thumb1") || "",
+             media.getAttribute("data-ep_thumb2") || "",
+             media.getAttribute("data-ep_thumb3") || "",
+             media.getAttribute("data-thumbnail") || "",
+             media.getAttribute("data-thumb") || "",
+           ];
+           const style = media.getAttribute("style") || "";
+           for (const match of style.matchAll(/url\\((?:"|')?([^"')]+)(?:"|')?\\)/ig)) {
+             if (match[1]) values.push(match[1]);
+           }
+           return values;
+         };
+         const isPlaceholderImage = (value) => {
+           const normalized = String(value || "").trim().toLowerCase();
+           return !normalized ||
+             normalized.startsWith("data:image/") ||
+             /placeholder|no[-_ ]?image|transparent|spacer|blank[-_ ]?image/.test(normalized);
+         };
+         const thumbnailValue = mediaElements
+           .flatMap((media) => mediaValues(media))
+           .find((value) =>
+             !blockedWords.test(String(value)) && !isPlaceholderImage(value),
+           ) || "";
 
          // Schedule/status labels and internal episode links can carry a
          // chapter-like number without being a visual release card. A
@@ -158349,7 +158362,7 @@ async function buildStrip(title, chapters) {
   if (!sharp) return null;
   const rowHeight = 164;
   const width = 920;
-  const headerHeight = 92;
+  const headerHeight = RELEASE_BANNER_HEIGHT;
   const height = headerHeight + chapters.length * rowHeight + 24;
   const images = await Promise.all(chapters.map(async (chapter) => ({
     chapter,
@@ -158359,7 +158372,7 @@ async function buildStrip(title, chapters) {
     const y = headerHeight + index * rowHeight;
     return `<rect x="24" y="${y}" width="872" height="140" rx="14" fill="#f5f0e8" stroke="#ded5c8"/><text x="52" y="${y + 78}" fill="#132b3f" font-family="Arial,sans-serif" font-size="25" font-weight="700">EP ${escapeXml(chapter.number)}</text>${data33 ? "" : `<text x="185" y="${y + 78}" fill="#7a746c" font-family="Arial,sans-serif" font-size="18">Thumbnail unavailable</text>`}`;
   }).join("");
-  const baseSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="100%" height="100%" fill="#fffaf3"/><text x="34" y="44" fill="#132b3f" font-family="Arial,sans-serif" font-size="25" font-weight="700">${escapeXml(title)}</text><text x="34" y="70" fill="#d8624c" font-family="Arial,sans-serif" font-size="13" letter-spacing="2">NEW CHAPTERS \xB7 ${chapters.length}</text>${imageRows}</svg>`;
+  const baseSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="100%" height="100%" fill="#fffaf3"/>${buildReleaseBannerMarkup(title, chapters.length)}${imageRows}</svg>`;
   let output = await sharp(Buffer.from(baseSvg)).png().toBuffer();
   const composites = await Promise.all(images.map(async ({ data: data33 }, index) => {
     if (!data33) return null;
@@ -158378,19 +158391,61 @@ async function buildStrip(title, chapters) {
   }
   return output;
 }
+var RELEASE_BANNER_HEIGHT = 92;
+function buildReleaseBannerMarkup(title, chapterCount) {
+  return `<text x="34" y="44" fill="#132b3f" font-family="Arial,sans-serif" font-size="25" font-weight="700">${escapeXml(title)}</text><text x="34" y="70" fill="#d8624c" font-family="Arial,sans-serif" font-size="13" letter-spacing="2">NEW CHAPTERS \xB7 ${chapterCount}</text>`;
+}
+async function addReleaseBanner(image, title, chapterCount) {
+  const sharp = await getOptionalSharp();
+  if (!sharp) return null;
+  try {
+    const metadata = await sharp(image).metadata();
+    if (!metadata.width || !metadata.height) return null;
+    const banner = Buffer.from(
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${metadata.width}" height="${RELEASE_BANNER_HEIGHT}" viewBox="0 0 ${metadata.width} ${RELEASE_BANNER_HEIGHT}"><rect width="100%" height="100%" fill="#fffaf3"/>${buildReleaseBannerMarkup(title, chapterCount)}</svg>`
+    );
+    return await sharp(image).extend({
+      top: RELEASE_BANNER_HEIGHT,
+      bottom: 0,
+      left: 0,
+      right: 0,
+      background: "#fffaf3"
+    }).composite([{ input: banner, left: 0, top: 0 }]).png().toBuffer();
+  } catch (error40) {
+    logger.warn({ err: error40 }, "N\xE3o foi poss\xEDvel adicionar o banner \xE0 captura do navegador");
+    return null;
+  }
+}
 function escapeXml(value) {
   return value.replace(/[<>&'"]/g, (character) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", "'": "&apos;", '"': "&quot;" })[character] ?? character);
 }
 async function postStrip(channelId, title, chapters, part, total, isTest = false, capturedImage) {
   const token = process.env.DISCORD_BOT_TOKEN;
   if (!token) throw new Error("DISCORD_BOT_TOKEN is not configured");
-  const png = capturedImage ?? await buildStrip(title, chapters);
+  let browserImage = null;
+  if (capturedImage) {
+    try {
+      browserImage = await addReleaseBanner(capturedImage, title, chapters.length);
+    } catch (error40) {
+      logger.warn({ err: error40, title }, "Falha ao adicionar banner \xE0 captura; tentando fallback");
+    }
+  }
+  let png = browserImage;
+  if (!png) {
+    try {
+      png = await buildStrip(title, chapters);
+    } catch (error40) {
+      logger.warn({ err: error40, title }, "Falha ao gerar imagem do monitor; enviando aviso sem anexo");
+      png = null;
+    }
+  }
+  const imageMode = browserImage ? "browser" : png ? "sharp" : "none";
   const form = new FormData();
   const chapterSummary = chapters.length === 1 ? `1 cap\xEDtulo novo \xB7 cap\xEDtulo ${chapters[0].number}` : `${chapters.length} cap\xEDtulos novos \xB7 cap\xEDtulos ${chapters.map((chapter) => chapter.number).join(", ")}`;
   if (!png) {
     logger.warn(
       { title, chapterNumbers: chapters.map((chapter) => chapter.number) },
-      "Sharp indispon\xEDvel e nenhuma captura do navegador foi obtida; enviando notifica\xE7\xE3o sem anexo"
+      "Nenhuma imagem do monitor foi obtida; enviando notifica\xE7\xE3o sem anexo"
     );
   }
   form.append("payload_json", JSON.stringify({
@@ -158409,12 +158464,100 @@ async function postStrip(channelId, title, chapters, part, total, isTest = false
     body: form
   });
   if (!response.ok) throw new Error(`Discord returned ${response.status}`);
+  return imageMode;
 }
 async function isUsableBrowserCapture(image) {
   if (!image) return false;
   const isPng = image.length >= 24 && image[0] === 137 && image[1] === 80 && image[2] === 78 && image[3] === 71 && image[4] === 13 && image[5] === 10 && image[6] === 26 && image[7] === 10;
   if (!isPng) return false;
   return image.readUInt32BE(16) >= 240 && image.readUInt32BE(20) >= 90;
+}
+async function runResendNotification(workId, requestedChapter, progress) {
+  const [config3] = await db.select().from(monitorConfigTable).limit(1);
+  if (!config3?.discordChannelId) {
+    throw new Error("Nenhum canal do Discord foi configurado para o monitor.");
+  }
+  const [work] = await db.select().from(monitoredWorksTable).where(eq(monitoredWorksTable.id, workId)).limit(1);
+  if (!work) {
+    throw new Error(`N\xE3o encontrei nenhuma obra com o ID ${workId}. Use /monitor listar para conferir os IDs.`);
+  }
+  const wanted = chapterNumberIdentity(requestedChapter);
+  if (!wanted) {
+    throw new Error("Informe um n\xFAmero de cap\xEDtulo v\xE1lido.");
+  }
+  let listing;
+  try {
+    await reportProgress(progress, `Procurando o cap\xEDtulo ${requestedChapter} de ${work.title}.`);
+    listing = await fetchListing(work, progress);
+    let chapter = listing.candidates.find(
+      (candidate) => chapterNumberIdentity(candidate.number) === wanted
+    );
+    if (!chapter) {
+      const storedChapters = await db.select({
+        chapterNumber: detectedChaptersTable.chapterNumber,
+        thumbnailUrl: detectedChaptersTable.thumbnailUrl,
+        chapterKey: detectedChaptersTable.chapterKey
+      }).from(detectedChaptersTable).where(eq(detectedChaptersTable.workId, work.id));
+      const stored = storedChapters.find(
+        (candidate) => chapterNumberIdentity(candidate.chapterNumber) === wanted
+      );
+      if (stored) {
+        chapter = {
+          number: stored.chapterNumber,
+          thumbnailUrl: stored.thumbnailUrl,
+          key: stored.chapterKey,
+          parser: "hist\xF3rico salvo"
+        };
+        await reportProgress(
+          progress,
+          "O cap\xEDtulo n\xE3o est\xE1 na lista atual; usando a imagem salva no hist\xF3rico do monitor."
+        );
+      }
+    }
+    if (!chapter) {
+      throw new Error(
+        `N\xE3o encontrei o cap\xEDtulo ${requestedChapter} na lista atual nem no hist\xF3rico salvo de **${work.title}**.`
+      );
+    }
+    let capturedImage;
+    if (listing.captureSession && chapter.captureId) {
+      await reportProgress(progress, "Tentando capturar novamente o card renderizado.");
+      try {
+        const groups = await listing.captureSession.captureGroups([chapter.captureId]);
+        const group = groups.find(
+          (candidate) => candidate.chapterNumbers.some((number4) => chapterNumberIdentity(number4) === wanted)
+        );
+        if (group?.image && await isUsableBrowserCapture(group.image)) {
+          capturedImage = group.image;
+        }
+      } catch (error40) {
+        logger.warn(
+          { err: error40, workId: work.id, chapter: chapter.number },
+          "Falha ao recapturar cap\xEDtulo para reenvio; usando thumbnail salva"
+        );
+      }
+    }
+    await reportProgress(progress, "Enviando novamente a notifica\xE7\xE3o.");
+    const imageMode = await postStrip(
+      config3.discordChannelId,
+      work.title,
+      [chapter],
+      1,
+      1,
+      false,
+      capturedImage
+    );
+    return {
+      title: work.title,
+      chapter: chapter.number,
+      imageMode,
+      parser: listing.parser
+    };
+  } finally {
+    await listing?.captureSession?.close().catch((error40) => {
+      logger.warn({ err: error40, workId: work.id }, "Falha ao fechar captura ap\xF3s reenvio");
+    });
+  }
 }
 async function runTestNotification(progress, workId) {
   await reportProgress(progress, "Iniciando o teste da notifica\xE7\xE3o.");
@@ -158467,7 +158610,7 @@ async function runTestNotification(progress, workId) {
       await reportProgress(progress, "N\xE3o houve sess\xE3o de captura; usando fallback SVG/Sharp.");
     }
     await reportProgress(progress, "Montando e enviando a imagem para o canal do monitor.");
-    await postStrip(
+    const imageMode = await postStrip(
       config3.discordChannelId,
       work.title,
       [chapter],
@@ -158476,12 +158619,12 @@ async function runTestNotification(progress, workId) {
       true,
       capturedImage
     );
-    await reportProgress(progress, "Mensagem enviada ao Discord.");
+    await reportProgress(progress, `Mensagem enviada ao Discord (${imageMode}).`);
     return {
       title: work.title,
       chapter: chapter.number,
       parser,
-      captureMode: capturedImage ? "captura direta do card" : "fallback SVG/Sharp ou mensagem sem anexo",
+      captureMode: imageMode,
       channelId: config3.discordChannelId
     };
   } finally {
@@ -158655,6 +158798,7 @@ async function runMonitor() {
         }
       }
       const groups = [];
+      const imageModes = /* @__PURE__ */ new Set();
       const emittedDirectKeys = /* @__PURE__ */ new Set();
       let fallbackChapters = [];
       const flushFallback = () => {
@@ -158689,7 +158833,7 @@ async function runMonitor() {
       flushFallback();
       for (let index = 0; index < groups.length; index++) {
         const group = groups[index];
-        await postStrip(
+        const imageMode = await postStrip(
           config3.discordChannelId,
           work.title,
           group.chapters,
@@ -158698,6 +158842,7 @@ async function runMonitor() {
           false,
           group.image
         );
+        imageModes.add(imageMode);
         postsSent++;
       }
       await db.transaction(async (tx) => {
@@ -158741,13 +158886,13 @@ async function runMonitor() {
         await tx.insert(monitorActivityTable).values({
           workId: work.id,
           chapterCount: toPublish.length,
-          status: "Published"
+          status: `Published (image: ${[...imageModes].join("+")})`
         });
         await tx.update(monitoredWorksTable).set({
           chaptersSeen: existing.length + historical.length + fresh.length,
           lastCheckedAt: checkedAt,
           lastPublishedAt: checkedAt,
-          lastStatus: `${toPublish.length} new chapter${toPublish.length === 1 ? "" : "s"} published`,
+          lastStatus: `${toPublish.length} new chapter${toPublish.length === 1 ? "" : "s"} published (image: ${[...imageModes].join("+")})`,
           updatedAt: checkedAt
         }).where(eq(monitoredWorksTable.id, work.id));
       });
@@ -173973,6 +174118,12 @@ var monitorCommandDefinition = new import_discord35.SlashCommandBuilder().setNam
 ).addSubcommand(
   (command) => command.setName("historico").setDescription("Lista os \xFAltimos cap\xEDtulos enviados ao Discord")
 ).addSubcommand(
+  (command) => command.setName("reenviar").setDescription("Reenvia um cap\xEDtulo monitorado, tentando recuperar a imagem").addIntegerOption(
+    (option) => option.setName("obra").setDescription("ID da obra exibido pelo /monitor listar").setRequired(true)
+  ).addStringOption(
+    (option) => option.setName("capitulo").setDescription("N\xFAmero do cap\xEDtulo a reenviar, por exemplo 12 ou 12.5").setRequired(true)
+  )
+).addSubcommand(
   (command) => command.setName("canal").setDescription("Escolhe o canal que receber\xE1 as notifica\xE7\xF5es").addChannelOption(
     (option) => option.setName("canal").setDescription("Canal de texto para as notifica\xE7\xF5es").addChannelTypes(import_discord35.ChannelType.GuildText, import_discord35.ChannelType.GuildAnnouncement).setRequired(true)
   )
@@ -174137,6 +174288,38 @@ async function executeManhwaCommand(interaction) {
   }
   if (subcommand === "historico") {
     await handleHistory(interaction);
+    return;
+  }
+  if (subcommand === "reenviar") {
+    const workId = interaction.options.getInteger("obra", true);
+    const chapterNumber = interaction.options.getString("capitulo", true);
+    const progress = [];
+    const updateProgress = async (message) => {
+      progress.push(message);
+      await interaction.editReply({
+        content: [
+          "\u{1F501} **Reenvio do cap\xEDtulo**",
+          ...progress.map((step, index) => `${index + 1}. ${step}`)
+        ].join("\n")
+      });
+    };
+    try {
+      const result = await runResendNotification(workId, chapterNumber, updateProgress);
+      await interaction.editReply({
+        content: [
+          "\u2705 **Cap\xEDtulo reenviado**",
+          `Obra: **${result.title}**`,
+          `Cap\xEDtulo: **${result.chapter}**`,
+          `Imagem: **${result.imageMode === "none" ? "indispon\xEDvel" : result.imageMode}**`,
+          `Parser: **${result.parser}**`
+        ].join("\n")
+      });
+    } catch (error40) {
+      await replyError(
+        interaction,
+        error40 instanceof Error ? error40.message : "N\xE3o foi poss\xEDvel reenviar o cap\xEDtulo."
+      );
+    }
     return;
   }
   if (subcommand === "canal") {
