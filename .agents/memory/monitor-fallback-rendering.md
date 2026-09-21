@@ -15,6 +15,12 @@ All delivery modes must include the same release banner. A direct browser card c
 
 **How to apply:** Keep the final image composition in the shared Discord posting path and test that decorating a browser PNG preserves its width while increasing its height by the banner height.
 
+Runtime image-mode reports must identify the banner composition explicitly; a generic `browser` result is ambiguous because older workers used the same label for raw browser captures.
+
+**Why:** A successful browser capture does not prove that the uploaded attachment passed through the banner decorator, especially when a stale compiled Discloud worker is still running.
+
+**How to apply:** Report browser deliveries as `browser+banner`, validate the decorated dimensions before upload, and use a fresh post-deploy test to distinguish the current worker from an older one.
+
 Image generation is non-fatal to notification delivery: if both browser decoration and the Sharp fallback fail, send the chapter summary as text without an attachment.
 
 **Why:** A missing image should not suppress a valid chapter-release alert or leave the monitor state inconsistent.

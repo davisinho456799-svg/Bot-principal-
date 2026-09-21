@@ -44,6 +44,8 @@ type ExistingChapter = {
   publishedAt: Date | null;
 };
 
+type MonitorImageMode = "browser+banner" | "sharp+banner" | "none";
+
 const HISTORICAL_RELEASE_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1_000;
 
 type SharpFactory = typeof sharp;
@@ -354,7 +356,7 @@ export async function addReleaseBanner(
       `<svg xmlns="http://www.w3.org/2000/svg" width="${metadata.width}" height="${RELEASE_BANNER_HEIGHT}" viewBox="0 0 ${metadata.width} ${RELEASE_BANNER_HEIGHT}"><rect width="100%" height="100%" fill="#fffaf3"/>${buildReleaseBannerMarkup(title, chapterCount)}</svg>`,
     );
 
-    return await sharp(image)
+    const decorated = await sharp(image)
       .extend({
         top: RELEASE_BANNER_HEIGHT,
         bottom: 0,
@@ -365,6 +367,23 @@ export async function addReleaseBanner(
       .composite([{ input: banner, left: 0, top: 0 }])
       .png()
       .toBuffer();
+    const decoratedMetadata = await sharp(decorated).metadata();
+    if (
+      decoratedMetadata.width !== metadata.width ||
+      decoratedMetadata.height !== metadata.height + RELEASE_BANNER_HEIGHT
+    ) {
+      logger.warn(
+        {
+          originalWidth: metadata.width,
+          originalHeight: metadata.height,
+          decoratedWidth: decoratedMetadata.width,
+          decoratedHeight: decoratedMetadata.height,
+        },
+        "A captura decorada não recebeu o banner completo; usando fallback",
+      );
+      return null;
+    }
+    return decorated;
   } catch (error) {
     logger.warn({ err: error }, "Não foi possível adicionar o banner à captura do navegador");
     return null;
@@ -383,7 +402,7 @@ async function postStrip(
   total: number,
   isTest = false,
   capturedImage?: Buffer,
-): Promise<"browser" | "sharp" | "none"> {
+): Promise<MonitorImageMode> {
   const token = process.env.DISCORD_BOT_TOKEN;
   if (!token) throw new Error("DISCORD_BOT_TOKEN is not configured");
   // Both paths must use the same release banner. Browser captures contain only
@@ -409,7 +428,11 @@ async function postStrip(
       png = null;
     }
   }
-  const imageMode = browserImage ? "browser" : png ? "sharp" : "none";
+  const imageMode: MonitorImageMode = browserImage
+    ? "browser+banner"
+    : png
+      ? "sharp+banner"
+      : "none";
   const form = new FormData();
   const chapterSummary = chapters.length === 1
     ? `1 capítulo novo · capítulo ${chapters[0].number}`
@@ -461,7 +484,7 @@ export async function runResendNotification(
   workId: number,
   requestedChapter: string,
   progress?: MonitorProgressReporter,
-): Promise<{ title: string; chapter: string; imageMode: "browser" | "sharp" | "none"; parser: string }> {
+): Promise<{ title: string; chapter: string; imageMode: MonitorImageMode; parser: string }> {
   const [config] = await db.select().from(monitorConfigTable).limit(1);
   if (!config?.discordChannelId) {
     throw new Error("Nenhum canal do Discord foi configurado para o monitor.");
@@ -862,7 +885,7 @@ export async function runMonitor() {
       }
 
       const groups: Array<{ chapters: ChapterCandidate[]; image?: Buffer }> = [];
-      const imageModes = new Set<"browser" | "sharp" | "none">();
+      const imageModes = new Set<MonitorImageMode>();
       const emittedDirectKeys = new Set<string>();
       let fallbackChapters: ChapterCandidate[] = [];
       const flushFallback = () => {
