@@ -264,7 +264,7 @@ async function fetchListing(
 
 async function downloadThumbnail(url: string): Promise<Buffer | null> {
   try {
-    if (/fullversion|full[-_ ]?version|download[-_ ]?app|app[-_ ]?version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)|(?:^|[/._-])(?:banner|bnr)(?:[/._-]|$)/i.test(url)) {
+    if (/fullversion|full[-_ ]?version|download[-_ ]?app|app[-_ ]?version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)|(?:^|[/._-])(?:banner|bnr|lock|locked|no[-_ ]?image|placeholder)(?:[/._-]|$)/i.test(url)) {
       return null;
     }
     const sharp = await getOptionalSharp();
