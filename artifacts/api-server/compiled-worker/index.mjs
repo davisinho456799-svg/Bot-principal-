@@ -157445,6 +157445,8 @@ var PAGE_TIMEOUT_MS = 3e4;
 var MAX_CAPTURE_WIDTH = 2400;
 var MAX_CAPTURE_HEIGHT = 4800;
 var CARD_PADDING = 0;
+var CARD_MEDIA_WAIT_MS = 8e3;
+var CARD_MEDIA_POLL_MS = 150;
 var browserPromise = null;
 var contextPromise = null;
 var chromiumPromise = null;
@@ -157524,19 +157526,19 @@ async function loginToomics(page) {
   const password = process.env.TOOMICS_PASSWORD;
   if (!email3 || !password) return "credenciais n\xE3o configuradas";
   try {
-    const emailSelector = 'input[type="email"], input[name*="email" i], input[name*="user" i], input[name*="login" i], input[name*="id" i]';
-    const passwordSelector = 'input[type="password"]';
-    let emailInput = page.locator(emailSelector).filter({ visible: true }).first();
-    let passwordInput = page.locator(passwordSelector).filter({ visible: true }).first();
+    const emailSelector = 'input[type="email"]:visible, input[name*="email" i]:visible, input[name*="user" i]:visible, input[name*="login" i]:visible, input[name*="id" i]:visible';
+    const passwordSelector = 'input[type="password"]:visible';
+    let emailInput = page.locator(emailSelector).first();
+    let passwordInput = page.locator(passwordSelector).first();
     if (!await passwordInput.count()) {
       const loginLink = page.locator(
-        'a[href*="login" i], a[href*="signin" i], button:has-text("Login"), button:has-text("Entrar"), button:has-text("\uB85C\uADF8\uC778")'
-      ).filter({ visible: true }).first();
+        'a[href*="login" i]:visible, a[href*="signin" i]:visible, button:has-text("Login"):visible, button:has-text("Entrar"):visible, button:has-text("\uB85C\uADF8\uC778"):visible'
+      ).first();
       if (await loginLink.count()) {
         await loginLink.click().catch(() => void 0);
         await page.waitForTimeout(500);
-        emailInput = page.locator(emailSelector).filter({ visible: true }).first();
-        passwordInput = page.locator(passwordSelector).filter({ visible: true }).first();
+        emailInput = page.locator(emailSelector).first();
+        passwordInput = page.locator(passwordSelector).first();
       }
     }
     if (!await passwordInput.count()) {
@@ -157553,8 +157555,8 @@ async function loginToomics(page) {
         });
         await waitForRenderedPage(page);
         await page.locator("#user_id, #user_pw").first().waitFor({ state: "attached", timeout: 8e3 }).catch(() => void 0);
-        const loginEmail = page.locator("#user_id").first();
-        const loginPassword = page.locator("#user_pw").first();
+        const loginEmail = page.locator("#user_id:visible").first();
+        const loginPassword = page.locator("#user_pw:visible").first();
         if (await loginEmail.count() && await loginPassword.count()) {
           emailInput = loginEmail;
           passwordInput = loginPassword;
@@ -157568,8 +157570,8 @@ async function loginToomics(page) {
     await emailInput.fill(email3, { force: true });
     await passwordInput.fill(password, { force: true });
     const submit = page.locator(
-      'form:has(#user_id) button[type="submit"], form:has(#user_id) input[type="submit"], button:has-text("Login"), button:has-text("Entrar"), button:has-text("\uB85C\uADF8\uC778")'
-    ).filter({ visible: true }).last();
+      'form:has(#user_id) button[type="submit"]:visible, form:has(#user_id) input[type="submit"]:visible, button:has-text("Login"):visible, button:has-text("Entrar"):visible, button:has-text("\uB85C\uADF8\uC778"):visible'
+    ).last();
     const submitButton = await submit.count() ? submit : page.locator('form:has(#user_id) button[type="submit"], form:has(#user_id) input[type="submit"]').last();
     if (!await submitButton.count()) return "bot\xE3o de login n\xE3o encontrado";
     await Promise.all([
@@ -157615,7 +157617,12 @@ async function findRenderedChapters(page, platform) {
         "[id*='chapter']",
         "div"
       ].join(",");
-      const blockedWords = /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)|(?:^|[/._-])(?:banner|bnr)(?:[/._-]|$)/i;
+       // Toomics uses "banner" in legitimate episode-thumbnail paths.
+       // Keep generic banner filtering for the other sites, but do not hide
+       // a real Toomics card image just because its CDN path says banner.
+       const blockedWords = platform === "toomics"
+         ? /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[/._-])(?:lock|locked|no[-_ ]?image|placeholder)(?:[/._-]|$)/i
+         : /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)|(?:^|[/._-])(?:banner|bnr|lock|locked|no[-_ ]?image|placeholder)(?:[/._-]|$)/i;
       const chapterLabel = /(?:chapter|episode|episodio|epis[o\xF3]dio|ep(?:isode)?|ch(?:apter)?|cap(?:itulo|\xEDtulo)?|cap\\\\.)/i;
       const chapterPattern = /(?:chapter|episode|episodio|epis[o\xF3]dio|ep(?:isode)?|ch(?:apter)?|cap(?:itulo|\xEDtulo)?|cap\\\\.)\\\\s*(?:#|[-_:])?\\\\s*(\\\\d{1,5}(?:[.,]\\\\d+)?)/ig;
       const hashPattern = /(?:^|\\\\s)#(\\\\d{1,5}(?:[.,]\\\\d+)?)(?=\\\\s|$)/g;
@@ -157862,7 +157869,10 @@ async function findRenderedChapters(page, platform) {
          // chapter-like number without being a visual release card. A
          // candidate must have actual card media; otherwise it can produce a
          // phantom chapter notification with no photo.
-         if (!hasImage || !hasCardDimensions) continue;
+          // A visible lock/blank placeholder is not a usable Toomics
+          // thumbnail. Do not let it become a valid browser capture, because
+          // Playwright would faithfully screenshot the white placeholder.
+          if (!hasImage || !hasCardDimensions || (platform === "toomics" && !thumbnailValue)) continue;
 
         // A platform chapter card is expected to have a marker, link, or
         // image. This rejects the page wrapper and promotional banners.
@@ -157975,9 +157985,8 @@ function makeGreedyGroups(candidates) {
   if (current.length) groups.push(current);
   return groups;
 }
-async function captureGroup(page, chapters) {
-  const first = chapters[0];
-  if (!first) throw new Error("Cannot capture an empty chapter group");
+async function captureGroup(page, chapters, platform) {
+  if (!chapters.length) throw new Error("Cannot capture an empty chapter group");
   const documentBox = unionBox(chapters);
   const currentViewport = page.viewportSize();
   await page.setViewportSize({
@@ -157987,11 +157996,11 @@ async function captureGroup(page, chapters) {
       Math.max(1200, Math.ceil(documentBox.height + 24))
     )
   });
-  await page.locator(`[data-monitor-capture-card="${first.captureId}"]`).scrollIntoViewIfNeeded().catch(() => void 0);
-  await page.waitForTimeout(100);
   await page.evaluate(
-    `((ids) => {
-        const blockedWords = /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)/i;
+    `((ids, platform) => {
+        const blockedWords = platform === "toomics"
+          ? /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[/._-])(?:lock|locked|no[-_ ]?image|placeholder)(?:[/._-]|$)/i
+          : /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)|(?:^|[/._-])(?:banner|bnr|lock|locked|no[-_ ]?image|placeholder)(?:[/._-]|$)/i;
         for (const id of ids) {
           const card = document.querySelector('[data-monitor-capture-card="' + id + '"]');
           if (!card) continue;
@@ -158012,8 +158021,190 @@ async function captureGroup(page, chapters) {
             target?.style.setProperty("display", "none", "important");
           }
         }
-      })(${JSON.stringify(chapters.map((chapter) => chapter.captureId))})`
+      })(${JSON.stringify(chapters.map((chapter) => chapter.captureId))}, ${JSON.stringify(platform)})`
   ).catch(() => void 0);
+  const cardIds = chapters.map((chapter) => chapter.captureId);
+  for (const cardId of cardIds) {
+    await page.locator(`[data-monitor-capture-card="${cardId}"]`).scrollIntoViewIfNeeded().catch(() => void 0);
+    await page.waitForTimeout(100);
+  }
+  await page.evaluate(
+    `((ids, platform) => {
+       const blockedWords = platform === "toomics"
+         ? /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[/._-])(?:lock|locked|no[-_ ]?image|placeholder)(?:[/._-]|$)/i
+         : /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)|(?:^|[/._-])(?:banner|bnr|lock|locked|no[-_ ]?image|placeholder)(?:[/._-]|$)/i;
+        const lazyAttributes = [
+          "data-src",
+          "data-srcset",
+          "data-original",
+          "data-lazy-src",
+          "data-image",
+          "data-bg",
+          "data-ep_thumb1",
+          "data-ep_thumb2",
+          "data-ep_thumb3",
+          "data-thumbnail",
+          "data-thumb",
+        ];
+        const placeholder = (value) => {
+          const normalized = String(value || "").trim().toLowerCase();
+          return !normalized ||
+            normalized.startsWith("data:image/") ||
+            /placeholder|no[-_ ]?image|transparent|spacer|blank[-_ ]?image/.test(normalized);
+        };
+        const usable = (value) =>
+          !placeholder(value) && !blockedWords.test(String(value || ""));
+        const firstUsable = (element, attributes) => {
+          for (const attribute of attributes) {
+            const value = element.getAttribute(attribute);
+            if (usable(value)) return value;
+          }
+          return "";
+        };
+        const setBackground = (element, value) => {
+          if (!value || !(element instanceof HTMLElement)) return;
+          const current = getComputedStyle(element).backgroundImage;
+          if (current && current !== "none") return;
+          element.style.setProperty(
+            "background-image",
+            "url(" + JSON.stringify(new URL(value, location.href).toString()) + ")",
+            "important",
+          );
+        };
+
+        for (const id of ids) {
+          const card = document.querySelector(
+            '[data-monitor-capture-card="' + id + '"]',
+          );
+          if (!card) continue;
+
+          for (const image of card.querySelectorAll("img")) {
+            const current = image.currentSrc || image.getAttribute("src") || "";
+            if (!usable(current)) {
+              const source = firstUsable(image, [
+                "data-src",
+                "data-original",
+                "data-lazy-src",
+                "data-image",
+                "data-thumbnail",
+                "data-thumb",
+              ]);
+              if (source) image.src = new URL(source, location.href).toString();
+            }
+            const srcset = firstUsable(image, ["data-srcset"]);
+            if (srcset && (!image.srcset || !usable(current))) image.srcset = srcset;
+          }
+
+          for (const media of [
+            card,
+            ...Array.from(card.querySelectorAll(
+              "picture, source, [data-bg], [data-ep_thumb1], [data-ep_thumb2], [data-ep_thumb3]",
+            )),
+          ]) {
+            const value = firstUsable(media, lazyAttributes);
+            if (value) setBackground(media, value);
+          }
+        }
+      })(${JSON.stringify(cardIds)}, ${JSON.stringify(platform)})`
+  ).catch(() => void 0);
+  const mediaReady = await page.evaluate(
+    `((ids, timeoutMs, pollMs, platform) => {
+       const blockedWords = platform === "toomics"
+         ? /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[/._-])(?:lock|locked|no[-_ ]?image|placeholder)(?:[/._-]|$)/i
+         : /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)|(?:^|[/._-])(?:banner|bnr|lock|locked|no[-_ ]?image|placeholder)(?:[/._-]|$)/i;
+      const mediaAttributes = [
+        "src",
+        "srcset",
+        "data-src",
+        "data-srcset",
+        "data-original",
+        "data-lazy-src",
+        "data-image",
+        "data-bg",
+        "data-ep_thumb1",
+        "data-ep_thumb2",
+        "data-ep_thumb3",
+        "data-thumbnail",
+        "data-thumb",
+        "alt",
+        "title",
+        "class",
+      ];
+
+       const visible = (element) => {
+        const style = getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+        return style.display !== "none" &&
+          style.visibility !== "hidden" &&
+          Number.parseFloat(style.opacity || "1") > 0 &&
+          rect.width > 2 &&
+          rect.height > 2;
+      };
+
+       const substantial = (element) => {
+         const rect = element.getBoundingClientRect();
+         return rect.width >= 48 && rect.height >= 30;
+       };
+
+      const contextOf = (element) => mediaAttributes
+        .map((attribute) => element.getAttribute(attribute) || "")
+        .join(" ");
+
+      const hasReadyMedia = (card) => {
+        const images = Array.from(card.querySelectorAll("img")).some((image) =>
+           visible(image) &&
+           substantial(image) &&
+          image.complete &&
+          image.naturalWidth > 0 &&
+          !blockedWords.test(contextOf(image)),
+        );
+        if (images) return true;
+
+        const backgroundNodes = [card, ...Array.from(card.querySelectorAll(
+          "[data-bg], [data-ep_thumb1], [data-ep_thumb2], [data-ep_thumb3], picture, source",
+        ))];
+        return backgroundNodes.some((node) => {
+           if (!visible(node) || !substantial(node)) return false;
+          const context = contextOf(node);
+          if (blockedWords.test(context)) return false;
+          const style = getComputedStyle(node);
+          const before = getComputedStyle(node, "::before").backgroundImage;
+          const after = getComputedStyle(node, "::after").backgroundImage;
+          return [style.backgroundImage, before, after].some((value) =>
+            Boolean(value && value !== "none" && /url\\(/i.test(value)),
+          );
+        });
+      };
+
+      const check = () => {
+        const cards = ids.map((id) =>
+          document.querySelector('[data-monitor-capture-card="' + id + '"]'),
+        );
+        return cards.length === ids.length &&
+          cards.every((card) => card && hasReadyMedia(card));
+      };
+
+      return new Promise((resolve) => {
+        const deadline = Date.now() + timeoutMs;
+        const poll = () => {
+          if (check()) {
+            resolve(true);
+            return;
+          }
+          if (Date.now() >= deadline) {
+            resolve(false);
+            return;
+          }
+          setTimeout(poll, pollMs);
+        };
+        poll();
+      });
+    })(${JSON.stringify(cardIds)}, ${CARD_MEDIA_WAIT_MS}, ${CARD_MEDIA_POLL_MS}, ${JSON.stringify(platform)})`
+  );
+  if (!mediaReady) {
+    throw new Error("Selected chapter cards did not finish loading their thumbnails");
+  }
+  await page.waitForTimeout(150);
   const boxes = (await Promise.all(
     chapters.map(
       (chapter) => page.locator(`[data-monitor-capture-card="${chapter.captureId}"]`).boundingBox()
@@ -158112,7 +158303,7 @@ async function openBrowserListing(listingUrl, platform, retryAfterCrash = true) 
           try {
             captured.push({
               chapterNumbers: group.map((chapter) => chapter.number),
-              image: await captureGroup(page, group)
+              image: await captureGroup(page, group, platform)
             });
           } catch (error40) {
             if (group.length === 1) throw error40;
@@ -158123,7 +158314,7 @@ async function openBrowserListing(listingUrl, platform, retryAfterCrash = true) 
             ]) {
               captured.push({
                 chapterNumbers: smallerGroup.map((chapter) => chapter.number),
-                image: await captureGroup(page, smallerGroup)
+                image: await captureGroup(page, smallerGroup, platform)
               });
             }
           }
@@ -158333,7 +158524,7 @@ async function fetchListing(work, progress) {
 }
 async function downloadThumbnail(url2) {
   try {
-    if (/fullversion|full[-_ ]?version|download[-_ ]?app|app[-_ ]?version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)|(?:^|[/._-])(?:banner|bnr)(?:[/._-]|$)/i.test(url2)) {
+    if (/fullversion|full[-_ ]?version|download[-_ ]?app|app[-_ ]?version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)|(?:^|[/._-])(?:banner|bnr|lock|locked|no[-_ ]?image|placeholder)(?:[/._-]|$)/i.test(url2)) {
       return null;
     }
     const sharp = await getOptionalSharp();
@@ -158404,13 +158595,27 @@ async function addReleaseBanner(image, title, chapterCount) {
     const banner = Buffer.from(
       `<svg xmlns="http://www.w3.org/2000/svg" width="${metadata.width}" height="${RELEASE_BANNER_HEIGHT}" viewBox="0 0 ${metadata.width} ${RELEASE_BANNER_HEIGHT}"><rect width="100%" height="100%" fill="#fffaf3"/>${buildReleaseBannerMarkup(title, chapterCount)}</svg>`
     );
-    return await sharp(image).extend({
+    const decorated = await sharp(image).extend({
       top: RELEASE_BANNER_HEIGHT,
       bottom: 0,
       left: 0,
       right: 0,
       background: "#fffaf3"
     }).composite([{ input: banner, left: 0, top: 0 }]).png().toBuffer();
+    const decoratedMetadata = await sharp(decorated).metadata();
+    if (decoratedMetadata.width !== metadata.width || decoratedMetadata.height !== metadata.height + RELEASE_BANNER_HEIGHT) {
+      logger.warn(
+        {
+          originalWidth: metadata.width,
+          originalHeight: metadata.height,
+          decoratedWidth: decoratedMetadata.width,
+          decoratedHeight: decoratedMetadata.height
+        },
+        "A captura decorada n\xE3o recebeu o banner completo; usando fallback"
+      );
+      return null;
+    }
+    return decorated;
   } catch (error40) {
     logger.warn({ err: error40 }, "N\xE3o foi poss\xEDvel adicionar o banner \xE0 captura do navegador");
     return null;
@@ -158439,7 +158644,7 @@ async function postStrip(channelId, title, chapters, part, total, isTest = false
       png = null;
     }
   }
-  const imageMode = browserImage ? "browser" : png ? "sharp" : "none";
+  const imageMode = browserImage ? "browser+banner" : png ? "sharp+banner" : "none";
   const form = new FormData();
   const chapterSummary = chapters.length === 1 ? `1 cap\xEDtulo novo \xB7 cap\xEDtulo ${chapters[0].number}` : `${chapters.length} cap\xEDtulos novos \xB7 cap\xEDtulos ${chapters.map((chapter) => chapter.number).join(", ")}`;
   if (!png) {

@@ -154,21 +154,24 @@ async function loginToomics(page: Page): Promise<string> {
   if (!email || !password) return "credenciais não configuradas";
 
   try {
+    // `visible` is a Playwright locator pseudo-class, not an option accepted
+    // by locator.filter(). Without it the hidden login modal can win over the
+    // real form and the listing is reopened without an authenticated session.
     const emailSelector =
-      'input[type="email"], input[name*="email" i], input[name*="user" i], input[name*="login" i], input[name*="id" i]';
-    const passwordSelector = 'input[type="password"]';
-    let emailInput = page.locator(emailSelector).filter({ visible: true }).first();
-    let passwordInput = page.locator(passwordSelector).filter({ visible: true }).first();
+      'input[type="email"]:visible, input[name*="email" i]:visible, input[name*="user" i]:visible, input[name*="login" i]:visible, input[name*="id" i]:visible';
+    const passwordSelector = 'input[type="password"]:visible';
+    let emailInput = page.locator(emailSelector).first();
+    let passwordInput = page.locator(passwordSelector).first();
 
     if (!(await passwordInput.count())) {
       const loginLink = page.locator(
-        'a[href*="login" i], a[href*="signin" i], button:has-text("Login"), button:has-text("Entrar"), button:has-text("로그인")',
-      ).filter({ visible: true }).first();
+        'a[href*="login" i]:visible, a[href*="signin" i]:visible, button:has-text("Login"):visible, button:has-text("Entrar"):visible, button:has-text("로그인"):visible',
+      ).first();
       if (await loginLink.count()) {
         await loginLink.click().catch(() => undefined);
         await page.waitForTimeout(500);
-        emailInput = page.locator(emailSelector).filter({ visible: true }).first();
-        passwordInput = page.locator(passwordSelector).filter({ visible: true }).first();
+        emailInput = page.locator(emailSelector).first();
+        passwordInput = page.locator(passwordSelector).first();
       }
     }
 
@@ -194,8 +197,8 @@ async function loginToomics(page: Page): Promise<string> {
           .waitFor({ state: "attached", timeout: 8_000 })
           .catch(() => undefined);
 
-        const loginEmail = page.locator("#user_id").first();
-        const loginPassword = page.locator("#user_pw").first();
+        const loginEmail = page.locator("#user_id:visible").first();
+        const loginPassword = page.locator("#user_pw:visible").first();
         if (await loginEmail.count() && await loginPassword.count()) {
           emailInput = loginEmail;
           passwordInput = loginPassword;
@@ -211,8 +214,8 @@ async function loginToomics(page: Page): Promise<string> {
     await emailInput.fill(email, { force: true });
     await passwordInput.fill(password, { force: true });
     const submit = page.locator(
-      'form:has(#user_id) button[type="submit"], form:has(#user_id) input[type="submit"], button:has-text("Login"), button:has-text("Entrar"), button:has-text("로그인")',
-    ).filter({ visible: true }).last();
+      'form:has(#user_id) button[type="submit"]:visible, form:has(#user_id) input[type="submit"]:visible, button:has-text("Login"):visible, button:has-text("Entrar"):visible, button:has-text("로그인"):visible',
+    ).last();
     const submitButton = await submit.count()
       ? submit
       : page.locator('form:has(#user_id) button[type="submit"], form:has(#user_id) input[type="submit"]').last();
@@ -273,7 +276,12 @@ async function findRenderedChapters(
         "[id*='chapter']",
         "div"
       ].join(",");
-       const blockedWords = /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)|(?:^|[/._-])(?:banner|bnr|lock|locked|no[-_ ]?image|placeholder)(?:[/._-]|$)/i;
+       // Toomics uses "banner" in legitimate episode-thumbnail paths.
+       // Keep generic banner filtering for the other sites, but do not hide
+       // a real Toomics card image just because its CDN path says banner.
+       const blockedWords = platform === "toomics"
+         ? /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[/._-])(?:lock|locked|no[-_ ]?image|placeholder)(?:[/._-]|$)/i
+         : /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)|(?:^|[/._-])(?:banner|bnr|lock|locked|no[-_ ]?image|placeholder)(?:[/._-]|$)/i;
       const chapterLabel = /(?:chapter|episode|episodio|epis[oó]dio|ep(?:isode)?|ch(?:apter)?|cap(?:itulo|ítulo)?|cap\\\\.)/i;
       const chapterPattern = /(?:chapter|episode|episodio|epis[oó]dio|ep(?:isode)?|ch(?:apter)?|cap(?:itulo|ítulo)?|cap\\\\.)\\\\s*(?:#|[-_:])?\\\\s*(\\\\d{1,5}(?:[.,]\\\\d+)?)/ig;
       const hashPattern = /(?:^|\\\\s)#(\\\\d{1,5}(?:[.,]\\\\d+)?)(?=\\\\s|$)/g;
@@ -520,7 +528,10 @@ async function findRenderedChapters(
          // chapter-like number without being a visual release card. A
          // candidate must have actual card media; otherwise it can produce a
          // phantom chapter notification with no photo.
-         if (!hasImage || !hasCardDimensions) continue;
+          // A visible lock/blank placeholder is not a usable Toomics
+          // thumbnail. Do not let it become a valid browser capture, because
+          // Playwright would faithfully screenshot the white placeholder.
+          if (!hasImage || !hasCardDimensions || (platform === "toomics" && !thumbnailValue)) continue;
 
         // A platform chapter card is expected to have a marker, link, or
         // image. This rejects the page wrapper and promotional banners.
@@ -655,6 +666,7 @@ function makeGreedyGroups(
 async function captureGroup(
   page: Page,
   chapters: BrowserChapterSnapshot[],
+  platform: MonitorPlatform,
 ): Promise<Buffer> {
   if (!chapters.length) throw new Error("Cannot capture an empty chapter group");
 
@@ -674,8 +686,10 @@ async function captureGroup(
 
   await page
     .evaluate(
-      `((ids) => {
-        const blockedWords = /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)/i;
+      `((ids, platform) => {
+        const blockedWords = platform === "toomics"
+          ? /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[/._-])(?:lock|locked|no[-_ ]?image|placeholder)(?:[/._-]|$)/i
+          : /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)|(?:^|[/._-])(?:banner|bnr|lock|locked|no[-_ ]?image|placeholder)(?:[/._-]|$)/i;
         for (const id of ids) {
           const card = document.querySelector('[data-monitor-capture-card="' + id + '"]');
           if (!card) continue;
@@ -696,7 +710,7 @@ async function captureGroup(
             target?.style.setProperty("display", "none", "important");
           }
         }
-      })(${JSON.stringify(chapters.map((chapter) => chapter.captureId))})`,
+      })(${JSON.stringify(chapters.map((chapter) => chapter.captureId))}, ${JSON.stringify(platform)})`,
     )
     .catch(() => undefined);
 
@@ -719,8 +733,10 @@ async function captureGroup(
   // screenshot does not capture a text-only card.
   await page
     .evaluate(
-      `((ids) => {
-       const blockedWords = /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)|(?:^|[/._-])(?:banner|bnr|lock|locked|no[-_ ]?image|placeholder)(?:[/._-]|$)/i;
+      `((ids, platform) => {
+       const blockedWords = platform === "toomics"
+         ? /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[/._-])(?:lock|locked|no[-_ ]?image|placeholder)(?:[/._-]|$)/i
+         : /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)|(?:^|[/._-])(?:banner|bnr|lock|locked|no[-_ ]?image|placeholder)(?:[/._-]|$)/i;
         const lazyAttributes = [
           "data-src",
           "data-srcset",
@@ -793,13 +809,15 @@ async function captureGroup(
             if (value) setBackground(media, value);
           }
         }
-      })(${JSON.stringify(cardIds)})`,
+      })(${JSON.stringify(cardIds)}, ${JSON.stringify(platform)})`,
     )
     .catch(() => undefined);
 
   const mediaReady = await page.evaluate(
-      `((ids, timeoutMs, pollMs) => {
-       const blockedWords = /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)|(?:^|[/._-])(?:banner|bnr|lock|locked|no[-_ ]?image|placeholder)(?:[/._-]|$)/i;
+      `((ids, timeoutMs, pollMs, platform) => {
+       const blockedWords = platform === "toomics"
+         ? /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[/._-])(?:lock|locked|no[-_ ]?image|placeholder)(?:[/._-]|$)/i
+         : /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)|(?:^|[/._-])(?:banner|bnr|lock|locked|no[-_ ]?image|placeholder)(?:[/._-]|$)/i;
       const mediaAttributes = [
         "src",
         "srcset",
@@ -887,7 +905,7 @@ async function captureGroup(
         };
         poll();
       });
-    })(${JSON.stringify(cardIds)}, ${CARD_MEDIA_WAIT_MS}, ${CARD_MEDIA_POLL_MS})`,
+    })(${JSON.stringify(cardIds)}, ${CARD_MEDIA_WAIT_MS}, ${CARD_MEDIA_POLL_MS}, ${JSON.stringify(platform)})`,
   );
 
   if (!mediaReady) {
@@ -1021,7 +1039,7 @@ export async function openBrowserListing(
           try {
             captured.push({
               chapterNumbers: group.map((chapter) => chapter.number),
-              image: await captureGroup(page, group),
+              image: await captureGroup(page, group, platform),
             });
           } catch (error) {
             if (group.length === 1) throw error;
@@ -1036,7 +1054,7 @@ export async function openBrowserListing(
             ]) {
               captured.push({
                 chapterNumbers: smallerGroup.map((chapter) => chapter.number),
-                image: await captureGroup(page, smallerGroup),
+                image: await captureGroup(page, smallerGroup, platform),
               });
             }
           }

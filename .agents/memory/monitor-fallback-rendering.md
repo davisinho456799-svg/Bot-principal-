@@ -62,3 +62,9 @@ Fresh Playwright login pages start at `about:blank`; derive a valid Toomics orig
 **Why:** Building a relative login URL from `about:blank` produces an invalid navigation URL and hides the real authentication result.
 
 **How to apply:** Guard origin extraction with an HTTP(S) check and retain `global.toomics.com` as the alternate login origin.
+
+Playwright visibility must be expressed in the selector (`:visible`), not as `{ visible: true }` passed to `locator.filter()`. Toomics exposes hidden login markup alongside the real form.
+
+**Why:** The invalid filter option can select the hidden modal fields, leave the browser unauthenticated, and make the monitor capture the white locked-card placeholder.
+
+**How to apply:** Build visible selectors for Toomics email, password, login links, and submit buttons; reopen the listing in the same browser context after login.
