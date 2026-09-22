@@ -713,6 +713,90 @@ async function captureGroup(
     await page.waitForTimeout(100);
   }
 
+  // Some Toomics cards keep the real thumbnail only in lazy-load attributes
+  // and rely on a page script that is not always run by headless Chromium.
+  // Promote those values after the cards have entered the viewport so the
+  // screenshot does not capture a text-only card.
+  await page
+    .evaluate(
+      `((ids) => {
+        const blockedWords = /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)|(?:^|[/._-])(?:banner|bnr)(?:[/._-]|$)/i;
+        const lazyAttributes = [
+          "data-src",
+          "data-srcset",
+          "data-original",
+          "data-lazy-src",
+          "data-image",
+          "data-bg",
+          "data-ep_thumb1",
+          "data-ep_thumb2",
+          "data-ep_thumb3",
+          "data-thumbnail",
+          "data-thumb",
+        ];
+        const placeholder = (value) => {
+          const normalized = String(value || "").trim().toLowerCase();
+          return !normalized ||
+            normalized.startsWith("data:image/") ||
+            /placeholder|no[-_ ]?image|transparent|spacer|blank[-_ ]?image/.test(normalized);
+        };
+        const usable = (value) =>
+          !placeholder(value) && !blockedWords.test(String(value || ""));
+        const firstUsable = (element, attributes) => {
+          for (const attribute of attributes) {
+            const value = element.getAttribute(attribute);
+            if (usable(value)) return value;
+          }
+          return "";
+        };
+        const setBackground = (element, value) => {
+          if (!value || !(element instanceof HTMLElement)) return;
+          const current = getComputedStyle(element).backgroundImage;
+          if (current && current !== "none") return;
+          element.style.setProperty(
+            "background-image",
+            "url(" + JSON.stringify(new URL(value, location.href).toString()) + ")",
+            "important",
+          );
+        };
+
+        for (const id of ids) {
+          const card = document.querySelector(
+            '[data-monitor-capture-card="' + id + '"]',
+          );
+          if (!card) continue;
+
+          for (const image of card.querySelectorAll("img")) {
+            const current = image.currentSrc || image.getAttribute("src") || "";
+            if (!usable(current)) {
+              const source = firstUsable(image, [
+                "data-src",
+                "data-original",
+                "data-lazy-src",
+                "data-image",
+                "data-thumbnail",
+                "data-thumb",
+              ]);
+              if (source) image.src = new URL(source, location.href).toString();
+            }
+            const srcset = firstUsable(image, ["data-srcset"]);
+            if (srcset && (!image.srcset || !usable(current))) image.srcset = srcset;
+          }
+
+          for (const media of [
+            card,
+            ...Array.from(card.querySelectorAll(
+              "picture, source, [data-bg], [data-ep_thumb1], [data-ep_thumb2], [data-ep_thumb3]",
+            )),
+          ]) {
+            const value = firstUsable(media, lazyAttributes);
+            if (value) setBackground(media, value);
+          }
+        }
+      })(${JSON.stringify(cardIds)})`,
+    )
+    .catch(() => undefined);
+
   const mediaReady = await page.evaluate(
     `((ids, timeoutMs, pollMs) => {
       const blockedWords = /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)|(?:^|[/._-])(?:banner|bnr)(?:[/._-]|$)/i;
