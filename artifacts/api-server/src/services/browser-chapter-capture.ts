@@ -273,7 +273,7 @@ async function findRenderedChapters(
         "[id*='chapter']",
         "div"
       ].join(",");
-      const blockedWords = /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)|(?:^|[/._-])(?:banner|bnr)(?:[/._-]|$)/i;
+       const blockedWords = /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)|(?:^|[/._-])(?:banner|bnr|lock|locked|no[-_ ]?image|placeholder)(?:[/._-]|$)/i;
       const chapterLabel = /(?:chapter|episode|episodio|epis[oó]dio|ep(?:isode)?|ch(?:apter)?|cap(?:itulo|ítulo)?|cap\\\\.)/i;
       const chapterPattern = /(?:chapter|episode|episodio|epis[oó]dio|ep(?:isode)?|ch(?:apter)?|cap(?:itulo|ítulo)?|cap\\\\.)\\\\s*(?:#|[-_:])?\\\\s*(\\\\d{1,5}(?:[.,]\\\\d+)?)/ig;
       const hashPattern = /(?:^|\\\\s)#(\\\\d{1,5}(?:[.,]\\\\d+)?)(?=\\\\s|$)/g;
@@ -720,7 +720,7 @@ async function captureGroup(
   await page
     .evaluate(
       `((ids) => {
-        const blockedWords = /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)|(?:^|[/._-])(?:banner|bnr)(?:[/._-]|$)/i;
+       const blockedWords = /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)|(?:^|[/._-])(?:banner|bnr|lock|locked|no[-_ ]?image|placeholder)(?:[/._-]|$)/i;
         const lazyAttributes = [
           "data-src",
           "data-srcset",
@@ -798,8 +798,8 @@ async function captureGroup(
     .catch(() => undefined);
 
   const mediaReady = await page.evaluate(
-    `((ids, timeoutMs, pollMs) => {
-      const blockedWords = /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)|(?:^|[/._-])(?:banner|bnr)(?:[/._-]|$)/i;
+      `((ids, timeoutMs, pollMs) => {
+       const blockedWords = /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)|(?:^|[/._-])(?:banner|bnr|lock|locked|no[-_ ]?image|placeholder)(?:[/._-]|$)/i;
       const mediaAttributes = [
         "src",
         "srcset",
@@ -819,7 +819,7 @@ async function captureGroup(
         "class",
       ];
 
-      const visible = (element) => {
+       const visible = (element) => {
         const style = getComputedStyle(element);
         const rect = element.getBoundingClientRect();
         return style.display !== "none" &&
@@ -829,13 +829,19 @@ async function captureGroup(
           rect.height > 2;
       };
 
+       const substantial = (element) => {
+         const rect = element.getBoundingClientRect();
+         return rect.width >= 48 && rect.height >= 30;
+       };
+
       const contextOf = (element) => mediaAttributes
         .map((attribute) => element.getAttribute(attribute) || "")
         .join(" ");
 
       const hasReadyMedia = (card) => {
         const images = Array.from(card.querySelectorAll("img")).some((image) =>
-          visible(image) &&
+           visible(image) &&
+           substantial(image) &&
           image.complete &&
           image.naturalWidth > 0 &&
           !blockedWords.test(contextOf(image)),
@@ -846,7 +852,7 @@ async function captureGroup(
           "[data-bg], [data-ep_thumb1], [data-ep_thumb2], [data-ep_thumb3], picture, source",
         ))];
         return backgroundNodes.some((node) => {
-          if (!visible(node)) return false;
+           if (!visible(node) || !substantial(node)) return false;
           const context = contextOf(node);
           if (blockedWords.test(context)) return false;
           const style = getComputedStyle(node);
