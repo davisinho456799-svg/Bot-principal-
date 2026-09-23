@@ -450,12 +450,7 @@ async function findRenderedChapters(
             if (parentRect.height > 600 || parentRect.width > 1_400) break;
             continue;
           }
-          // The first valid ancestor is the chapter card. Continuing up the
-          // tree promotes the candidate to a section/list wrapper that can
-          // contain several cards, which makes the screenshot repeat them
-          // side by side.
           cardElement = parent;
-          break;
         }
 
         const rect = cardElement.getBoundingClientRect();
