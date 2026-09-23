@@ -51,6 +51,25 @@ export const monitorCommandDefinition = new SlashCommandBuilder()
     )
     .addSubcommand((command) =>
       command
+        .setName("renomear")
+        .setDescription("Altera o nome de uma obra monitorada")
+        .addIntegerOption((option) =>
+          option
+            .setName("id")
+            .setDescription("ID exibido pelo /monitor listar")
+            .setRequired(true),
+        )
+        .addStringOption((option) =>
+          option
+            .setName("nome")
+            .setDescription("Novo nome da obra")
+            .setMinLength(1)
+            .setMaxLength(200)
+            .setRequired(true),
+        ),
+    )
+    .addSubcommand((command) =>
+      command
         .setName("historico")
         .setDescription("Lista os últimos capítulos enviados ao Discord"),
     )
@@ -306,6 +325,35 @@ export async function executeManhwaCommand(interaction: ChatInputCommandInteract
   }
   if (subcommand === "listar") {
     await handleList(interaction);
+    return;
+  }
+  if (subcommand === "renomear") {
+    const workId = interaction.options.getInteger("id", true);
+    const title = interaction.options.getString("nome", true).trim();
+    if (!title) {
+      await replyError(interaction, "Informe um nome não vazio para a obra.");
+      return;
+    }
+
+    const [work] = await db
+      .update(monitoredWorksTable)
+      .set({ title, updatedAt: new Date() })
+      .where(eq(monitoredWorksTable.id, workId))
+      .returning();
+
+    if (!work) {
+      await interaction.editReply({
+        content: `❌ Não encontrei nenhuma obra com o ID ${workId}. Use \`/monitor listar\` para conferir os IDs.`,
+      });
+      return;
+    }
+
+    await interaction.editReply({
+      content: [
+        `✅ Obra ID ${work.id} renomeada para **${work.title}**.`,
+        "A URL, a plataforma e o histórico de capítulos foram preservados.",
+      ].join("\n"),
+    });
     return;
   }
   if (subcommand === "historico") {

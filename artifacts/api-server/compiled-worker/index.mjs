@@ -174321,6 +174321,12 @@ var monitorCommandDefinition = new import_discord35.SlashCommandBuilder().setNam
 ).addSubcommand(
   (command) => command.setName("listar").setDescription("Lista os manhwas ativos")
 ).addSubcommand(
+  (command) => command.setName("renomear").setDescription("Altera o nome de uma obra monitorada").addIntegerOption(
+    (option) => option.setName("id").setDescription("ID exibido pelo /monitor listar").setRequired(true)
+  ).addStringOption(
+    (option) => option.setName("nome").setDescription("Novo nome da obra").setMinLength(1).setMaxLength(200).setRequired(true)
+  )
+).addSubcommand(
   (command) => command.setName("historico").setDescription("Lista os \xFAltimos cap\xEDtulos enviados ao Discord")
 ).addSubcommand(
   (command) => command.setName("reenviar").setDescription("Reenvia um cap\xEDtulo monitorado, tentando recuperar a imagem").addIntegerOption(
@@ -174489,6 +174495,28 @@ async function executeManhwaCommand(interaction) {
   }
   if (subcommand === "listar") {
     await handleList(interaction);
+    return;
+  }
+  if (subcommand === "renomear") {
+    const workId = interaction.options.getInteger("id", true);
+    const title = interaction.options.getString("nome", true).trim();
+    if (!title) {
+      await replyError(interaction, "Informe um nome n\xE3o vazio para a obra.");
+      return;
+    }
+    const [work] = await db.update(monitoredWorksTable).set({ title, updatedAt: /* @__PURE__ */ new Date() }).where(eq(monitoredWorksTable.id, workId)).returning();
+    if (!work) {
+      await interaction.editReply({
+        content: `\u274C N\xE3o encontrei nenhuma obra com o ID ${workId}. Use \`/monitor listar\` para conferir os IDs.`
+      });
+      return;
+    }
+    await interaction.editReply({
+      content: [
+        `\u2705 Obra ID ${work.id} renomeada para **${work.title}**.`,
+        "A URL, a plataforma e o hist\xF3rico de cap\xEDtulos foram preservados."
+      ].join("\n")
+    });
     return;
   }
   if (subcommand === "historico") {
