@@ -174332,7 +174332,7 @@ var monitorCommandDefinition = new import_discord35.SlashCommandBuilder().setNam
   (command) => command.setName("reenviar").setDescription("Reenvia um cap\xEDtulo monitorado, tentando recuperar a imagem").addIntegerOption(
     (option) => option.setName("obra").setDescription("ID da obra exibido pelo /monitor listar").setRequired(true)
   ).addStringOption(
-    (option) => option.setName("capitulo").setDescription("N\xFAmero do cap\xEDtulo a reenviar, por exemplo 12 ou 12.5").setRequired(true)
+    (option) => option.setName("capitulo").setDescription("Cap\xEDtulo(s) separados por v\xEDrgula, por exemplo 12, 13 ou 12.5").setMaxLength(200).setRequired(true)
   )
 ).addSubcommand(
   (command) => command.setName("canal").setDescription("Escolhe o canal que receber\xE1 as notifica\xE7\xF5es").addChannelOption(
@@ -174525,34 +174525,55 @@ async function executeManhwaCommand(interaction) {
   }
   if (subcommand === "reenviar") {
     const workId = interaction.options.getInteger("obra", true);
-    const chapterNumber = interaction.options.getString("capitulo", true);
+    const chapterNumbers = [...new Set(
+      interaction.options.getString("capitulo", true).split(/[,\s;]+/).map((chapter) => chapter.trim()).filter(Boolean)
+    )];
+    if (!chapterNumbers.length) {
+      await replyError(interaction, "Informe pelo menos um n\xFAmero de cap\xEDtulo.");
+      return;
+    }
     const progress = [];
     const updateProgress = async (message) => {
       progress.push(message);
       await interaction.editReply({
         content: [
-          "\u{1F501} **Reenvio do cap\xEDtulo**",
+          `\u{1F501} **Reenvio de ${chapterNumbers.length > 1 ? "cap\xEDtulos" : "cap\xEDtulo"}**`,
           ...progress.map((step, index) => `${index + 1}. ${step}`)
-        ].join("\n")
+        ].join("\n").slice(0, 1950)
       });
     };
-    try {
-      const result = await runResendNotification(workId, chapterNumber, updateProgress);
-      await interaction.editReply({
-        content: [
-          "\u2705 **Cap\xEDtulo reenviado**",
-          `Obra: **${result.title}**`,
-          `Cap\xEDtulo: **${result.chapter}**`,
-          `Imagem: **${result.imageMode === "none" ? "indispon\xEDvel" : result.imageMode}**`,
-          `Parser: **${result.parser}**`
-        ].join("\n")
-      });
-    } catch (error40) {
+    const results = [];
+    const failures = [];
+    for (const chapterNumber of chapterNumbers) {
+      try {
+        results.push(await runResendNotification(workId, chapterNumber, updateProgress));
+      } catch (error40) {
+        failures.push(
+          `Cap\xEDtulo ${chapterNumber}: ${error40 instanceof Error ? error40.message : "erro desconhecido"}`
+        );
+      }
+    }
+    if (!results.length) {
       await replyError(
         interaction,
-        error40 instanceof Error ? error40.message : "N\xE3o foi poss\xEDvel reenviar o cap\xEDtulo."
+        failures.length ? `Nenhum cap\xEDtulo foi reenviado.
+${failures.join("\n")}` : "Nenhum cap\xEDtulo foi reenviado."
       );
+      return;
     }
+    const summary = [
+      `\u2705 **${results.length} cap\xEDtulo(s) reenviado(s)**`,
+      `Obra: **${results[0].title}**`,
+      ...results.map(
+        (result) => `\u2022 Cap\xEDtulo **${result.chapter}** \xB7 imagem: **${result.imageMode === "none" ? "indispon\xEDvel" : result.imageMode}** \xB7 parser: **${result.parser}**`
+      )
+    ];
+    if (failures.length) {
+      summary.push("", `\u26A0\uFE0F **${failures.length} falha(s)**`, ...failures);
+    }
+    await interaction.editReply({
+      content: summary.join("\n").slice(0, 1950)
+    });
     return;
   }
   if (subcommand === "canal") {

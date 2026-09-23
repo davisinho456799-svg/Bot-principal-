@@ -86,7 +86,8 @@ export const monitorCommandDefinition = new SlashCommandBuilder()
         .addStringOption((option) =>
           option
             .setName("capitulo")
-            .setDescription("Número do capítulo a reenviar, por exemplo 12 ou 12.5")
+            .setDescription("Capítulo(s) separados por vírgula, por exemplo 12, 13 ou 12.5")
+            .setMaxLength(200)
             .setRequired(true),
         ),
     )
@@ -362,35 +363,70 @@ export async function executeManhwaCommand(interaction: ChatInputCommandInteract
   }
   if (subcommand === "reenviar") {
     const workId = interaction.options.getInteger("obra", true);
-    const chapterNumber = interaction.options.getString("capitulo", true);
+    const chapterNumbers = [...new Set(
+      interaction.options
+        .getString("capitulo", true)
+        .split(/[,\s;]+/)
+        .map((chapter) => chapter.trim())
+        .filter(Boolean),
+    )];
+    if (!chapterNumbers.length) {
+      await replyError(interaction, "Informe pelo menos um número de capítulo.");
+      return;
+    }
+
     const progress: string[] = [];
     const updateProgress = async (message: string) => {
       progress.push(message);
       await interaction.editReply({
         content: [
-          "🔁 **Reenvio do capítulo**",
+          `🔁 **Reenvio de ${chapterNumbers.length > 1 ? "capítulos" : "capítulo"}**`,
           ...progress.map((step, index) => `${index + 1}. ${step}`),
-        ].join("\n"),
+        ].join("\n").slice(0, 1950),
       });
     };
 
-    try {
-      const result = await runResendNotification(workId, chapterNumber, updateProgress);
-      await interaction.editReply({
-        content: [
-          "✅ **Capítulo reenviado**",
-          `Obra: **${result.title}**`,
-          `Capítulo: **${result.chapter}**`,
-          `Imagem: **${result.imageMode === "none" ? "indisponível" : result.imageMode}**`,
-          `Parser: **${result.parser}**`,
-        ].join("\n"),
-      });
-    } catch (error) {
+    const results: Array<{
+      title: string;
+      chapter: string;
+      imageMode: string;
+      parser: string;
+    }> = [];
+    const failures: string[] = [];
+    for (const chapterNumber of chapterNumbers) {
+      try {
+        results.push(await runResendNotification(workId, chapterNumber, updateProgress));
+      } catch (error) {
+        failures.push(
+          `Capítulo ${chapterNumber}: ${error instanceof Error ? error.message : "erro desconhecido"}`,
+        );
+      }
+    }
+
+    if (!results.length) {
       await replyError(
         interaction,
-        error instanceof Error ? error.message : "Não foi possível reenviar o capítulo.",
+        failures.length
+          ? `Nenhum capítulo foi reenviado.\n${failures.join("\n")}`
+          : "Nenhum capítulo foi reenviado.",
       );
+      return;
     }
+
+    const summary = [
+      `✅ **${results.length} capítulo(s) reenviado(s)**`,
+      `Obra: **${results[0].title}**`,
+      ...results.map((result) =>
+        `• Capítulo **${result.chapter}** · imagem: **${result.imageMode === "none" ? "indisponível" : result.imageMode}** · parser: **${result.parser}**`,
+      ),
+    ];
+    if (failures.length) {
+      summary.push("", `⚠️ **${failures.length} falha(s)**`, ...failures);
+    }
+
+    await interaction.editReply({
+      content: summary.join("\n").slice(0, 1950),
+    });
     return;
   }
   if (subcommand === "canal") {
