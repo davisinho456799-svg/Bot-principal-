@@ -802,15 +802,10 @@ async function captureGroup(
             if (srcset && (!image.srcset || !usable(current))) image.srcset = srcset;
           }
 
-          for (const media of [
-            card,
-            ...Array.from(card.querySelectorAll(
-              "picture, source, [data-bg], [data-ep_thumb1], [data-ep_thumb2], [data-ep_thumb3]",
-            )),
-          ]) {
-            const value = firstUsable(media, lazyAttributes);
-            if (value) setBackground(media, value);
-          }
+          // Keep the real <img> thumbnail already present in the chapter card.
+          // Do not promote data-ep_thumb* values to CSS backgrounds: those
+          // attributes describe additional background panels from the source
+          // page, which makes the capture include three extra images.
         }
       })(${JSON.stringify(cardIds)}, ${JSON.stringify(platform)})`,
     )
