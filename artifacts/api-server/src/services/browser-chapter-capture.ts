@@ -450,10 +450,7 @@ async function findRenderedChapters(
             if (parentRect.height > 600 || parentRect.width > 1_400) break;
             continue;
           }
-          // Stop at the first valid chapter card. Going farther up can select
-          // a list wrapper containing several cards and repeat images.
           cardElement = parent;
-          break;
         }
 
         const rect = cardElement.getBoundingClientRect();
