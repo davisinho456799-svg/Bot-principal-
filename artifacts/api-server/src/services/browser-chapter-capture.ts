@@ -451,6 +451,9 @@ async function findRenderedChapters(
             continue;
           }
           cardElement = parent;
+          // Pare no primeiro card válido. Continuar subindo pode selecionar
+          // o contêiner da lista inteira e repetir a mesma imagem na captura.
+          break;
         }
 
         const rect = cardElement.getBoundingClientRect();
