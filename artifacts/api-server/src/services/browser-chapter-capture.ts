@@ -9,7 +9,7 @@ const MAX_CAPTURE_HEIGHT = 4_800;
 // Keep the pixels of the real platform card. Padding here would make the
 // Discord attachment look like a reconstructed strip instead of the source UI.
 const CARD_PADDING = 0;
-const CARD_MEDIA_WAIT_MS = 8_000;
+const CARD_MEDIA_WAIT_MS = 30_000;
 const CARD_MEDIA_POLL_MS = 150;
 
 type ChapterBox = {
