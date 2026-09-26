@@ -51,6 +51,7 @@ type BrowserChapterSnapshot = BrowserChapter & {
 
 let browserPromise: Promise<Browser> | null = null;
 let contextPromise: Promise<BrowserContext> | null = null;
+let imageFilterSequence = 0;
 type Chromium = typeof import("playwright").chromium;
 let chromiumPromise: Promise<Chromium> | null = null;
 
@@ -666,6 +667,351 @@ function makeGreedyGroups(
   return groups;
 }
 
+export type CaptureThumbnailTarget = {
+  captureId: string;
+  thumbnailUrl: string;
+};
+
+async function waitForPrimaryThumbnails(
+  page: Page,
+  targets: CaptureThumbnailTarget[],
+  platform: MonitorPlatform,
+): Promise<boolean> {
+  return page.evaluate(
+    ({ targets, platform, timeoutMs, pollMs }) => {
+      const blockedWords = platform === "toomics"
+        ? /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[/._-])(?:lock|locked|no[-_ ]?image|placeholder)(?:[/._-]|$)/i
+        : /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)|(?:^|[/._-])(?:banner|bnr|lock|locked|no[-_ ]?image|placeholder)(?:[/._-]|$)/i;
+      const imageAttributes = [
+        "src",
+        "data-src",
+        "data-original",
+        "data-lazy-src",
+        "data-image",
+        "data-bg",
+        "data-ep_thumb1",
+        "data-ep_thumb2",
+        "data-ep_thumb3",
+        "data-thumbnail",
+        "data-thumb",
+      ];
+      const normalizeUrl = (value: string) => {
+        try {
+          return new URL(value, location.href).href;
+        } catch {
+          return "";
+        }
+      };
+      const backgroundUrls = (value: string) =>
+        [...value.matchAll(/url\((?:"|')?([^"')]+)(?:"|')?\)/gi)]
+          .map((match) => normalizeUrl(match[1] ?? ""))
+          .filter(Boolean);
+      const visibleAndLarge = (element: HTMLElement) => {
+        const style = getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+        return style.display !== "none" &&
+          style.visibility !== "hidden" &&
+          Number.parseFloat(style.opacity || "1") > 0 &&
+          rect.width >= 48 &&
+          rect.height >= 30;
+      };
+      const contextOf = (element: HTMLElement) =>
+        imageAttributes
+          .map((attribute) => element.getAttribute(attribute) || "")
+          .join(" ");
+      const imageHasPrimaryUrl = (
+        image: HTMLImageElement,
+        expectedUrl: string,
+      ) => {
+        const urls = [
+          image.currentSrc,
+          image.src,
+          ...imageAttributes.map((attribute) => image.getAttribute(attribute) || ""),
+        ].map(normalizeUrl);
+        return urls.includes(expectedUrl);
+      };
+      const hasLoadedPrimaryThumbnail = (
+        card: Element,
+        thumbnailUrl: string,
+      ) => {
+        const expectedUrl = normalizeUrl(thumbnailUrl);
+        if (!expectedUrl) return false;
+
+        const images = Array.from(card.querySelectorAll("img")).some((image) => {
+          const element = image as HTMLImageElement;
+          return visibleAndLarge(element) &&
+            element.complete &&
+            element.naturalWidth > 0 &&
+            !blockedWords.test(contextOf(element)) &&
+            imageHasPrimaryUrl(element, expectedUrl);
+        });
+        if (images) return true;
+
+        const mediaNodes = [
+          card,
+          ...Array.from(card.querySelectorAll("*")),
+        ].filter((node): node is HTMLElement => node instanceof HTMLElement);
+        return mediaNodes.some((node) => {
+          if (!visibleAndLarge(node) || blockedWords.test(contextOf(node))) return false;
+          const styles = [
+            getComputedStyle(node).backgroundImage,
+            getComputedStyle(node, "::before").backgroundImage,
+            getComputedStyle(node, "::after").backgroundImage,
+          ];
+          return styles.some((style) => backgroundUrls(style).includes(expectedUrl));
+        });
+      };
+
+      const deadline = Date.now() + timeoutMs;
+      return new Promise<boolean>((resolve) => {
+        const check = () => {
+          const ready = targets.every((target) => {
+            const card = document.querySelector(
+              `[data-monitor-capture-card="${target.captureId}"]`,
+            );
+            return Boolean(
+              card && hasLoadedPrimaryThumbnail(card, target.thumbnailUrl),
+            );
+          });
+          if (ready) {
+            resolve(true);
+          } else if (Date.now() >= deadline) {
+            resolve(false);
+          } else {
+            setTimeout(check, pollMs);
+          }
+        };
+        check();
+      });
+    },
+    {
+      targets,
+      platform,
+      timeoutMs: CARD_MEDIA_WAIT_MS,
+      pollMs: CARD_MEDIA_POLL_MS,
+    },
+  );
+}
+
+export async function isolatePrimaryThumbnails(
+  page: Page,
+  targets: CaptureThumbnailTarget[],
+): Promise<void> {
+  const result = await page.evaluate(({ captureTargets, filterId }) => {
+    const imageAttributes = [
+      "src",
+      "data-src",
+      "data-original",
+      "data-lazy-src",
+      "data-image",
+      "data-bg",
+      "data-ep_thumb1",
+      "data-ep_thumb2",
+      "data-ep_thumb3",
+      "data-thumbnail",
+      "data-thumb",
+    ];
+    const normalizeUrl = (value: string) => {
+      try {
+        return new URL(value, location.href).href;
+      } catch {
+        return "";
+      }
+    };
+    const backgroundUrls = (value: string) =>
+      [...value.matchAll(/url\((?:"|')?([^"')]+)(?:"|')?\)/gi)]
+        .map((match) => normalizeUrl(match[1] ?? ""))
+        .filter(Boolean);
+    const visibleAndLarge = (element: HTMLElement) => {
+      const style = getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return style.display !== "none" &&
+        style.visibility !== "hidden" &&
+        Number.parseFloat(style.opacity || "1") > 0 &&
+        rect.width >= 48 &&
+        rect.height >= 30;
+    };
+    const hideEmptyContainers = (
+      node: HTMLElement,
+      card: HTMLElement,
+      primaryNode: HTMLElement,
+    ) => {
+      let current: HTMLElement | null = node;
+      while (
+        current &&
+        current !== card &&
+        current.textContent?.trim() === "" &&
+        !current.contains(primaryNode)
+      ) {
+        const parent: HTMLElement | null = current.parentElement;
+        current.style.setProperty("display", "none", "important");
+        current = parent;
+      }
+    };
+    const imageUrls = (image: HTMLImageElement) =>
+      [
+        image.currentSrc,
+        image.src,
+        ...imageAttributes.map((attribute) => image.getAttribute(attribute) || ""),
+      ]
+        .map(normalizeUrl)
+        .filter(Boolean);
+    const cssRules: string[] = [];
+    const plans: Array<{
+      card: HTMLElement;
+      expectedUrl: string;
+      primary: {
+        kind: "image" | "background" | "before" | "after";
+        node: HTMLElement;
+      };
+    }> = [];
+
+    for (const [targetIndex, target] of captureTargets.entries()) {
+      const card = document.querySelector(
+        `[data-monitor-capture-card="${target.captureId}"]`,
+      );
+      const expectedUrl = normalizeUrl(target.thumbnailUrl);
+      if (!(card instanceof HTMLElement) || !expectedUrl) {
+        return {
+          ok: false,
+          error: `Chapter ${target.captureId} has no usable primary thumbnail URL`,
+        };
+      }
+
+      let primary: {
+        kind: "image" | "background" | "before" | "after";
+        node: HTMLElement;
+      } | null = null;
+      for (const image of Array.from(card.querySelectorAll("img"))) {
+        const element = image as HTMLImageElement;
+        if (
+          visibleAndLarge(element) &&
+          element.complete &&
+          element.naturalWidth > 0 &&
+          imageUrls(element).includes(expectedUrl)
+        ) {
+          primary = { kind: "image", node: element };
+          break;
+        }
+      }
+
+      const nodes = [
+        card,
+        ...Array.from(card.querySelectorAll("*")),
+      ].filter((node): node is HTMLElement => node instanceof HTMLElement);
+      if (!primary) {
+        for (const node of nodes) {
+          if (!visibleAndLarge(node)) continue;
+          if (backgroundUrls(getComputedStyle(node).backgroundImage).includes(expectedUrl)) {
+            primary = { kind: "background", node };
+            break;
+          }
+          if (backgroundUrls(getComputedStyle(node, "::before").backgroundImage).includes(expectedUrl)) {
+            primary = { kind: "before", node };
+            break;
+          }
+          if (backgroundUrls(getComputedStyle(node, "::after").backgroundImage).includes(expectedUrl)) {
+            primary = { kind: "after", node };
+            break;
+          }
+        }
+      }
+      if (!primary) {
+        return {
+          ok: false,
+          error: `Primary thumbnail could not be isolated for chapter ${target.captureId}`,
+        };
+      }
+
+      plans.push({ card, expectedUrl, primary });
+
+      for (const node of nodes) {
+        for (const pseudo of ["before", "after"] as const) {
+          const pseudoUrls = backgroundUrls(
+            getComputedStyle(node, `::${pseudo}`).backgroundImage,
+          );
+          if (!pseudoUrls.length) continue;
+          const marker = `${filterId}-${targetIndex}-${pseudo}-${cssRules.length}`;
+          const markerAttribute = `data-monitor-single-image-${pseudo}`;
+          node.setAttribute(markerAttribute, marker);
+          const selector = `[${markerAttribute}="${marker}"]::${pseudo}`;
+          if (
+            primary.kind === pseudo &&
+            primary.node === node &&
+            pseudoUrls.includes(expectedUrl)
+          ) {
+            cssRules.push(
+              `${selector}{background-image:url(${JSON.stringify(expectedUrl)})!important}`,
+            );
+          } else {
+            cssRules.push(
+              `${selector}{background-image:none!important;content:none!important}`,
+            );
+          }
+        }
+      }
+    }
+
+    for (const { card, expectedUrl, primary } of plans) {
+      for (const image of Array.from(card.querySelectorAll("img"))) {
+        if (primary.kind !== "image" || image !== primary.node) {
+          const element = image as HTMLImageElement;
+          element.style.setProperty(
+            "display",
+            "none",
+            "important",
+          );
+          hideEmptyContainers(element, card, primary.node);
+        }
+      }
+
+      const nodes = [
+        card,
+        ...Array.from(card.querySelectorAll("*")),
+      ].filter((node): node is HTMLElement => node instanceof HTMLElement);
+      for (const node of nodes) {
+        const urls = backgroundUrls(getComputedStyle(node).backgroundImage);
+        if (!urls.length) continue;
+        if (primary.kind === "background" && node === primary.node) {
+          node.style.setProperty(
+            "background-image",
+            `url(${JSON.stringify(expectedUrl)})`,
+            "important",
+          );
+        } else {
+          node.style.setProperty("background-image", "none", "important");
+          hideEmptyContainers(node, card, primary.node);
+        }
+      }
+
+      for (const node of nodes) {
+        if (node === primary.node || node.contains(primary.node)) continue;
+        if (
+          getComputedStyle(node, "::before").backgroundImage !== "none" ||
+          getComputedStyle(node, "::after").backgroundImage !== "none"
+        ) {
+          hideEmptyContainers(node, card, primary.node);
+        }
+      }
+    }
+
+    if (cssRules.length) {
+      const style = document.createElement("style");
+      style.setAttribute("data-monitor-single-image-filter", "true");
+      style.textContent = cssRules.join("\n");
+      (document.head ?? document.documentElement).append(style);
+    }
+    return { ok: true, error: "" };
+  }, {
+    captureTargets: targets,
+    filterId: `filter-${imageFilterSequence++}`,
+  });
+
+  if (!result.ok) {
+    throw new Error(result.error || "Could not isolate the primary chapter thumbnail");
+  }
+}
+
 async function captureGroup(
   page: Page,
   chapters: BrowserChapterSnapshot[],
@@ -717,11 +1063,11 @@ async function captureGroup(
     )
     .catch(() => undefined);
 
-  // A card can be detected before its lazy thumbnail is ready. Scroll to
-  // every selected card and wait for a real image (or a CSS background) before
-  // taking the screenshot. Without this, a valid PNG containing only the card
-  // text is accepted and sent to Discord.
   const cardIds = chapters.map((chapter) => chapter.captureId);
+  const captureTargets = chapters.map((chapter) => ({
+    captureId: chapter.captureId,
+    thumbnailUrl: chapter.thumbnailUrl,
+  }));
   for (const cardId of cardIds) {
     await page
       .locator(`[data-monitor-capture-card="${cardId}"]`)
@@ -811,106 +1157,20 @@ async function captureGroup(
     )
     .catch(() => undefined);
 
-  const mediaReady = await page.evaluate(
-      `((ids, timeoutMs, pollMs, platform) => {
-       const blockedWords = platform === "toomics"
-         ? /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[/._-])(?:lock|locked|no[-_ ]?image|placeholder)(?:[/._-]|$)/i
-         : /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)|(?:^|[/._-])(?:banner|bnr|lock|locked|no[-_ ]?image|placeholder)(?:[/._-]|$)/i;
-      const mediaAttributes = [
-        "src",
-        "srcset",
-        "data-src",
-        "data-srcset",
-        "data-original",
-        "data-lazy-src",
-        "data-image",
-        "data-bg",
-        "data-ep_thumb1",
-        "data-ep_thumb2",
-        "data-ep_thumb3",
-        "data-thumbnail",
-        "data-thumb",
-        "alt",
-        "title",
-        "class",
-      ];
-
-       const visible = (element) => {
-        const style = getComputedStyle(element);
-        const rect = element.getBoundingClientRect();
-        return style.display !== "none" &&
-          style.visibility !== "hidden" &&
-          Number.parseFloat(style.opacity || "1") > 0 &&
-          rect.width > 2 &&
-          rect.height > 2;
-      };
-
-       const substantial = (element) => {
-         const rect = element.getBoundingClientRect();
-         return rect.width >= 48 && rect.height >= 30;
-       };
-
-      const contextOf = (element) => mediaAttributes
-        .map((attribute) => element.getAttribute(attribute) || "")
-        .join(" ");
-
-      const hasReadyMedia = (card) => {
-        const images = Array.from(card.querySelectorAll("img")).some((image) =>
-           visible(image) &&
-           substantial(image) &&
-          image.complete &&
-          image.naturalWidth > 0 &&
-          !blockedWords.test(contextOf(image)),
-        );
-        if (images) return true;
-
-        const backgroundNodes = [card, ...Array.from(card.querySelectorAll(
-          "[data-bg], [data-ep_thumb1], [data-ep_thumb2], [data-ep_thumb3], picture, source",
-        ))];
-        return backgroundNodes.some((node) => {
-           if (!visible(node) || !substantial(node)) return false;
-          const context = contextOf(node);
-          if (blockedWords.test(context)) return false;
-          const style = getComputedStyle(node);
-          const before = getComputedStyle(node, "::before").backgroundImage;
-          const after = getComputedStyle(node, "::after").backgroundImage;
-          return [style.backgroundImage, before, after].some((value) =>
-            Boolean(value && value !== "none" && /url\\(/i.test(value)),
-          );
-        });
-      };
-
-      const check = () => {
-        const cards = ids.map((id) =>
-          document.querySelector('[data-monitor-capture-card="' + id + '"]'),
-        );
-        return cards.length === ids.length &&
-          cards.every((card) => card && hasReadyMedia(card));
-      };
-
-      return new Promise((resolve) => {
-        const deadline = Date.now() + timeoutMs;
-        const poll = () => {
-          if (check()) {
-            resolve(true);
-            return;
-          }
-          if (Date.now() >= deadline) {
-            resolve(false);
-            return;
-          }
-          setTimeout(poll, pollMs);
-        };
-        poll();
-      });
-    })(${JSON.stringify(cardIds)}, ${CARD_MEDIA_WAIT_MS}, ${CARD_MEDIA_POLL_MS}, ${JSON.stringify(platform)})`,
+  // Wait for the thumbnail selected during detection, not merely any image
+  // inside the card. A site can render its extra thumb panels first.
+  const mediaReady = await waitForPrimaryThumbnails(
+    page,
+    captureTargets,
+    platform,
   );
 
   if (!mediaReady) {
-    throw new Error("Selected chapter cards did not finish loading their thumbnails");
+    throw new Error("Selected primary chapter thumbnails did not finish loading");
   }
 
   await page.waitForTimeout(150);
+  await isolatePrimaryThumbnails(page, captureTargets);
 
   const boxes = (
     await Promise.all(
