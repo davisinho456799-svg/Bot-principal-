@@ -159282,7 +159282,7 @@ async function runMonitor() {
 }
 
 // src/services/monitor-interval.ts
-var DEFAULT_MONITOR_INTERVAL_MINUTES = 60;
+var DEFAULT_MONITOR_INTERVAL_MINUTES = 7 * 60;
 function getMonitorIntervalMinutes(configuredInterval) {
   const environmentInterval = Number(process.env.MONITOR_INTERVAL_MINUTES);
   if (Number.isFinite(environmentInterval) && environmentInterval >= 5) {
@@ -171527,7 +171527,13 @@ function notificationEventKey(channelId, title, newChapters) {
 // src/bot/notificacao-service.ts
 var ANILIST_API13 = "https://graphql.anilist.co";
 var COMICK_API_BASE = (process.env.COMICK_API_BASE ?? "https://api.comick.dev").replace(/\/+$/, "");
-var CHECK_INTERVAL_MS = 2 * 60 * 60 * 1e3;
+var DEFAULT_EMBED_MONITOR_INTERVAL_HOURS = 24;
+function getEmbedMonitorIntervalMs() {
+  const configuredHours = Number(process.env.EMBED_MONITOR_INTERVAL_HOURS);
+  const intervalHours = Number.isFinite(configuredHours) && configuredHours >= 1 ? configuredHours : DEFAULT_EMBED_MONITOR_INTERVAL_HOURS;
+  return Math.floor(intervalHours * 60 * 60 * 1e3);
+}
+var CHECK_INTERVAL_MS = getEmbedMonitorIntervalMs();
 var BETWEEN_TITLES_DELAY_MS = 1e4;
 var COMICK_COOLDOWN_STEPS_MS = [
   30 * 60 * 1e3,
@@ -173247,7 +173253,7 @@ function startNotificacaoService(client) {
   };
   setTimeout(runSafe, 6e4);
   setInterval(runSafe, CHECK_INTERVAL_MS);
-  logger.info({ intervalHoras: 2 }, "Servi\xE7o de notifica\xE7\xF5es iniciado");
+  logger.info({ intervalHoras: CHECK_INTERVAL_MS / (60 * 60 * 1e3) }, "Servi\xE7o de notifica\xE7\xF5es por embed iniciado");
 }
 
 // src/bot/commands/verificar.ts
