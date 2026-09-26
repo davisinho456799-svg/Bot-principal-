@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { chromium, type Browser, type Page } from "playwright";
+import sharp from "sharp";
 import {
   isolatePrimaryThumbnails,
   type CaptureThumbnailTarget,
@@ -27,6 +28,27 @@ afterAll(async () => {
 function svgDataUrl(color: string) {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="96" height="72"><rect width="96" height="72" fill="${color}"/></svg>`;
   return `data:image/svg+xml,${encodeURIComponent(svg)}`;
+}
+
+async function countSolidColorPixels(
+  screenshot: Buffer,
+  color: [number, number, number],
+) {
+  const { data, info } = await sharp(screenshot)
+    .removeAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  let count = 0;
+  for (let offset = 0; offset < data.length; offset += info.channels) {
+    if (
+      data[offset] === color[0] &&
+      data[offset + 1] === color[1] &&
+      data[offset + 2] === color[2]
+    ) {
+      count += 1;
+    }
+  }
+  return count;
 }
 
 describe("single-thumbnail chapter capture", () => {
@@ -96,6 +118,12 @@ describe("single-thumbnail chapter capture", () => {
     expect(result.visibleImages).toEqual([primary]);
     expect(result.renderedBackgrounds).toEqual([]);
     expect(result.text).toContain("Chapter 14");
+
+    const screenshot = await page.screenshot({ type: "png" });
+    expect(await countSolidColorPixels(screenshot, [212, 59, 53])).toBeGreaterThan(100);
+    expect(await countSolidColorPixels(screenshot, [59, 115, 212])).toBe(0);
+    expect(await countSolidColorPixels(screenshot, [55, 163, 107])).toBe(0);
+    expect(await countSolidColorPixels(screenshot, [212, 156, 53])).toBe(0);
     await page.close();
   });
 });
