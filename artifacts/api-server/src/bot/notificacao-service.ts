@@ -46,7 +46,17 @@ export type { SourceErrorKind } from "./notificacao-utils.js";
 
 const ANILIST_API = "https://graphql.anilist.co";
 const COMICK_API_BASE = (process.env.COMICK_API_BASE ?? "https://api.comick.dev").replace(/\/+$/, "");
-const CHECK_INTERVAL_MS = 2 * 60 * 60 * 1000; // 2 horas
+const DEFAULT_EMBED_MONITOR_INTERVAL_HOURS = 24;
+
+function getEmbedMonitorIntervalMs(): number {
+  const configuredHours = Number(process.env.EMBED_MONITOR_INTERVAL_HOURS);
+  const intervalHours = Number.isFinite(configuredHours) && configuredHours >= 1
+    ? configuredHours
+    : DEFAULT_EMBED_MONITOR_INTERVAL_HOURS;
+  return Math.floor(intervalHours * 60 * 60 * 1000);
+}
+
+const CHECK_INTERVAL_MS = getEmbedMonitorIntervalMs();
 // A pausa deve proteger a fonte que impõe limite, não parar a fila inteira por
 // um minuto. O scanner continua sequencial; esta margem evita rajadas no
 // Comick sem deixar dezenas de títulos esperando desnecessariamente.

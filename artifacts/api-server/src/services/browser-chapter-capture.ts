@@ -9,6 +9,8 @@ const MAX_CAPTURE_HEIGHT = 4_800;
 // Keep the pixels of the real platform card. Padding here would make the
 // Discord attachment look like a reconstructed strip instead of the source UI.
 const CARD_PADDING = 0;
+const CARD_MEDIA_WAIT_MS = 30_000;
+const CARD_MEDIA_POLL_MS = 150;
 
 type ChapterBox = {
   x: number;
@@ -49,6 +51,7 @@ type BrowserChapterSnapshot = BrowserChapter & {
 
 let browserPromise: Promise<Browser> | null = null;
 let contextPromise: Promise<BrowserContext> | null = null;
+let imageFilterSequence = 0;
 type Chromium = typeof import("playwright").chromium;
 let chromiumPromise: Promise<Chromium> | null = null;
 
@@ -152,21 +155,24 @@ async function loginToomics(page: Page): Promise<string> {
   if (!email || !password) return "credenciais não configuradas";
 
   try {
+    // `visible` is a Playwright locator pseudo-class, not an option accepted
+    // by locator.filter(). Without it the hidden login modal can win over the
+    // real form and the listing is reopened without an authenticated session.
     const emailSelector =
-      'input[type="email"], input[name*="email" i], input[name*="user" i], input[name*="login" i], input[name*="id" i]';
-    const passwordSelector = 'input[type="password"]';
-    let emailInput = page.locator(emailSelector).filter({ visible: true }).first();
-    let passwordInput = page.locator(passwordSelector).filter({ visible: true }).first();
+      'input[type="email"]:visible, input[name*="email" i]:visible, input[name*="user" i]:visible, input[name*="login" i]:visible, input[name*="id" i]:visible';
+    const passwordSelector = 'input[type="password"]:visible';
+    let emailInput = page.locator(emailSelector).first();
+    let passwordInput = page.locator(passwordSelector).first();
 
     if (!(await passwordInput.count())) {
       const loginLink = page.locator(
-        'a[href*="login" i], a[href*="signin" i], button:has-text("Login"), button:has-text("Entrar"), button:has-text("로그인")',
-      ).filter({ visible: true }).first();
+        'a[href*="login" i]:visible, a[href*="signin" i]:visible, button:has-text("Login"):visible, button:has-text("Entrar"):visible, button:has-text("로그인"):visible',
+      ).first();
       if (await loginLink.count()) {
         await loginLink.click().catch(() => undefined);
         await page.waitForTimeout(500);
-        emailInput = page.locator(emailSelector).filter({ visible: true }).first();
-        passwordInput = page.locator(passwordSelector).filter({ visible: true }).first();
+        emailInput = page.locator(emailSelector).first();
+        passwordInput = page.locator(passwordSelector).first();
       }
     }
 
@@ -192,8 +198,8 @@ async function loginToomics(page: Page): Promise<string> {
           .waitFor({ state: "attached", timeout: 8_000 })
           .catch(() => undefined);
 
-        const loginEmail = page.locator("#user_id").first();
-        const loginPassword = page.locator("#user_pw").first();
+        const loginEmail = page.locator("#user_id:visible").first();
+        const loginPassword = page.locator("#user_pw:visible").first();
         if (await loginEmail.count() && await loginPassword.count()) {
           emailInput = loginEmail;
           passwordInput = loginPassword;
@@ -209,8 +215,8 @@ async function loginToomics(page: Page): Promise<string> {
     await emailInput.fill(email, { force: true });
     await passwordInput.fill(password, { force: true });
     const submit = page.locator(
-      'form:has(#user_id) button[type="submit"], form:has(#user_id) input[type="submit"], button:has-text("Login"), button:has-text("Entrar"), button:has-text("로그인")',
-    ).filter({ visible: true }).last();
+      'form:has(#user_id) button[type="submit"]:visible, form:has(#user_id) input[type="submit"]:visible, button:has-text("Login"):visible, button:has-text("Entrar"):visible, button:has-text("로그인"):visible',
+    ).last();
     const submitButton = await submit.count()
       ? submit
       : page.locator('form:has(#user_id) button[type="submit"], form:has(#user_id) input[type="submit"]').last();
@@ -271,7 +277,12 @@ async function findRenderedChapters(
         "[id*='chapter']",
         "div"
       ].join(",");
-      const blockedWords = /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)|(?:^|[/._-])(?:banner|bnr)(?:[/._-]|$)/i;
+       // Toomics uses "banner" in legitimate episode-thumbnail paths.
+       // Keep generic banner filtering for the other sites, but do not hide
+       // a real Toomics card image just because its CDN path says banner.
+       const blockedWords = platform === "toomics"
+         ? /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[/._-])(?:lock|locked|no[-_ ]?image|placeholder)(?:[/._-]|$)/i
+         : /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)|(?:^|[/._-])(?:banner|bnr|lock|locked|no[-_ ]?image|placeholder)(?:[/._-]|$)/i;
       const chapterLabel = /(?:chapter|episode|episodio|epis[oó]dio|ep(?:isode)?|ch(?:apter)?|cap(?:itulo|ítulo)?|cap\\\\.)/i;
       const chapterPattern = /(?:chapter|episode|episodio|epis[oó]dio|ep(?:isode)?|ch(?:apter)?|cap(?:itulo|ítulo)?|cap\\\\.)\\\\s*(?:#|[-_:])?\\\\s*(\\\\d{1,5}(?:[.,]\\\\d+)?)/ig;
       const hashPattern = /(?:^|\\\\s)#(\\\\d{1,5}(?:[.,]\\\\d+)?)(?=\\\\s|$)/g;
@@ -441,6 +452,9 @@ async function findRenderedChapters(
             continue;
           }
           cardElement = parent;
+          // Pare no primeiro card válido. Continuar subindo pode selecionar
+          // o contêiner da lista inteira e repetir a mesma imagem na captura.
+          break;
         }
 
         const rect = cardElement.getBoundingClientRect();
@@ -518,7 +532,10 @@ async function findRenderedChapters(
          // chapter-like number without being a visual release card. A
          // candidate must have actual card media; otherwise it can produce a
          // phantom chapter notification with no photo.
-         if (!hasImage || !hasCardDimensions) continue;
+          // A visible lock/blank placeholder is not a usable Toomics
+          // thumbnail. Do not let it become a valid browser capture, because
+          // Playwright would faithfully screenshot the white placeholder.
+          if (!hasImage || !hasCardDimensions || (platform === "toomics" && !thumbnailValue)) continue;
 
         // A platform chapter card is expected to have a marker, link, or
         // image. This rejects the page wrapper and promotional banners.
@@ -650,12 +667,357 @@ function makeGreedyGroups(
   return groups;
 }
 
+export type CaptureThumbnailTarget = {
+  captureId: string;
+  thumbnailUrl: string;
+};
+
+async function waitForPrimaryThumbnails(
+  page: Page,
+  targets: CaptureThumbnailTarget[],
+  platform: MonitorPlatform,
+): Promise<boolean> {
+  return page.evaluate(
+    ({ targets, platform, timeoutMs, pollMs }) => {
+      const blockedWords = platform === "toomics"
+        ? /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[/._-])(?:lock|locked|no[-_ ]?image|placeholder)(?:[/._-]|$)/i
+        : /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)|(?:^|[/._-])(?:banner|bnr|lock|locked|no[-_ ]?image|placeholder)(?:[/._-]|$)/i;
+      const imageAttributes = [
+        "src",
+        "data-src",
+        "data-original",
+        "data-lazy-src",
+        "data-image",
+        "data-bg",
+        "data-ep_thumb1",
+        "data-ep_thumb2",
+        "data-ep_thumb3",
+        "data-thumbnail",
+        "data-thumb",
+      ];
+      const normalizeUrl = (value: string) => {
+        try {
+          return new URL(value, location.href).href;
+        } catch {
+          return "";
+        }
+      };
+      const backgroundUrls = (value: string) =>
+        [...value.matchAll(/url\((?:"|')?([^"')]+)(?:"|')?\)/gi)]
+          .map((match) => normalizeUrl(match[1] ?? ""))
+          .filter(Boolean);
+      const visibleAndLarge = (element: HTMLElement) => {
+        const style = getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+        return style.display !== "none" &&
+          style.visibility !== "hidden" &&
+          Number.parseFloat(style.opacity || "1") > 0 &&
+          rect.width >= 48 &&
+          rect.height >= 30;
+      };
+      const contextOf = (element: HTMLElement) =>
+        imageAttributes
+          .map((attribute) => element.getAttribute(attribute) || "")
+          .join(" ");
+      const imageHasPrimaryUrl = (
+        image: HTMLImageElement,
+        expectedUrl: string,
+      ) => {
+        const urls = [
+          image.currentSrc,
+          image.src,
+          ...imageAttributes.map((attribute) => image.getAttribute(attribute) || ""),
+        ].map(normalizeUrl);
+        return urls.includes(expectedUrl);
+      };
+      const hasLoadedPrimaryThumbnail = (
+        card: Element,
+        thumbnailUrl: string,
+      ) => {
+        const expectedUrl = normalizeUrl(thumbnailUrl);
+        if (!expectedUrl) return false;
+
+        const images = Array.from(card.querySelectorAll("img")).some((image) => {
+          const element = image as HTMLImageElement;
+          return visibleAndLarge(element) &&
+            element.complete &&
+            element.naturalWidth > 0 &&
+            !blockedWords.test(contextOf(element)) &&
+            imageHasPrimaryUrl(element, expectedUrl);
+        });
+        if (images) return true;
+
+        const mediaNodes = [
+          card,
+          ...Array.from(card.querySelectorAll("*")),
+        ].filter((node): node is HTMLElement => node instanceof HTMLElement);
+        return mediaNodes.some((node) => {
+          if (!visibleAndLarge(node) || blockedWords.test(contextOf(node))) return false;
+          const styles = [
+            getComputedStyle(node).backgroundImage,
+            getComputedStyle(node, "::before").backgroundImage,
+            getComputedStyle(node, "::after").backgroundImage,
+          ];
+          return styles.some((style) => backgroundUrls(style).includes(expectedUrl));
+        });
+      };
+
+      const deadline = Date.now() + timeoutMs;
+      return new Promise<boolean>((resolve) => {
+        const check = () => {
+          const ready = targets.every((target) => {
+            const card = document.querySelector(
+              `[data-monitor-capture-card="${target.captureId}"]`,
+            );
+            return Boolean(
+              card && hasLoadedPrimaryThumbnail(card, target.thumbnailUrl),
+            );
+          });
+          if (ready) {
+            resolve(true);
+          } else if (Date.now() >= deadline) {
+            resolve(false);
+          } else {
+            setTimeout(check, pollMs);
+          }
+        };
+        check();
+      });
+    },
+    {
+      targets,
+      platform,
+      timeoutMs: CARD_MEDIA_WAIT_MS,
+      pollMs: CARD_MEDIA_POLL_MS,
+    },
+  );
+}
+
+export async function isolatePrimaryThumbnails(
+  page: Page,
+  targets: CaptureThumbnailTarget[],
+): Promise<void> {
+  const result = await page.evaluate(({ captureTargets, filterId }) => {
+    const imageAttributes = [
+      "src",
+      "data-src",
+      "data-original",
+      "data-lazy-src",
+      "data-image",
+      "data-bg",
+      "data-ep_thumb1",
+      "data-ep_thumb2",
+      "data-ep_thumb3",
+      "data-thumbnail",
+      "data-thumb",
+    ];
+    const normalizeUrl = (value: string) => {
+      try {
+        return new URL(value, location.href).href;
+      } catch {
+        return "";
+      }
+    };
+    const backgroundUrls = (value: string) =>
+      [...value.matchAll(/url\((?:"|')?([^"')]+)(?:"|')?\)/gi)]
+        .map((match) => normalizeUrl(match[1] ?? ""))
+        .filter(Boolean);
+    const visibleAndLarge = (element: HTMLElement) => {
+      const style = getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return style.display !== "none" &&
+        style.visibility !== "hidden" &&
+        Number.parseFloat(style.opacity || "1") > 0 &&
+        rect.width >= 48 &&
+        rect.height >= 30;
+    };
+    const hideEmptyContainers = (
+      node: HTMLElement,
+      card: HTMLElement,
+      primaryNode: HTMLElement,
+    ) => {
+      let current: HTMLElement | null = node;
+      while (
+        current &&
+        current !== card &&
+        current.textContent?.trim() === "" &&
+        !current.contains(primaryNode)
+      ) {
+        const parent: HTMLElement | null = current.parentElement;
+        current.style.setProperty("display", "none", "important");
+        current = parent;
+      }
+    };
+    const imageUrls = (image: HTMLImageElement) =>
+      [
+        image.currentSrc,
+        image.src,
+        ...imageAttributes.map((attribute) => image.getAttribute(attribute) || ""),
+      ]
+        .map(normalizeUrl)
+        .filter(Boolean);
+    const cssRules: string[] = [];
+    const plans: Array<{
+      card: HTMLElement;
+      expectedUrl: string;
+      primary: {
+        kind: "image" | "background" | "before" | "after";
+        node: HTMLElement;
+      };
+    }> = [];
+
+    for (const [targetIndex, target] of captureTargets.entries()) {
+      const card = document.querySelector(
+        `[data-monitor-capture-card="${target.captureId}"]`,
+      );
+      const expectedUrl = normalizeUrl(target.thumbnailUrl);
+      if (!(card instanceof HTMLElement) || !expectedUrl) {
+        return {
+          ok: false,
+          error: `Chapter ${target.captureId} has no usable primary thumbnail URL`,
+        };
+      }
+
+      let primary: {
+        kind: "image" | "background" | "before" | "after";
+        node: HTMLElement;
+      } | null = null;
+      for (const image of Array.from(card.querySelectorAll("img"))) {
+        const element = image as HTMLImageElement;
+        if (
+          visibleAndLarge(element) &&
+          element.complete &&
+          element.naturalWidth > 0 &&
+          imageUrls(element).includes(expectedUrl)
+        ) {
+          primary = { kind: "image", node: element };
+          break;
+        }
+      }
+
+      const nodes = [
+        card,
+        ...Array.from(card.querySelectorAll("*")),
+      ].filter((node): node is HTMLElement => node instanceof HTMLElement);
+      if (!primary) {
+        for (const node of nodes) {
+          if (!visibleAndLarge(node)) continue;
+          if (backgroundUrls(getComputedStyle(node).backgroundImage).includes(expectedUrl)) {
+            primary = { kind: "background", node };
+            break;
+          }
+          if (backgroundUrls(getComputedStyle(node, "::before").backgroundImage).includes(expectedUrl)) {
+            primary = { kind: "before", node };
+            break;
+          }
+          if (backgroundUrls(getComputedStyle(node, "::after").backgroundImage).includes(expectedUrl)) {
+            primary = { kind: "after", node };
+            break;
+          }
+        }
+      }
+      if (!primary) {
+        return {
+          ok: false,
+          error: `Primary thumbnail could not be isolated for chapter ${target.captureId}`,
+        };
+      }
+
+      plans.push({ card, expectedUrl, primary });
+
+      for (const node of nodes) {
+        for (const pseudo of ["before", "after"] as const) {
+          const pseudoUrls = backgroundUrls(
+            getComputedStyle(node, `::${pseudo}`).backgroundImage,
+          );
+          if (!pseudoUrls.length) continue;
+          const marker = `${filterId}-${targetIndex}-${pseudo}-${cssRules.length}`;
+          const markerAttribute = `data-monitor-single-image-${pseudo}`;
+          node.setAttribute(markerAttribute, marker);
+          const selector = `[${markerAttribute}="${marker}"]::${pseudo}`;
+          if (
+            primary.kind === pseudo &&
+            primary.node === node &&
+            pseudoUrls.includes(expectedUrl)
+          ) {
+            cssRules.push(
+              `${selector}{background-image:url(${JSON.stringify(expectedUrl)})!important}`,
+            );
+          } else {
+            cssRules.push(
+              `${selector}{background-image:none!important;content:none!important}`,
+            );
+          }
+        }
+      }
+    }
+
+    for (const { card, expectedUrl, primary } of plans) {
+      for (const image of Array.from(card.querySelectorAll("img"))) {
+        if (primary.kind !== "image" || image !== primary.node) {
+          const element = image as HTMLImageElement;
+          element.style.setProperty(
+            "display",
+            "none",
+            "important",
+          );
+          hideEmptyContainers(element, card, primary.node);
+        }
+      }
+
+      const nodes = [
+        card,
+        ...Array.from(card.querySelectorAll("*")),
+      ].filter((node): node is HTMLElement => node instanceof HTMLElement);
+      for (const node of nodes) {
+        const urls = backgroundUrls(getComputedStyle(node).backgroundImage);
+        if (!urls.length) continue;
+        if (primary.kind === "background" && node === primary.node) {
+          node.style.setProperty(
+            "background-image",
+            `url(${JSON.stringify(expectedUrl)})`,
+            "important",
+          );
+        } else {
+          node.style.setProperty("background-image", "none", "important");
+          hideEmptyContainers(node, card, primary.node);
+        }
+      }
+
+      for (const node of nodes) {
+        if (node === primary.node || node.contains(primary.node)) continue;
+        if (
+          getComputedStyle(node, "::before").backgroundImage !== "none" ||
+          getComputedStyle(node, "::after").backgroundImage !== "none"
+        ) {
+          hideEmptyContainers(node, card, primary.node);
+        }
+      }
+    }
+
+    if (cssRules.length) {
+      const style = document.createElement("style");
+      style.setAttribute("data-monitor-single-image-filter", "true");
+      style.textContent = cssRules.join("\n");
+      (document.head ?? document.documentElement).append(style);
+    }
+    return { ok: true, error: "" };
+  }, {
+    captureTargets: targets,
+    filterId: `filter-${imageFilterSequence++}`,
+  });
+
+  if (!result.ok) {
+    throw new Error(result.error || "Could not isolate the primary chapter thumbnail");
+  }
+}
+
 async function captureGroup(
   page: Page,
   chapters: BrowserChapterSnapshot[],
+  platform: MonitorPlatform,
 ): Promise<Buffer> {
-  const first = chapters[0];
-  if (!first) throw new Error("Cannot capture an empty chapter group");
+  if (!chapters.length) throw new Error("Cannot capture an empty chapter group");
 
   // Playwright clip coordinates are viewport-relative, while detection stores
   // document-relative boxes. Make the whole selected run fit in the viewport
@@ -672,15 +1034,11 @@ async function captureGroup(
   });
 
   await page
-    .locator(`[data-monitor-capture-card="${first.captureId}"]`)
-    .scrollIntoViewIfNeeded()
-    .catch(() => undefined);
-  await page.waitForTimeout(100);
-
-  await page
     .evaluate(
-      `((ids) => {
-        const blockedWords = /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)/i;
+      `((ids, platform) => {
+        const blockedWords = platform === "toomics"
+          ? /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[/._-])(?:lock|locked|no[-_ ]?image|placeholder)(?:[/._-]|$)/i
+          : /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)|(?:^|[/._-])(?:banner|bnr|lock|locked|no[-_ ]?image|placeholder)(?:[/._-]|$)/i;
         for (const id of ids) {
           const card = document.querySelector('[data-monitor-capture-card="' + id + '"]');
           if (!card) continue;
@@ -701,9 +1059,118 @@ async function captureGroup(
             target?.style.setProperty("display", "none", "important");
           }
         }
-      })(${JSON.stringify(chapters.map((chapter) => chapter.captureId))})`,
+      })(${JSON.stringify(chapters.map((chapter) => chapter.captureId))}, ${JSON.stringify(platform)})`,
     )
     .catch(() => undefined);
+
+  const cardIds = chapters.map((chapter) => chapter.captureId);
+  const captureTargets = chapters.map((chapter) => ({
+    captureId: chapter.captureId,
+    thumbnailUrl: chapter.thumbnailUrl,
+  }));
+  for (const cardId of cardIds) {
+    await page
+      .locator(`[data-monitor-capture-card="${cardId}"]`)
+      .scrollIntoViewIfNeeded()
+      .catch(() => undefined);
+    await page.waitForTimeout(100);
+  }
+
+  // Some Toomics cards keep the real thumbnail only in lazy-load attributes
+  // and rely on a page script that is not always run by headless Chromium.
+  // Promote those values after the cards have entered the viewport so the
+  // screenshot does not capture a text-only card.
+  await page
+    .evaluate(
+      `((ids, platform) => {
+       const blockedWords = platform === "toomics"
+         ? /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[/._-])(?:lock|locked|no[-_ ]?image|placeholder)(?:[/._-]|$)/i
+         : /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)|(?:^|[/._-])(?:banner|bnr|lock|locked|no[-_ ]?image|placeholder)(?:[/._-]|$)/i;
+        const lazyAttributes = [
+          "data-src",
+          "data-srcset",
+          "data-original",
+          "data-lazy-src",
+          "data-image",
+          "data-bg",
+          "data-ep_thumb1",
+          "data-ep_thumb2",
+          "data-ep_thumb3",
+          "data-thumbnail",
+          "data-thumb",
+        ];
+        const placeholder = (value) => {
+          const normalized = String(value || "").trim().toLowerCase();
+          return !normalized ||
+            normalized.startsWith("data:image/") ||
+            /placeholder|no[-_ ]?image|transparent|spacer|blank[-_ ]?image/.test(normalized);
+        };
+        const usable = (value) =>
+          !placeholder(value) && !blockedWords.test(String(value || ""));
+        const firstUsable = (element, attributes) => {
+          for (const attribute of attributes) {
+            const value = element.getAttribute(attribute);
+            if (usable(value)) return value;
+          }
+          return "";
+        };
+        const setBackground = (element, value) => {
+          if (!value || !(element instanceof HTMLElement)) return;
+          const current = getComputedStyle(element).backgroundImage;
+          if (current && current !== "none") return;
+          element.style.setProperty(
+            "background-image",
+            "url(" + JSON.stringify(new URL(value, location.href).toString()) + ")",
+            "important",
+          );
+        };
+
+        for (const id of ids) {
+          const card = document.querySelector(
+            '[data-monitor-capture-card="' + id + '"]',
+          );
+          if (!card) continue;
+
+          for (const image of card.querySelectorAll("img")) {
+            const current = image.currentSrc || image.getAttribute("src") || "";
+            if (!usable(current)) {
+              const source = firstUsable(image, [
+                "data-src",
+                "data-original",
+                "data-lazy-src",
+                "data-image",
+                "data-thumbnail",
+                "data-thumb",
+              ]);
+              if (source) image.src = new URL(source, location.href).toString();
+            }
+            const srcset = firstUsable(image, ["data-srcset"]);
+            if (srcset && (!image.srcset || !usable(current))) image.srcset = srcset;
+          }
+
+          // Keep the real <img> thumbnail already present in the chapter card.
+          // Do not promote data-ep_thumb* values to CSS backgrounds: those
+          // attributes describe additional background panels from the source
+          // page, which makes the capture include three extra images.
+        }
+      })(${JSON.stringify(cardIds)}, ${JSON.stringify(platform)})`,
+    )
+    .catch(() => undefined);
+
+  // Wait for the thumbnail selected during detection, not merely any image
+  // inside the card. A site can render its extra thumb panels first.
+  const mediaReady = await waitForPrimaryThumbnails(
+    page,
+    captureTargets,
+    platform,
+  );
+
+  if (!mediaReady) {
+    throw new Error("Selected primary chapter thumbnails did not finish loading");
+  }
+
+  await page.waitForTimeout(150);
+  await isolatePrimaryThumbnails(page, captureTargets);
 
   const boxes = (
     await Promise.all(
@@ -830,7 +1297,7 @@ export async function openBrowserListing(
           try {
             captured.push({
               chapterNumbers: group.map((chapter) => chapter.number),
-              image: await captureGroup(page, group),
+              image: await captureGroup(page, group, platform),
             });
           } catch (error) {
             if (group.length === 1) throw error;
@@ -845,7 +1312,7 @@ export async function openBrowserListing(
             ]) {
               captured.push({
                 chapterNumbers: smallerGroup.map((chapter) => chapter.number),
-                image: await captureGroup(page, smallerGroup),
+                image: await captureGroup(page, smallerGroup, platform),
               });
             }
           }

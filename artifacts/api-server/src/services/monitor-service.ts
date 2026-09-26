@@ -44,6 +44,8 @@ type ExistingChapter = {
   publishedAt: Date | null;
 };
 
+type MonitorImageMode = "browser+banner" | "sharp+banner" | "none";
+
 const HISTORICAL_RELEASE_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1_000;
 
 type SharpFactory = typeof sharp;
@@ -262,7 +264,7 @@ async function fetchListing(
 
 async function downloadThumbnail(url: string): Promise<Buffer | null> {
   try {
-    if (/fullversion|full[-_ ]?version|download[-_ ]?app|app[-_ ]?version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)|(?:^|[/._-])(?:banner|bnr)(?:[/._-]|$)/i.test(url)) {
+    if (/fullversion|full[-_ ]?version|download[-_ ]?app|app[-_ ]?version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)|(?:^|[/._-])(?:banner|bnr|lock|locked|no[-_ ]?image|placeholder)(?:[/._-]|$)/i.test(url)) {
       return null;
     }
     const sharp = await getOptionalSharp();
@@ -296,7 +298,7 @@ async function buildStrip(
   if (!sharp) return null;
   const rowHeight = 164;
   const width = 920;
-  const headerHeight = 92;
+  const headerHeight = RELEASE_BANNER_HEIGHT;
   const height = headerHeight + chapters.length * rowHeight + 24;
   const images = await Promise.all(chapters.map(async (chapter) => ({
     chapter,
@@ -306,7 +308,7 @@ async function buildStrip(
     const y = headerHeight + index * rowHeight;
     return `<rect x="24" y="${y}" width="872" height="140" rx="14" fill="#f5f0e8" stroke="#ded5c8"/><text x="52" y="${y + 78}" fill="#132b3f" font-family="Arial,sans-serif" font-size="25" font-weight="700">EP ${escapeXml(chapter.number)}</text>${data ? "" : `<text x="185" y="${y + 78}" fill="#7a746c" font-family="Arial,sans-serif" font-size="18">Thumbnail unavailable</text>`}`;
   }).join("");
-  const baseSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="100%" height="100%" fill="#fffaf3"/><text x="34" y="44" fill="#132b3f" font-family="Arial,sans-serif" font-size="25" font-weight="700">${escapeXml(title)}</text><text x="34" y="70" fill="#d8624c" font-family="Arial,sans-serif" font-size="13" letter-spacing="2">NEW CHAPTERS · ${chapters.length}</text>${imageRows}</svg>`;
+  const baseSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="100%" height="100%" fill="#fffaf3"/>${buildReleaseBannerMarkup(title, chapters.length)}${imageRows}</svg>`;
   let output = await sharp(Buffer.from(baseSvg)).png().toBuffer();
   const composites = await Promise.all(images.map(async ({ data }, index) => {
     if (!data) return null;
@@ -332,6 +334,62 @@ async function buildStrip(
   return output;
 }
 
+const RELEASE_BANNER_HEIGHT = 92;
+
+function buildReleaseBannerMarkup(title: string, chapterCount: number): string {
+  return `<text x="34" y="44" fill="#132b3f" font-family="Arial,sans-serif" font-size="25" font-weight="700">${escapeXml(title)}</text><text x="34" y="70" fill="#d8624c" font-family="Arial,sans-serif" font-size="13" letter-spacing="2">NEW CHAPTERS · ${chapterCount}</text>`;
+}
+
+export async function addReleaseBanner(
+  image: Buffer,
+  title: string,
+  chapterCount: number,
+): Promise<Buffer | null> {
+  const sharp = await getOptionalSharp();
+  if (!sharp) return null;
+
+  try {
+    const metadata = await sharp(image).metadata();
+    if (!metadata.width || !metadata.height) return null;
+
+    const banner = Buffer.from(
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${metadata.width}" height="${RELEASE_BANNER_HEIGHT}" viewBox="0 0 ${metadata.width} ${RELEASE_BANNER_HEIGHT}"><rect width="100%" height="100%" fill="#fffaf3"/>${buildReleaseBannerMarkup(title, chapterCount)}</svg>`,
+    );
+
+    const decorated = await sharp(image)
+      .extend({
+        top: RELEASE_BANNER_HEIGHT,
+        bottom: 0,
+        left: 0,
+        right: 0,
+        background: "#fffaf3",
+      })
+      .composite([{ input: banner, left: 0, top: 0 }])
+      .png()
+      .toBuffer();
+    const decoratedMetadata = await sharp(decorated).metadata();
+    if (
+      decoratedMetadata.width !== metadata.width ||
+      decoratedMetadata.height !== metadata.height + RELEASE_BANNER_HEIGHT
+    ) {
+      logger.warn(
+        {
+          originalWidth: metadata.width,
+          originalHeight: metadata.height,
+          decoratedWidth: decoratedMetadata.width,
+          decoratedHeight: decoratedMetadata.height,
+        },
+        "A captura decorada não recebeu o banner completo; usando fallback",
+      );
+      return null;
+    }
+    return decorated;
+  } catch (error) {
+    logger.warn({ err: error }, "Não foi possível adicionar o banner à captura do navegador");
+    return null;
+  }
+}
+
 function escapeXml(value: string) {
   return value.replace(/[<>&'"]/g, (character) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", "'": "&apos;", "\"": "&quot;" })[character] ?? character);
 }
@@ -344,15 +402,37 @@ async function postStrip(
   total: number,
   isTest = false,
   capturedImage?: Buffer,
-): Promise<"browser" | "sharp" | "none"> {
+): Promise<MonitorImageMode> {
   const token = process.env.DISCORD_BOT_TOKEN;
   if (!token) throw new Error("DISCORD_BOT_TOKEN is not configured");
-  // The browser path sends the pixels rendered by the platform. The SVG/Sharp
-  // renderer remains as a last-resort compatibility fallback when a browser
-  // is unavailable or a page does not expose a stable card.
-  const png =
-    capturedImage ?? await buildStrip(title, chapters);
-  const imageMode = capturedImage ? "browser" : png ? "sharp" : "none";
+  // Both paths must use the same release banner. Browser captures contain only
+  // the real platform cards, while the Sharp path already renders its banner.
+  // Never send a raw browser capture: that was the source of inconsistent
+  // notifications where only some images showed "NEW CHAPTERS".
+  let browserImage: Buffer | null = null;
+  if (capturedImage) {
+    try {
+      browserImage = await addReleaseBanner(capturedImage, title, chapters.length);
+    } catch (error) {
+      logger.warn({ err: error, title }, "Falha ao adicionar banner à captura; tentando fallback");
+    }
+  }
+
+  let png = browserImage;
+  if (!png) {
+    try {
+      png = await buildStrip(title, chapters);
+    } catch (error) {
+      // A falha das duas imagens não deve impedir o aviso textual.
+      logger.warn({ err: error, title }, "Falha ao gerar imagem do monitor; enviando aviso sem anexo");
+      png = null;
+    }
+  }
+  const imageMode: MonitorImageMode = browserImage
+    ? "browser+banner"
+    : png
+      ? "sharp+banner"
+      : "none";
   const form = new FormData();
   const chapterSummary = chapters.length === 1
     ? `1 capítulo novo · capítulo ${chapters[0].number}`
@@ -360,7 +440,7 @@ async function postStrip(
   if (!png) {
     logger.warn(
       { title, chapterNumbers: chapters.map((chapter) => chapter.number) },
-      "Sharp indisponível e nenhuma captura do navegador foi obtida; enviando notificação sem anexo",
+      "Nenhuma imagem do monitor foi obtida; enviando notificação sem anexo",
     );
   }
   form.append("payload_json", JSON.stringify({
@@ -398,6 +478,114 @@ async function isUsableBrowserCapture(image: Buffer | undefined): Promise<boolea
     image[7] === 0x0a;
   if (!isPng) return false;
   return image.readUInt32BE(16) >= 240 && image.readUInt32BE(20) >= 90;
+}
+
+export async function runResendNotification(
+  workId: number,
+  requestedChapter: string,
+  progress?: MonitorProgressReporter,
+): Promise<{ title: string; chapter: string; imageMode: MonitorImageMode; parser: string }> {
+  const [config] = await db.select().from(monitorConfigTable).limit(1);
+  if (!config?.discordChannelId) {
+    throw new Error("Nenhum canal do Discord foi configurado para o monitor.");
+  }
+
+  const [work] = await db
+    .select()
+    .from(monitoredWorksTable)
+    .where(eq(monitoredWorksTable.id, workId))
+    .limit(1);
+  if (!work) {
+    throw new Error(`Não encontrei nenhuma obra com o ID ${workId}. Use /monitor listar para conferir os IDs.`);
+  }
+
+  const wanted = chapterNumberIdentity(requestedChapter);
+  if (!wanted) {
+    throw new Error("Informe um número de capítulo válido.");
+  }
+
+  let listing: ListingSession | undefined;
+  try {
+    await reportProgress(progress, `Procurando o capítulo ${requestedChapter} de ${work.title}.`);
+    listing = await fetchListing(work, progress);
+
+    let chapter = listing.candidates.find(
+      (candidate) => chapterNumberIdentity(candidate.number) === wanted,
+    );
+
+    if (!chapter) {
+      const storedChapters = await db
+        .select({
+          chapterNumber: detectedChaptersTable.chapterNumber,
+          thumbnailUrl: detectedChaptersTable.thumbnailUrl,
+          chapterKey: detectedChaptersTable.chapterKey,
+        })
+        .from(detectedChaptersTable)
+        .where(eq(detectedChaptersTable.workId, work.id));
+      const stored = storedChapters.find(
+        (candidate) => chapterNumberIdentity(candidate.chapterNumber) === wanted,
+      );
+      if (stored) {
+        chapter = {
+          number: stored.chapterNumber,
+          thumbnailUrl: stored.thumbnailUrl,
+          key: stored.chapterKey,
+          parser: "histórico salvo",
+        };
+        await reportProgress(
+          progress,
+          "O capítulo não está na lista atual; usando a imagem salva no histórico do monitor.",
+        );
+      }
+    }
+
+    if (!chapter) {
+      throw new Error(
+        `Não encontrei o capítulo ${requestedChapter} na lista atual nem no histórico salvo de **${work.title}**.`,
+      );
+    }
+
+    let capturedImage: Buffer | undefined;
+    if (listing.captureSession && chapter.captureId) {
+      await reportProgress(progress, "Tentando capturar novamente o card renderizado.");
+      try {
+        const groups = await listing.captureSession.captureGroups([chapter.captureId]);
+        const group = groups.find((candidate) =>
+          candidate.chapterNumbers.some((number) => chapterNumberIdentity(number) === wanted),
+        );
+        if (group?.image && await isUsableBrowserCapture(group.image)) {
+          capturedImage = group.image;
+        }
+      } catch (error) {
+        logger.warn(
+          { err: error, workId: work.id, chapter: chapter.number },
+          "Falha ao recapturar capítulo para reenvio; usando thumbnail salva",
+        );
+      }
+    }
+
+    await reportProgress(progress, "Enviando novamente a notificação.");
+    const imageMode = await postStrip(
+      config.discordChannelId,
+      work.title,
+      [chapter],
+      1,
+      1,
+      false,
+      capturedImage,
+    );
+
+    return {
+      title: work.title,
+      chapter: chapter.number,
+      imageMode,
+      parser: listing.parser,
+    };
+  } finally {
+    await listing?.captureSession?.close().catch((error) => {
+      logger.warn({ err: error, workId: work.id }, "Falha ao fechar captura após reenvio");
+    });
+  }
 }
 
 export async function runTestNotification(
@@ -697,7 +885,7 @@ export async function runMonitor() {
       }
 
       const groups: Array<{ chapters: ChapterCandidate[]; image?: Buffer }> = [];
-      const imageModes = new Set<"browser" | "sharp" | "none">();
+      const imageModes = new Set<MonitorImageMode>();
       const emittedDirectKeys = new Set<string>();
       let fallbackChapters: ChapterCandidate[] = [];
       const flushFallback = () => {
