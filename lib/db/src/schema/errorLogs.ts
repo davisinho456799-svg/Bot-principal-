@@ -4,7 +4,7 @@ import {
 import { json, pgTable, serial, text, timestamp, integer } from "drizzle-orm/pg-core";
 import { z } from "zod/v4";
 
-// Histórico persistente de falhas do bot e da API.
+// Histórico persistente de falhas do bot e da API, mantido no Neon.
 export const errorLogsTable = pgTable("error_logs", {
   id: serial("id").primaryKey(),
   discordGuildId: text("discord_guild_id"),

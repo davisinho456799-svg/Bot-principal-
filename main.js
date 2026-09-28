@@ -12,10 +12,6 @@ process.env.DISCORD_LIGHT_MODE ??= "true";
 process.env.LIGHT_MODE_NOTIFICATIONS ??= "true";
 process.env.MONITOR_INTERVAL_MINUTES ??= "420";
 process.env.EMBED_MONITOR_INTERVAL_HOURS ??= "24";
-const discloudDatabaseUrl = process.env["NEW_DATABASE_URL"];
-if (discloudDatabaseUrl) {
-  process.env.DATABASE_URL = discloudDatabaseUrl;
-}
 console.log("Panel Watch Discord worker build: embed-limit-fix-v2");
 
 const execFileAsync = promisify(execFile);

@@ -11,7 +11,7 @@ Este arquivo é apenas uma lista para a próxima pessoa corrigir. A lógica do b
 
 ## 2. Configuração obrigatória para executar o bot
 
-- [ ] Configurar `DATABASE_URL` com a URL do PostgreSQL usado pelo deploy.
+- [ ] Configurar `NEON_DATABASE_URL` ou `DATABASE_URL` com o PostgreSQL correto.
 - [ ] Configurar o token do Discord em `DISCORD_BOT_TOKEN` (os nomes antigos `Discord_bot_key` e `Discord_key` ainda aparecem como alternativas).
 - [ ] Confirmar que o banco recebeu todas as tabelas e alterações do schema antes de iniciar as notificações.
 - [ ] Conferir os logs de inicialização para garantir que o PostgreSQL e o Discord conectaram.

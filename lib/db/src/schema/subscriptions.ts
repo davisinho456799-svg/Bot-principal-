@@ -5,7 +5,7 @@ import { z } from "zod/v4";
 // ─── Tabela canônica de assinaturas ─────────────────────────────────────────
 // O bot e o serviço de notificações usam esta tabela. A tabela legada
 // `subscriptions` não é recriada nem migrada: o alias abaixo mantém os nomes
-// antigos do código sem introduzir uma segunda tabela.
+// antigos do código sem introduzir uma segunda tabela no Neon.
 export const assinaturasTable = pgTable(
   "assinaturas",
   {
