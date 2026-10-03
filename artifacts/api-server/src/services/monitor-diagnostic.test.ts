@@ -14,9 +14,11 @@ vi.mock("./browser-chapter-capture", () => ({ openBrowserListing: state.open }))
 vi.mock("../lib/logger", () => ({ logger: { info: state.info } }));
 import { runMonitorDiagnostic, formatMonitorDiagnostic } from "./monitor-diagnostic";
 import { monitorExecution } from "./monitor-execution";
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-03T15:20:00Z"));
   vi.clearAllMocks();
   state.works = [1, 10].map((id, i) => ({
     id, displayNumber: i + 1, title: `Obra ${i + 1}`, platform: "lezhin",

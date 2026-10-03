@@ -47,6 +47,12 @@ function armTimer(delayMs: number, currentGeneration: number) {
     timer = undefined;
     void runWhenDue(currentGeneration);
   }, boundedDelay);
+  const nextCheck = new Date(Date.now() + boundedDelay);
+  logger.info({
+    event: "image_monitor_next_check_scheduled",
+    nextCheckAt: nextCheck.toISOString(),
+    nextCheckBrasilia: nextCheck.toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" }),
+  }, "Próxima verificação de imagens agendada");
 }
 
 async function scheduleNext(currentGeneration: number, minimumDelay = 0): Promise<void> {
