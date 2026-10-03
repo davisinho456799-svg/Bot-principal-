@@ -72,12 +72,14 @@ for (const name of ["pnpm-lock.yaml", "lib/db/src/index.ts", "artifacts/api-serv
   });
 }
 
-test("new build helper changes invalidate the cache", async t => {
-  const f = await fixture(t);
-  await f.build();
-  await writeFile(path.join(f.root, "scripts/worker-build-runtime.mjs"), "changed build helper");
-  assert.equal((await inspectWorkerBuild(f.root)).valid, false);
-});
+for (const name of ["worker-build-runtime.mjs", "worker-build-bootstrap.mjs"]) {
+  test(`changes to ${name} invalidate the cache`, async t => {
+    const f = await fixture(t);
+    await f.build();
+    await writeFile(path.join(f.root, "scripts", name), "changed build helper");
+    assert.equal((await inspectWorkerBuild(f.root)).valid, false);
+  });
+}
 
 test("a new revision marker cannot hide an old executable", async t => {
   const f = await fixture(t);

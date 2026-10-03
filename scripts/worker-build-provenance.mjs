@@ -45,7 +45,7 @@ export async function getBuildFingerprint(root) {
     ...await optionalFiles(path.join(root, "scripts/worker-build")),
   ];
   // These helpers affect build correctness, but unrelated migration scripts do not.
-  for (const name of ["worker-build-provenance.mjs", "worker-build-runtime.mjs", "worker-build-history.mjs"]) {
+  for (const name of ["worker-build-provenance.mjs", "worker-build-runtime.mjs", "worker-build-history.mjs", "worker-build-bootstrap.mjs"]) {
     const filename = path.join(root, "scripts", name);
     try { await access(filename); files.push(filename); }
     catch (error) { if (error.code !== "ENOENT") throw error; }
