@@ -8,6 +8,7 @@ const state = vi.hoisted(() => ({
   updates: vi.fn(),
   insert: vi.fn(),
   notification: vi.fn(),
+  diagnostic: vi.fn(),
   resend: vi.fn(),
   acknowledge: vi.fn(),
   nextId: 11,
@@ -70,6 +71,10 @@ vi.mock("./monitor-service.js", () => ({
   runTestNotification: state.notification,
   runResendNotification: state.resend,
 }));
+vi.mock("./monitor-diagnostic.js", () => ({
+  runMonitorDiagnostic: state.diagnostic,
+  formatMonitorDiagnostic: () => "Comparação dos tempos, sem notificações",
+}));
 
 import { executeManhwaCommand, monitorCommandDefinition } from "./discord-command-service.js";
 
@@ -123,9 +128,34 @@ beforeEach(() => {
   state.acknowledge.mockResolvedValue(undefined);
   state.notification.mockResolvedValue({ title: "C", chapter: "1", parser: "test", captureMode: "test" });
   state.resend.mockResolvedValue({ title: "C", chapter: "12.5", parser: "test", imageMode: "none" });
+  state.diagnostic.mockResolvedValue({ results: [], worksSkipped: 0 });
 });
 
 describe("safe monitor commands", () => {
+  it("supports all-work diagnostics and resolves a selected display number to its immutable ID", async () => {
+    expect(monitorCommandDefinition.options?.some(o => o.name === "diagnostico")).toBe(true);
+    const all = interaction("diagnostico");
+    await executeManhwaCommand(all.command);
+    expect(state.diagnostic).toHaveBeenCalledWith(undefined);
+    await executeManhwaCommand(interaction("diagnostico", 2).command);
+    expect(state.diagnostic).toHaveBeenCalledWith(10);
+    expect(all.fake.editReply.mock.calls.at(-1)?.[0].content).toContain("Comparação");
+    expect(state.notification).not.toHaveBeenCalled();
+    expect(state.resend).not.toHaveBeenCalled();
+    expect(state.updates).not.toHaveBeenCalled();
+  });
+
+  it("does not run a diagnostic with an invalid work number", async () => {
+    await executeManhwaCommand(interaction("diagnostico", 99).command);
+    expect(state.diagnostic).not.toHaveBeenCalled();
+  });
+
+  it("does not expose database error messages in the private response", async () => {
+    state.diagnostic.mockRejectedValueOnce(new Error("secret-in-database-url"));
+    const { fake, command } = interaction("diagnostico");
+    await executeManhwaCommand(command);
+    expect(JSON.stringify(fake.editReply.mock.calls)).not.toContain("secret-in-database-url");
+  });
   it("lists consecutive numbers, not the database IDs", async () => {
     const { fake, command } = interaction("listar");
     await executeManhwaCommand(command);

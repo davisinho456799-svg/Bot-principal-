@@ -1205,9 +1205,14 @@ export async function openBrowserListing(
   listingUrl: string,
   platform: MonitorPlatform,
   retryAfterCrash = true,
+  signal?: AbortSignal,
 ): Promise<BrowserListingSession> {
+  signal?.throwIfAborted();
   const context = await getBrowserContext();
+  signal?.throwIfAborted();
   let page = await context.newPage();
+  const onAbort = () => { void page.close().catch(() => undefined); };
+  signal?.addEventListener("abort", onAbort, { once: true });
   let pageCrashed = false;
   const setupPage = async (nextPage: Page) => {
     nextPage.setDefaultTimeout(8_000);
@@ -1222,12 +1227,15 @@ export async function openBrowserListing(
   };
 
   try {
+    if (signal?.aborted) onAbort();
+    signal?.throwIfAborted();
     await setupPage(page);
     await page.goto(listingUrl, {
       waitUntil: "domcontentloaded",
       timeout: PAGE_TIMEOUT_MS,
     });
     await waitForRenderedPage(page);
+    signal?.throwIfAborted();
 
     let authentication = "não aplicável";
     if (platform === "toomics") {
@@ -1236,13 +1244,16 @@ export async function openBrowserListing(
       // Toomics creates the authentication page.
       await page.close().catch(() => undefined);
       pageCrashed = false;
-      const loginPage = await context.newPage();
-      await setupPage(loginPage);
-      authentication = await loginToomics(loginPage);
-      await loginPage.close().catch(() => undefined);
+      page = await context.newPage();
+      signal?.throwIfAborted();
+      await setupPage(page);
+      authentication = await loginToomics(page);
+      await page.close().catch(() => undefined);
+      signal?.throwIfAborted();
 
       pageCrashed = false;
       page = await context.newPage();
+      signal?.throwIfAborted();
       await setupPage(page);
       await page.goto(listingUrl, {
         waitUntil: "domcontentloaded",
@@ -1287,6 +1298,7 @@ export async function openBrowserListing(
       candidates: candidates.map(({ box: _box, ...chapter }) => chapter),
       diagnostics,
       async captureGroups(chapterIds) {
+        signal?.throwIfAborted();
         const selected = candidates
           .filter((chapter) => chapterIds.includes(chapter.captureId))
           .sort((left, right) => left.captureOrder - right.captureOrder);
@@ -1294,6 +1306,7 @@ export async function openBrowserListing(
         const captured: CapturedChapterGroup[] = [];
 
         for (const group of groups) {
+          signal?.throwIfAborted();
           try {
             captured.push({
               chapterNumbers: group.map((chapter) => chapter.number),
@@ -1320,16 +1333,20 @@ export async function openBrowserListing(
         return captured;
       },
       async close() {
+        signal?.removeEventListener("abort", onAbort);
         await page.close().catch(() => undefined);
       },
     };
   } catch (error) {
+    signal?.removeEventListener("abort", onAbort);
     await page.close().catch(() => undefined);
+    // Cancelling a diagnostic must never reset the shared browser.
+    signal?.throwIfAborted();
     const errorMessage = error instanceof Error ? error.message : String(error);
     if (pageCrashed || /page crashed|target page, context or browser has been closed/i.test(errorMessage)) {
       await resetBrowserAfterCrash();
       if (retryAfterCrash) {
-        return openBrowserListing(listingUrl, platform, false);
+        return openBrowserListing(listingUrl, platform, false, signal);
       }
     }
     throw error;

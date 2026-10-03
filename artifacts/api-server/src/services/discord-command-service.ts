@@ -19,6 +19,8 @@ import { logger } from "../lib/logger";
 import { runMonitor, runResendNotification, runTestNotification } from "./monitor-service.js";
 import { getActiveNumberedMonitorWorks } from "./monitor-work-list.js";
 import { resolveMonitorWorkNumber } from "./monitor-work-numbering.js";
+import { runMonitorDiagnostic, formatMonitorDiagnostic } from "./monitor-diagnostic.js";
+import { MonitorUnavailableError } from "./monitor-execution.js";
 
 export const monitorCommandDefinition = new SlashCommandBuilder()
     .setName("monitor")
@@ -112,6 +114,15 @@ export const monitorCommandDefinition = new SlashCommandBuilder()
     )
     .addSubcommand((command) =>
       command.setName("verificar").setDescription("Executa uma verificação agora"),
+    )
+    .addSubcommand((command) =>
+      command
+        .setName("diagnostico")
+        .setDescription("Compara tempos sem enviar notificações ou alterar o agendamento")
+        .addIntegerOption((option) =>
+          option.setName("obra").setDescription("Número da obra; omita para comparar todas")
+            .setMinValue(1).setRequired(false),
+        ),
     )
     .addSubcommand((command) =>
       command
@@ -393,6 +404,28 @@ export async function executeManhwaCommand(interaction: ChatInputCommandInteract
         `Publicações enviadas: ${result.postsSent}`,
       ].join("\n"),
     });
+    return;
+  }
+  if (subcommand === "diagnostico") {
+    try {
+      const number = interaction.options.getInteger("obra") ?? undefined;
+      const work = number === undefined ? undefined
+        : resolveMonitorWorkNumber(await getActiveNumberedMonitorWorks(), number);
+      if (number !== undefined && !work) {
+        await replyError(interaction, "Obra não encontrada. Confira a numeração em /monitor listar.");
+        return;
+      }
+      await interaction.editReply({ content: "Medindo consulta e captura, sem enviar notificações nem alterar o agendamento. A verificação normal tem prioridade." });
+      const report = await runMonitorDiagnostic(work?.id);
+      const content = formatMonitorDiagnostic(report);
+      await interaction.editReply(content.length <= 1950
+        ? { content, allowedMentions: { parse: [] } }
+        : { content: `Diagnóstico concluído. ${report.results.length} obras medidas; ${report.worksSkipped} não verificadas. Comparação completa no arquivo.`, files: [{ attachment: Buffer.from(content), name: "tempos-diagnostico.txt" }], allowedMentions: { parse: [] } });
+    } catch (error) {
+      logger.warn({ errorName: error instanceof Error ? error.name : "Error" }, "Diagnóstico do monitor indisponível");
+      await replyError(interaction, error instanceof MonitorUnavailableError
+        ? error.message : "Não foi possível executar o diagnóstico. Nenhuma notificação foi enviada.");
+    }
     return;
   }
   if (subcommand === "teste") {

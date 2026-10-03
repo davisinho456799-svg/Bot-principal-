@@ -10,6 +10,7 @@ import {
 } from "@workspace/db/schema";
 import { logger } from "../lib/logger";
 import { measureImageMonitorRound, type ImageMonitorTiming } from "./monitor-timing";
+import { monitorExecution } from "./monitor-execution.js";
 import {
   buildChapterKey,
   genericParser,
@@ -675,7 +676,7 @@ export async function runTestNotification(
 }
 
 export async function runMonitor() {
-  return measureImageMonitorRound(runMonitorRound);
+  return monitorExecution.runRegular(() => measureImageMonitorRound(runMonitorRound));
 }
 
 async function runMonitorRound(timing: ImageMonitorTiming) {
