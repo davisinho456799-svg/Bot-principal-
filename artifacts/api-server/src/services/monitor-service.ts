@@ -611,7 +611,7 @@ export async function runTestNotification(
     : works.find((candidate) => candidate.id === workId);
   if (!work) {
     throw new Error(
-      `Não encontrei uma obra ativa com o ID ${workId}. Use /monitor listar para conferir os IDs.`,
+      "A obra selecionada não está mais ativa. Use /monitor listar para conferir a numeração atual.",
     );
   }
   await reportProgress(progress, `Obra escolhida: ${work.title}.`);
