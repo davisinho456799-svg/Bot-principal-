@@ -9,6 +9,7 @@ import {
   monitoredWorksTable,
 } from "@workspace/db/schema";
 import { logger } from "../lib/logger";
+import { measureImageMonitorRound, type ImageMonitorTiming } from "./monitor-timing";
 import {
   buildChapterKey,
   genericParser,
@@ -674,11 +675,16 @@ export async function runTestNotification(
 }
 
 export async function runMonitor() {
+  return measureImageMonitorRound(runMonitorRound);
+}
+
+async function runMonitorRound(timing: ImageMonitorTiming) {
   const [config] = await db.select().from(monitorConfigTable).limit(1);
   const works = await db.select().from(monitoredWorksTable).where(eq(monitoredWorksTable.active, true));
   let chaptersFound = 0;
   let postsSent = 0;
   for (const work of works) {
+    const workTiming = timing.startWork(work.id, work.title);
     let listing: ListingSession | undefined;
     try {
       listing = await fetchListing(work);
@@ -999,9 +1005,17 @@ export async function runMonitor() {
       });
     } catch (error) {
       logger.warn({ err: error, workId: work.id }, "Work monitor failed");
+      workTiming.fail(error);
       await db.update(monitoredWorksTable).set({ lastCheckedAt: new Date(), lastStatus: "Check failed", updatedAt: new Date() }).where(eq(monitoredWorksTable.id, work.id));
     } finally {
-      await listing?.captureSession?.close();
+      try {
+        await listing?.captureSession?.close();
+      } catch (error) {
+        workTiming.fail(error);
+        throw error;
+      } finally {
+        workTiming.finish();
+      }
     }
   }
   return { status: "completed", worksChecked: works.length, chaptersFound, postsSent };
