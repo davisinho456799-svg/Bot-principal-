@@ -56,7 +56,7 @@ export async function deployDiscloud({
   root = process.cwd(), token = process.env.DISCLOUD_TOKEN, revision = process.env.GITHUB_SHA,
   request = fetch, wait = ms => new Promise(resolve => setTimeout(resolve, ms)), now = Date.now,
   journal = createDeploymentJournal({ revision }), verificationTimeout = 600_000,
-}) {
+} = {}) {
   const base = "https://api.discloud.app/v2/app/1790572666269";
   async function api(endpoint, options = {}, timeout = 45000) {
     const response = await request(base + endpoint, {

@@ -4,6 +4,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { Script } from "node:vm";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
 import { startWorker } from "./worker-startup.mjs";
 import { createMonitorPreparation, PACKAGE_TIMEOUT_MS, BROWSER_TIMEOUT_MS } from "./worker-monitor-runtime.mjs";
 import { validatePublication, productionPath } from "./discloud-publication.mjs";
@@ -114,6 +117,20 @@ async function fixture(t) {
   const filename = path.join(root, "journal.json");
   return { root, filename, journal: createDeploymentJournal({ revision, filename, output: () => {} }) };
 }
+test("actual deployment CLI accepts omitted options and records preflight failure", async t => {
+  const f = await fixture(t);
+  let result;
+  try {
+    await promisify(execFile)(process.execPath, [fileURLToPath(new URL("./discloud-deploy.mjs", import.meta.url))], {
+      cwd: f.root, env: { ...process.env, GITHUB_SHA: revision, DISCLOUD_TOKEN: "" }, timeout: 10000,
+    });
+    assert.fail("Missing credentials must fail before contacting the provider");
+  } catch (error) { result = error; }
+  assert.equal(result.code, 1);
+  assert.equal(result.stderr.includes('"errorName":"TypeError"'), false);
+  assert.equal(result.stdout.includes('"phase":"verify.environment","status":"failed"'), true);
+  assert.equal(result.stderr.includes('"event":"deployment_failed"'), true);
+});
 test("journal survives recreation and filters sensitive fields and other revisions", async t => {
   const f = await fixture(t);
   f.journal.record({ phase: "package.source", status: "completed", token: "private-token" });
