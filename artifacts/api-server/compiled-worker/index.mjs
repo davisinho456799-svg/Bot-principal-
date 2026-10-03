@@ -157445,8 +157445,11 @@ var PAGE_TIMEOUT_MS = 3e4;
 var MAX_CAPTURE_WIDTH = 2400;
 var MAX_CAPTURE_HEIGHT = 4800;
 var CARD_PADDING = 0;
+var CARD_MEDIA_WAIT_MS = 3e4;
+var CARD_MEDIA_POLL_MS = 150;
 var browserPromise = null;
 var contextPromise = null;
+var imageFilterSequence = 0;
 var chromiumPromise = null;
 async function getChromium() {
   chromiumPromise ??= import("playwright").then((module2) => module2.chromium);
@@ -157524,19 +157527,19 @@ async function loginToomics(page) {
   const password = process.env.TOOMICS_PASSWORD;
   if (!email3 || !password) return "credenciais n\xE3o configuradas";
   try {
-    const emailSelector = 'input[type="email"], input[name*="email" i], input[name*="user" i], input[name*="login" i], input[name*="id" i]';
-    const passwordSelector = 'input[type="password"]';
-    let emailInput = page.locator(emailSelector).filter({ visible: true }).first();
-    let passwordInput = page.locator(passwordSelector).filter({ visible: true }).first();
+    const emailSelector = 'input[type="email"]:visible, input[name*="email" i]:visible, input[name*="user" i]:visible, input[name*="login" i]:visible, input[name*="id" i]:visible';
+    const passwordSelector = 'input[type="password"]:visible';
+    let emailInput = page.locator(emailSelector).first();
+    let passwordInput = page.locator(passwordSelector).first();
     if (!await passwordInput.count()) {
       const loginLink = page.locator(
-        'a[href*="login" i], a[href*="signin" i], button:has-text("Login"), button:has-text("Entrar"), button:has-text("\uB85C\uADF8\uC778")'
-      ).filter({ visible: true }).first();
+        'a[href*="login" i]:visible, a[href*="signin" i]:visible, button:has-text("Login"):visible, button:has-text("Entrar"):visible, button:has-text("\uB85C\uADF8\uC778"):visible'
+      ).first();
       if (await loginLink.count()) {
         await loginLink.click().catch(() => void 0);
         await page.waitForTimeout(500);
-        emailInput = page.locator(emailSelector).filter({ visible: true }).first();
-        passwordInput = page.locator(passwordSelector).filter({ visible: true }).first();
+        emailInput = page.locator(emailSelector).first();
+        passwordInput = page.locator(passwordSelector).first();
       }
     }
     if (!await passwordInput.count()) {
@@ -157553,8 +157556,8 @@ async function loginToomics(page) {
         });
         await waitForRenderedPage(page);
         await page.locator("#user_id, #user_pw").first().waitFor({ state: "attached", timeout: 8e3 }).catch(() => void 0);
-        const loginEmail = page.locator("#user_id").first();
-        const loginPassword = page.locator("#user_pw").first();
+        const loginEmail = page.locator("#user_id:visible").first();
+        const loginPassword = page.locator("#user_pw:visible").first();
         if (await loginEmail.count() && await loginPassword.count()) {
           emailInput = loginEmail;
           passwordInput = loginPassword;
@@ -157568,8 +157571,8 @@ async function loginToomics(page) {
     await emailInput.fill(email3, { force: true });
     await passwordInput.fill(password, { force: true });
     const submit = page.locator(
-      'form:has(#user_id) button[type="submit"], form:has(#user_id) input[type="submit"], button:has-text("Login"), button:has-text("Entrar"), button:has-text("\uB85C\uADF8\uC778")'
-    ).filter({ visible: true }).last();
+      'form:has(#user_id) button[type="submit"]:visible, form:has(#user_id) input[type="submit"]:visible, button:has-text("Login"):visible, button:has-text("Entrar"):visible, button:has-text("\uB85C\uADF8\uC778"):visible'
+    ).last();
     const submitButton = await submit.count() ? submit : page.locator('form:has(#user_id) button[type="submit"], form:has(#user_id) input[type="submit"]').last();
     if (!await submitButton.count()) return "bot\xE3o de login n\xE3o encontrado";
     await Promise.all([
@@ -157615,7 +157618,12 @@ async function findRenderedChapters(page, platform) {
         "[id*='chapter']",
         "div"
       ].join(",");
-      const blockedWords = /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)|(?:^|[/._-])(?:banner|bnr)(?:[/._-]|$)/i;
+       // Toomics uses "banner" in legitimate episode-thumbnail paths.
+       // Keep generic banner filtering for the other sites, but do not hide
+       // a real Toomics card image just because its CDN path says banner.
+       const blockedWords = platform === "toomics"
+         ? /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[/._-])(?:lock|locked|no[-_ ]?image|placeholder)(?:[/._-]|$)/i
+         : /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)|(?:^|[/._-])(?:banner|bnr|lock|locked|no[-_ ]?image|placeholder)(?:[/._-]|$)/i;
       const chapterLabel = /(?:chapter|episode|episodio|epis[o\xF3]dio|ep(?:isode)?|ch(?:apter)?|cap(?:itulo|\xEDtulo)?|cap\\\\.)/i;
       const chapterPattern = /(?:chapter|episode|episodio|epis[o\xF3]dio|ep(?:isode)?|ch(?:apter)?|cap(?:itulo|\xEDtulo)?|cap\\\\.)\\\\s*(?:#|[-_:])?\\\\s*(\\\\d{1,5}(?:[.,]\\\\d+)?)/ig;
       const hashPattern = /(?:^|\\\\s)#(\\\\d{1,5}(?:[.,]\\\\d+)?)(?=\\\\s|$)/g;
@@ -157785,6 +157793,9 @@ async function findRenderedChapters(page, platform) {
             continue;
           }
           cardElement = parent;
+          // Pare no primeiro card v\xE1lido. Continuar subindo pode selecionar
+          // o cont\xEAiner da lista inteira e repetir a mesma imagem na captura.
+          break;
         }
 
         const rect = cardElement.getBoundingClientRect();
@@ -157825,31 +157836,47 @@ async function findRenderedChapters(page, platform) {
           media.getAttribute("class") || "",
           media.getAttribute("style") || "",
         ].join(" ");
-        const thumbnail = mediaElements.find((media) =>
-          !blockedWords.test(mediaContext(media)),
-        ) ?? mediaElements[0];
-        const thumbnailContext = thumbnail ? mediaContext(thumbnail) : "";
-         const thumbnailValue = thumbnail && !blockedWords.test(thumbnailContext)
-           ? (thumbnail.currentSrc ||
-             thumbnail.getAttribute("src") ||
-             thumbnail.getAttribute("data-src") ||
-             thumbnail.getAttribute("data-original") ||
-             thumbnail.getAttribute("data-lazy-src") ||
-             thumbnail.getAttribute("data-image") ||
-              thumbnail.getAttribute("data-bg") ||
-              thumbnail.getAttribute("data-ep_thumb1") ||
-             thumbnail.getAttribute("data-ep_thumb2") ||
-             thumbnail.getAttribute("data-ep_thumb3") ||
-             thumbnail.getAttribute("data-thumbnail") ||
-             thumbnail.getAttribute("data-thumb") ||
-             "")
-          : "";
+         const mediaValues = (media) => {
+           const values = [
+             media.currentSrc || "",
+             media.getAttribute("src") || "",
+             media.getAttribute("data-src") || "",
+             media.getAttribute("data-original") || "",
+             media.getAttribute("data-lazy-src") || "",
+             media.getAttribute("data-image") || "",
+             media.getAttribute("data-bg") || "",
+             media.getAttribute("data-ep_thumb1") || "",
+             media.getAttribute("data-ep_thumb2") || "",
+             media.getAttribute("data-ep_thumb3") || "",
+             media.getAttribute("data-thumbnail") || "",
+             media.getAttribute("data-thumb") || "",
+           ];
+           const style = media.getAttribute("style") || "";
+           for (const match of style.matchAll(/url\\((?:"|')?([^"')]+)(?:"|')?\\)/ig)) {
+             if (match[1]) values.push(match[1]);
+           }
+           return values;
+         };
+         const isPlaceholderImage = (value) => {
+           const normalized = String(value || "").trim().toLowerCase();
+           return !normalized ||
+             normalized.startsWith("data:image/") ||
+             /placeholder|no[-_ ]?image|transparent|spacer|blank[-_ ]?image/.test(normalized);
+         };
+         const thumbnailValue = mediaElements
+           .flatMap((media) => mediaValues(media))
+           .find((value) =>
+             !blockedWords.test(String(value)) && !isPlaceholderImage(value),
+           ) || "";
 
          // Schedule/status labels and internal episode links can carry a
          // chapter-like number without being a visual release card. A
          // candidate must have actual card media; otherwise it can produce a
          // phantom chapter notification with no photo.
-         if (!hasImage || !hasCardDimensions) continue;
+          // A visible lock/blank placeholder is not a usable Toomics
+          // thumbnail. Do not let it become a valid browser capture, because
+          // Playwright would faithfully screenshot the white placeholder.
+          if (!hasImage || !hasCardDimensions || (platform === "toomics" && !thumbnailValue)) continue;
 
         // A platform chapter card is expected to have a marker, link, or
         // image. This rejects the page wrapper and promotional banners.
@@ -157962,9 +157989,263 @@ function makeGreedyGroups(candidates) {
   if (current.length) groups.push(current);
   return groups;
 }
-async function captureGroup(page, chapters) {
-  const first = chapters[0];
-  if (!first) throw new Error("Cannot capture an empty chapter group");
+async function waitForPrimaryThumbnails(page, targets, platform) {
+  return page.evaluate(
+    ({ targets: targets2, platform: platform2, timeoutMs, pollMs }) => {
+      const blockedWords = platform2 === "toomics" ? /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[/._-])(?:lock|locked|no[-_ ]?image|placeholder)(?:[/._-]|$)/i : /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)|(?:^|[/._-])(?:banner|bnr|lock|locked|no[-_ ]?image|placeholder)(?:[/._-]|$)/i;
+      const imageAttributes = [
+        "src",
+        "data-src",
+        "data-original",
+        "data-lazy-src",
+        "data-image",
+        "data-bg",
+        "data-ep_thumb1",
+        "data-ep_thumb2",
+        "data-ep_thumb3",
+        "data-thumbnail",
+        "data-thumb"
+      ];
+      const normalizeUrl2 = (value) => {
+        try {
+          return new URL(value, location.href).href;
+        } catch {
+          return "";
+        }
+      };
+      const backgroundUrls = (value) => [...value.matchAll(/url\((?:"|')?([^"')]+)(?:"|')?\)/gi)].map((match) => normalizeUrl2(match[1] ?? "")).filter(Boolean);
+      const visibleAndLarge = (element) => {
+        const style = getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+        return style.display !== "none" && style.visibility !== "hidden" && Number.parseFloat(style.opacity || "1") > 0 && rect.width >= 48 && rect.height >= 30;
+      };
+      const contextOf = (element) => imageAttributes.map((attribute) => element.getAttribute(attribute) || "").join(" ");
+      const imageHasPrimaryUrl = (image, expectedUrl) => {
+        const urls = [
+          image.currentSrc,
+          image.src,
+          ...imageAttributes.map((attribute) => image.getAttribute(attribute) || "")
+        ].map(normalizeUrl2);
+        return urls.includes(expectedUrl);
+      };
+      const hasLoadedPrimaryThumbnail = (card, thumbnailUrl) => {
+        const expectedUrl = normalizeUrl2(thumbnailUrl);
+        if (!expectedUrl) return false;
+        const images = Array.from(card.querySelectorAll("img")).some((image) => {
+          const element = image;
+          return visibleAndLarge(element) && element.complete && element.naturalWidth > 0 && !blockedWords.test(contextOf(element)) && imageHasPrimaryUrl(element, expectedUrl);
+        });
+        if (images) return true;
+        const mediaNodes = [
+          card,
+          ...Array.from(card.querySelectorAll("*"))
+        ].filter((node) => node instanceof HTMLElement);
+        return mediaNodes.some((node) => {
+          if (!visibleAndLarge(node) || blockedWords.test(contextOf(node))) return false;
+          const styles = [
+            getComputedStyle(node).backgroundImage,
+            getComputedStyle(node, "::before").backgroundImage,
+            getComputedStyle(node, "::after").backgroundImage
+          ];
+          return styles.some((style) => backgroundUrls(style).includes(expectedUrl));
+        });
+      };
+      const deadline = Date.now() + timeoutMs;
+      return new Promise((resolve) => {
+        const check2 = () => {
+          const ready = targets2.every((target) => {
+            const card = document.querySelector(
+              `[data-monitor-capture-card="${target.captureId}"]`
+            );
+            return Boolean(
+              card && hasLoadedPrimaryThumbnail(card, target.thumbnailUrl)
+            );
+          });
+          if (ready) {
+            resolve(true);
+          } else if (Date.now() >= deadline) {
+            resolve(false);
+          } else {
+            setTimeout(check2, pollMs);
+          }
+        };
+        check2();
+      });
+    },
+    {
+      targets,
+      platform,
+      timeoutMs: CARD_MEDIA_WAIT_MS,
+      pollMs: CARD_MEDIA_POLL_MS
+    }
+  );
+}
+async function isolatePrimaryThumbnails(page, targets) {
+  const result = await page.evaluate(({ captureTargets, filterId }) => {
+    const imageAttributes = [
+      "src",
+      "data-src",
+      "data-original",
+      "data-lazy-src",
+      "data-image",
+      "data-bg",
+      "data-ep_thumb1",
+      "data-ep_thumb2",
+      "data-ep_thumb3",
+      "data-thumbnail",
+      "data-thumb"
+    ];
+    const normalizeUrl2 = (value) => {
+      try {
+        return new URL(value, location.href).href;
+      } catch {
+        return "";
+      }
+    };
+    const backgroundUrls = (value) => [...value.matchAll(/url\((?:"|')?([^"')]+)(?:"|')?\)/gi)].map((match) => normalizeUrl2(match[1] ?? "")).filter(Boolean);
+    const visibleAndLarge = (element) => {
+      const style = getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return style.display !== "none" && style.visibility !== "hidden" && Number.parseFloat(style.opacity || "1") > 0 && rect.width >= 48 && rect.height >= 30;
+    };
+    const hideEmptyContainers = (node, card, primaryNode) => {
+      let current = node;
+      while (current && current !== card && current.textContent?.trim() === "" && !current.contains(primaryNode)) {
+        const parent = current.parentElement;
+        current.style.setProperty("display", "none", "important");
+        current = parent;
+      }
+    };
+    const imageUrls = (image) => [
+      image.currentSrc,
+      image.src,
+      ...imageAttributes.map((attribute) => image.getAttribute(attribute) || "")
+    ].map(normalizeUrl2).filter(Boolean);
+    const cssRules = [];
+    const plans = [];
+    for (const [targetIndex, target] of captureTargets.entries()) {
+      const card = document.querySelector(
+        `[data-monitor-capture-card="${target.captureId}"]`
+      );
+      const expectedUrl = normalizeUrl2(target.thumbnailUrl);
+      if (!(card instanceof HTMLElement) || !expectedUrl) {
+        return {
+          ok: false,
+          error: `Chapter ${target.captureId} has no usable primary thumbnail URL`
+        };
+      }
+      let primary = null;
+      for (const image of Array.from(card.querySelectorAll("img"))) {
+        const element = image;
+        if (visibleAndLarge(element) && element.complete && element.naturalWidth > 0 && imageUrls(element).includes(expectedUrl)) {
+          primary = { kind: "image", node: element };
+          break;
+        }
+      }
+      const nodes = [
+        card,
+        ...Array.from(card.querySelectorAll("*"))
+      ].filter((node) => node instanceof HTMLElement);
+      if (!primary) {
+        for (const node of nodes) {
+          if (!visibleAndLarge(node)) continue;
+          if (backgroundUrls(getComputedStyle(node).backgroundImage).includes(expectedUrl)) {
+            primary = { kind: "background", node };
+            break;
+          }
+          if (backgroundUrls(getComputedStyle(node, "::before").backgroundImage).includes(expectedUrl)) {
+            primary = { kind: "before", node };
+            break;
+          }
+          if (backgroundUrls(getComputedStyle(node, "::after").backgroundImage).includes(expectedUrl)) {
+            primary = { kind: "after", node };
+            break;
+          }
+        }
+      }
+      if (!primary) {
+        return {
+          ok: false,
+          error: `Primary thumbnail could not be isolated for chapter ${target.captureId}`
+        };
+      }
+      plans.push({ card, expectedUrl, primary });
+      for (const node of nodes) {
+        for (const pseudo of ["before", "after"]) {
+          const pseudoUrls = backgroundUrls(
+            getComputedStyle(node, `::${pseudo}`).backgroundImage
+          );
+          if (!pseudoUrls.length) continue;
+          const marker = `${filterId}-${targetIndex}-${pseudo}-${cssRules.length}`;
+          const markerAttribute = `data-monitor-single-image-${pseudo}`;
+          node.setAttribute(markerAttribute, marker);
+          const selector = `[${markerAttribute}="${marker}"]::${pseudo}`;
+          if (primary.kind === pseudo && primary.node === node && pseudoUrls.includes(expectedUrl)) {
+            cssRules.push(
+              `${selector}{background-image:url(${JSON.stringify(expectedUrl)})!important}`
+            );
+          } else {
+            cssRules.push(
+              `${selector}{background-image:none!important;content:none!important}`
+            );
+          }
+        }
+      }
+    }
+    for (const { card, expectedUrl, primary } of plans) {
+      for (const image of Array.from(card.querySelectorAll("img"))) {
+        if (primary.kind !== "image" || image !== primary.node) {
+          const element = image;
+          element.style.setProperty(
+            "display",
+            "none",
+            "important"
+          );
+          hideEmptyContainers(element, card, primary.node);
+        }
+      }
+      const nodes = [
+        card,
+        ...Array.from(card.querySelectorAll("*"))
+      ].filter((node) => node instanceof HTMLElement);
+      for (const node of nodes) {
+        const urls = backgroundUrls(getComputedStyle(node).backgroundImage);
+        if (!urls.length) continue;
+        if (primary.kind === "background" && node === primary.node) {
+          node.style.setProperty(
+            "background-image",
+            `url(${JSON.stringify(expectedUrl)})`,
+            "important"
+          );
+        } else {
+          node.style.setProperty("background-image", "none", "important");
+          hideEmptyContainers(node, card, primary.node);
+        }
+      }
+      for (const node of nodes) {
+        if (node === primary.node || node.contains(primary.node)) continue;
+        if (getComputedStyle(node, "::before").backgroundImage !== "none" || getComputedStyle(node, "::after").backgroundImage !== "none") {
+          hideEmptyContainers(node, card, primary.node);
+        }
+      }
+    }
+    if (cssRules.length) {
+      const style = document.createElement("style");
+      style.setAttribute("data-monitor-single-image-filter", "true");
+      style.textContent = cssRules.join("\n");
+      (document.head ?? document.documentElement).append(style);
+    }
+    return { ok: true, error: "" };
+  }, {
+    captureTargets: targets,
+    filterId: `filter-${imageFilterSequence++}`
+  });
+  if (!result.ok) {
+    throw new Error(result.error || "Could not isolate the primary chapter thumbnail");
+  }
+}
+async function captureGroup(page, chapters, platform) {
+  if (!chapters.length) throw new Error("Cannot capture an empty chapter group");
   const documentBox = unionBox(chapters);
   const currentViewport = page.viewportSize();
   await page.setViewportSize({
@@ -157974,11 +158255,11 @@ async function captureGroup(page, chapters) {
       Math.max(1200, Math.ceil(documentBox.height + 24))
     )
   });
-  await page.locator(`[data-monitor-capture-card="${first.captureId}"]`).scrollIntoViewIfNeeded().catch(() => void 0);
-  await page.waitForTimeout(100);
   await page.evaluate(
-    `((ids) => {
-        const blockedWords = /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)/i;
+    `((ids, platform) => {
+        const blockedWords = platform === "toomics"
+          ? /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[/._-])(?:lock|locked|no[-_ ]?image|placeholder)(?:[/._-]|$)/i
+          : /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)|(?:^|[/._-])(?:banner|bnr|lock|locked|no[-_ ]?image|placeholder)(?:[/._-]|$)/i;
         for (const id of ids) {
           const card = document.querySelector('[data-monitor-capture-card="' + id + '"]');
           if (!card) continue;
@@ -157999,8 +158280,101 @@ async function captureGroup(page, chapters) {
             target?.style.setProperty("display", "none", "important");
           }
         }
-      })(${JSON.stringify(chapters.map((chapter) => chapter.captureId))})`
+      })(${JSON.stringify(chapters.map((chapter) => chapter.captureId))}, ${JSON.stringify(platform)})`
   ).catch(() => void 0);
+  const cardIds = chapters.map((chapter) => chapter.captureId);
+  const captureTargets = chapters.map((chapter) => ({
+    captureId: chapter.captureId,
+    thumbnailUrl: chapter.thumbnailUrl
+  }));
+  for (const cardId of cardIds) {
+    await page.locator(`[data-monitor-capture-card="${cardId}"]`).scrollIntoViewIfNeeded().catch(() => void 0);
+    await page.waitForTimeout(100);
+  }
+  await page.evaluate(
+    `((ids, platform) => {
+       const blockedWords = platform === "toomics"
+         ? /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[/._-])(?:lock|locked|no[-_ ]?image|placeholder)(?:[/._-]|$)/i
+         : /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)|(?:^|[/._-])(?:banner|bnr|lock|locked|no[-_ ]?image|placeholder)(?:[/._-]|$)/i;
+        const lazyAttributes = [
+          "data-src",
+          "data-srcset",
+          "data-original",
+          "data-lazy-src",
+          "data-image",
+          "data-bg",
+          "data-ep_thumb1",
+          "data-ep_thumb2",
+          "data-ep_thumb3",
+          "data-thumbnail",
+          "data-thumb",
+        ];
+        const placeholder = (value) => {
+          const normalized = String(value || "").trim().toLowerCase();
+          return !normalized ||
+            normalized.startsWith("data:image/") ||
+            /placeholder|no[-_ ]?image|transparent|spacer|blank[-_ ]?image/.test(normalized);
+        };
+        const usable = (value) =>
+          !placeholder(value) && !blockedWords.test(String(value || ""));
+        const firstUsable = (element, attributes) => {
+          for (const attribute of attributes) {
+            const value = element.getAttribute(attribute);
+            if (usable(value)) return value;
+          }
+          return "";
+        };
+        const setBackground = (element, value) => {
+          if (!value || !(element instanceof HTMLElement)) return;
+          const current = getComputedStyle(element).backgroundImage;
+          if (current && current !== "none") return;
+          element.style.setProperty(
+            "background-image",
+            "url(" + JSON.stringify(new URL(value, location.href).toString()) + ")",
+            "important",
+          );
+        };
+
+        for (const id of ids) {
+          const card = document.querySelector(
+            '[data-monitor-capture-card="' + id + '"]',
+          );
+          if (!card) continue;
+
+          for (const image of card.querySelectorAll("img")) {
+            const current = image.currentSrc || image.getAttribute("src") || "";
+            if (!usable(current)) {
+              const source = firstUsable(image, [
+                "data-src",
+                "data-original",
+                "data-lazy-src",
+                "data-image",
+                "data-thumbnail",
+                "data-thumb",
+              ]);
+              if (source) image.src = new URL(source, location.href).toString();
+            }
+            const srcset = firstUsable(image, ["data-srcset"]);
+            if (srcset && (!image.srcset || !usable(current))) image.srcset = srcset;
+          }
+
+          // Keep the real <img> thumbnail already present in the chapter card.
+          // Do not promote data-ep_thumb* values to CSS backgrounds: those
+          // attributes describe additional background panels from the source
+          // page, which makes the capture include three extra images.
+        }
+      })(${JSON.stringify(cardIds)}, ${JSON.stringify(platform)})`
+  ).catch(() => void 0);
+  const mediaReady = await waitForPrimaryThumbnails(
+    page,
+    captureTargets,
+    platform
+  );
+  if (!mediaReady) {
+    throw new Error("Selected primary chapter thumbnails did not finish loading");
+  }
+  await page.waitForTimeout(150);
+  await isolatePrimaryThumbnails(page, captureTargets);
   const boxes = (await Promise.all(
     chapters.map(
       (chapter) => page.locator(`[data-monitor-capture-card="${chapter.captureId}"]`).boundingBox()
@@ -158099,7 +158473,7 @@ async function openBrowserListing(listingUrl, platform, retryAfterCrash = true) 
           try {
             captured.push({
               chapterNumbers: group.map((chapter) => chapter.number),
-              image: await captureGroup(page, group)
+              image: await captureGroup(page, group, platform)
             });
           } catch (error40) {
             if (group.length === 1) throw error40;
@@ -158110,7 +158484,7 @@ async function openBrowserListing(listingUrl, platform, retryAfterCrash = true) 
             ]) {
               captured.push({
                 chapterNumbers: smallerGroup.map((chapter) => chapter.number),
-                image: await captureGroup(page, smallerGroup)
+                image: await captureGroup(page, smallerGroup, platform)
               });
             }
           }
@@ -158320,7 +158694,7 @@ async function fetchListing(work, progress) {
 }
 async function downloadThumbnail(url2) {
   try {
-    if (/fullversion|full[-_ ]?version|download[-_ ]?app|app[-_ ]?version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)|(?:^|[/._-])(?:banner|bnr)(?:[/._-]|$)/i.test(url2)) {
+    if (/fullversion|full[-_ ]?version|download[-_ ]?app|app[-_ ]?version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)|(?:^|[/._-])(?:banner|bnr|lock|locked|no[-_ ]?image|placeholder)(?:[/._-]|$)/i.test(url2)) {
       return null;
     }
     const sharp = await getOptionalSharp();
@@ -158349,7 +158723,7 @@ async function buildStrip(title, chapters) {
   if (!sharp) return null;
   const rowHeight = 164;
   const width = 920;
-  const headerHeight = 92;
+  const headerHeight = RELEASE_BANNER_HEIGHT;
   const height = headerHeight + chapters.length * rowHeight + 24;
   const images = await Promise.all(chapters.map(async (chapter) => ({
     chapter,
@@ -158359,7 +158733,7 @@ async function buildStrip(title, chapters) {
     const y = headerHeight + index * rowHeight;
     return `<rect x="24" y="${y}" width="872" height="140" rx="14" fill="#f5f0e8" stroke="#ded5c8"/><text x="52" y="${y + 78}" fill="#132b3f" font-family="Arial,sans-serif" font-size="25" font-weight="700">EP ${escapeXml(chapter.number)}</text>${data33 ? "" : `<text x="185" y="${y + 78}" fill="#7a746c" font-family="Arial,sans-serif" font-size="18">Thumbnail unavailable</text>`}`;
   }).join("");
-  const baseSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="100%" height="100%" fill="#fffaf3"/><text x="34" y="44" fill="#132b3f" font-family="Arial,sans-serif" font-size="25" font-weight="700">${escapeXml(title)}</text><text x="34" y="70" fill="#d8624c" font-family="Arial,sans-serif" font-size="13" letter-spacing="2">NEW CHAPTERS \xB7 ${chapters.length}</text>${imageRows}</svg>`;
+  const baseSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="100%" height="100%" fill="#fffaf3"/>${buildReleaseBannerMarkup(title, chapters.length)}${imageRows}</svg>`;
   let output = await sharp(Buffer.from(baseSvg)).png().toBuffer();
   const composites = await Promise.all(images.map(async ({ data: data33 }, index) => {
     if (!data33) return null;
@@ -158378,19 +158752,75 @@ async function buildStrip(title, chapters) {
   }
   return output;
 }
+var RELEASE_BANNER_HEIGHT = 92;
+function buildReleaseBannerMarkup(title, chapterCount) {
+  return `<text x="34" y="44" fill="#132b3f" font-family="Arial,sans-serif" font-size="25" font-weight="700">${escapeXml(title)}</text><text x="34" y="70" fill="#d8624c" font-family="Arial,sans-serif" font-size="13" letter-spacing="2">NEW CHAPTERS \xB7 ${chapterCount}</text>`;
+}
+async function addReleaseBanner(image, title, chapterCount) {
+  const sharp = await getOptionalSharp();
+  if (!sharp) return null;
+  try {
+    const metadata = await sharp(image).metadata();
+    if (!metadata.width || !metadata.height) return null;
+    const banner = Buffer.from(
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${metadata.width}" height="${RELEASE_BANNER_HEIGHT}" viewBox="0 0 ${metadata.width} ${RELEASE_BANNER_HEIGHT}"><rect width="100%" height="100%" fill="#fffaf3"/>${buildReleaseBannerMarkup(title, chapterCount)}</svg>`
+    );
+    const decorated = await sharp(image).extend({
+      top: RELEASE_BANNER_HEIGHT,
+      bottom: 0,
+      left: 0,
+      right: 0,
+      background: "#fffaf3"
+    }).composite([{ input: banner, left: 0, top: 0 }]).png().toBuffer();
+    const decoratedMetadata = await sharp(decorated).metadata();
+    if (decoratedMetadata.width !== metadata.width || decoratedMetadata.height !== metadata.height + RELEASE_BANNER_HEIGHT) {
+      logger.warn(
+        {
+          originalWidth: metadata.width,
+          originalHeight: metadata.height,
+          decoratedWidth: decoratedMetadata.width,
+          decoratedHeight: decoratedMetadata.height
+        },
+        "A captura decorada n\xE3o recebeu o banner completo; usando fallback"
+      );
+      return null;
+    }
+    return decorated;
+  } catch (error40) {
+    logger.warn({ err: error40 }, "N\xE3o foi poss\xEDvel adicionar o banner \xE0 captura do navegador");
+    return null;
+  }
+}
 function escapeXml(value) {
   return value.replace(/[<>&'"]/g, (character) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", "'": "&apos;", '"': "&quot;" })[character] ?? character);
 }
 async function postStrip(channelId, title, chapters, part, total, isTest = false, capturedImage) {
   const token = process.env.DISCORD_BOT_TOKEN;
   if (!token) throw new Error("DISCORD_BOT_TOKEN is not configured");
-  const png = capturedImage ?? await buildStrip(title, chapters);
+  let browserImage = null;
+  if (capturedImage) {
+    try {
+      browserImage = await addReleaseBanner(capturedImage, title, chapters.length);
+    } catch (error40) {
+      logger.warn({ err: error40, title }, "Falha ao adicionar banner \xE0 captura; tentando fallback");
+    }
+  }
+  let png = browserImage;
+  if (!png) {
+    try {
+      png = await buildStrip(title, chapters);
+    } catch (error40) {
+      logger.warn({ err: error40, title }, "Falha ao gerar imagem do monitor; enviando aviso sem anexo");
+      png = null;
+    }
+  }
+  const imageMode = browserImage ? "browser+banner" : png ? "sharp+banner" : "none";
   const form = new FormData();
   const chapterSummary = chapters.length === 1 ? `1 cap\xEDtulo novo \xB7 cap\xEDtulo ${chapters[0].number}` : `${chapters.length} cap\xEDtulos novos \xB7 cap\xEDtulos ${chapters.map((chapter) => chapter.number).join(", ")}`;
   if (!png) {
     logger.warn(
       { title, chapterNumbers: chapters.map((chapter) => chapter.number) },
-      "Sharp indispon\xEDvel e nenhuma captura do navegador foi obtida; enviando notifica\xE7\xE3o sem anexo"
+      "Nenhuma imagem do monitor foi obtida; enviando notifica\xE7\xE3o sem anexo"
     );
   }
   form.append("payload_json", JSON.stringify({
@@ -158409,12 +158839,100 @@ async function postStrip(channelId, title, chapters, part, total, isTest = false
     body: form
   });
   if (!response.ok) throw new Error(`Discord returned ${response.status}`);
+  return imageMode;
 }
 async function isUsableBrowserCapture(image) {
   if (!image) return false;
   const isPng = image.length >= 24 && image[0] === 137 && image[1] === 80 && image[2] === 78 && image[3] === 71 && image[4] === 13 && image[5] === 10 && image[6] === 26 && image[7] === 10;
   if (!isPng) return false;
   return image.readUInt32BE(16) >= 240 && image.readUInt32BE(20) >= 90;
+}
+async function runResendNotification(workId, requestedChapter, progress) {
+  const [config3] = await db.select().from(monitorConfigTable).limit(1);
+  if (!config3?.discordChannelId) {
+    throw new Error("Nenhum canal do Discord foi configurado para o monitor.");
+  }
+  const [work] = await db.select().from(monitoredWorksTable).where(eq(monitoredWorksTable.id, workId)).limit(1);
+  if (!work) {
+    throw new Error(`N\xE3o encontrei nenhuma obra com o ID ${workId}. Use /monitor listar para conferir os IDs.`);
+  }
+  const wanted = chapterNumberIdentity(requestedChapter);
+  if (!wanted) {
+    throw new Error("Informe um n\xFAmero de cap\xEDtulo v\xE1lido.");
+  }
+  let listing;
+  try {
+    await reportProgress(progress, `Procurando o cap\xEDtulo ${requestedChapter} de ${work.title}.`);
+    listing = await fetchListing(work, progress);
+    let chapter = listing.candidates.find(
+      (candidate) => chapterNumberIdentity(candidate.number) === wanted
+    );
+    if (!chapter) {
+      const storedChapters = await db.select({
+        chapterNumber: detectedChaptersTable.chapterNumber,
+        thumbnailUrl: detectedChaptersTable.thumbnailUrl,
+        chapterKey: detectedChaptersTable.chapterKey
+      }).from(detectedChaptersTable).where(eq(detectedChaptersTable.workId, work.id));
+      const stored = storedChapters.find(
+        (candidate) => chapterNumberIdentity(candidate.chapterNumber) === wanted
+      );
+      if (stored) {
+        chapter = {
+          number: stored.chapterNumber,
+          thumbnailUrl: stored.thumbnailUrl,
+          key: stored.chapterKey,
+          parser: "hist\xF3rico salvo"
+        };
+        await reportProgress(
+          progress,
+          "O cap\xEDtulo n\xE3o est\xE1 na lista atual; usando a imagem salva no hist\xF3rico do monitor."
+        );
+      }
+    }
+    if (!chapter) {
+      throw new Error(
+        `N\xE3o encontrei o cap\xEDtulo ${requestedChapter} na lista atual nem no hist\xF3rico salvo de **${work.title}**.`
+      );
+    }
+    let capturedImage;
+    if (listing.captureSession && chapter.captureId) {
+      await reportProgress(progress, "Tentando capturar novamente o card renderizado.");
+      try {
+        const groups = await listing.captureSession.captureGroups([chapter.captureId]);
+        const group = groups.find(
+          (candidate) => candidate.chapterNumbers.some((number4) => chapterNumberIdentity(number4) === wanted)
+        );
+        if (group?.image && await isUsableBrowserCapture(group.image)) {
+          capturedImage = group.image;
+        }
+      } catch (error40) {
+        logger.warn(
+          { err: error40, workId: work.id, chapter: chapter.number },
+          "Falha ao recapturar cap\xEDtulo para reenvio; usando thumbnail salva"
+        );
+      }
+    }
+    await reportProgress(progress, "Enviando novamente a notifica\xE7\xE3o.");
+    const imageMode = await postStrip(
+      config3.discordChannelId,
+      work.title,
+      [chapter],
+      1,
+      1,
+      false,
+      capturedImage
+    );
+    return {
+      title: work.title,
+      chapter: chapter.number,
+      imageMode,
+      parser: listing.parser
+    };
+  } finally {
+    await listing?.captureSession?.close().catch((error40) => {
+      logger.warn({ err: error40, workId: work.id }, "Falha ao fechar captura ap\xF3s reenvio");
+    });
+  }
 }
 async function runTestNotification(progress, workId) {
   await reportProgress(progress, "Iniciando o teste da notifica\xE7\xE3o.");
@@ -158467,7 +158985,7 @@ async function runTestNotification(progress, workId) {
       await reportProgress(progress, "N\xE3o houve sess\xE3o de captura; usando fallback SVG/Sharp.");
     }
     await reportProgress(progress, "Montando e enviando a imagem para o canal do monitor.");
-    await postStrip(
+    const imageMode = await postStrip(
       config3.discordChannelId,
       work.title,
       [chapter],
@@ -158476,12 +158994,12 @@ async function runTestNotification(progress, workId) {
       true,
       capturedImage
     );
-    await reportProgress(progress, "Mensagem enviada ao Discord.");
+    await reportProgress(progress, `Mensagem enviada ao Discord (${imageMode}).`);
     return {
       title: work.title,
       chapter: chapter.number,
       parser,
-      captureMode: capturedImage ? "captura direta do card" : "fallback SVG/Sharp ou mensagem sem anexo",
+      captureMode: imageMode,
       channelId: config3.discordChannelId
     };
   } finally {
@@ -158655,6 +159173,7 @@ async function runMonitor() {
         }
       }
       const groups = [];
+      const imageModes = /* @__PURE__ */ new Set();
       const emittedDirectKeys = /* @__PURE__ */ new Set();
       let fallbackChapters = [];
       const flushFallback = () => {
@@ -158689,7 +159208,7 @@ async function runMonitor() {
       flushFallback();
       for (let index = 0; index < groups.length; index++) {
         const group = groups[index];
-        await postStrip(
+        const imageMode = await postStrip(
           config3.discordChannelId,
           work.title,
           group.chapters,
@@ -158698,6 +159217,7 @@ async function runMonitor() {
           false,
           group.image
         );
+        imageModes.add(imageMode);
         postsSent++;
       }
       await db.transaction(async (tx) => {
@@ -158741,13 +159261,13 @@ async function runMonitor() {
         await tx.insert(monitorActivityTable).values({
           workId: work.id,
           chapterCount: toPublish.length,
-          status: "Published"
+          status: `Published (image: ${[...imageModes].join("+")})`
         });
         await tx.update(monitoredWorksTable).set({
           chaptersSeen: existing.length + historical.length + fresh.length,
           lastCheckedAt: checkedAt,
           lastPublishedAt: checkedAt,
-          lastStatus: `${toPublish.length} new chapter${toPublish.length === 1 ? "" : "s"} published`,
+          lastStatus: `${toPublish.length} new chapter${toPublish.length === 1 ? "" : "s"} published (image: ${[...imageModes].join("+")})`,
           updatedAt: checkedAt
         }).where(eq(monitoredWorksTable.id, work.id));
       });
@@ -158762,7 +159282,7 @@ async function runMonitor() {
 }
 
 // src/services/monitor-interval.ts
-var DEFAULT_MONITOR_INTERVAL_MINUTES = 60;
+var DEFAULT_MONITOR_INTERVAL_MINUTES = 7 * 60;
 function getMonitorIntervalMinutes(configuredInterval) {
   const environmentInterval = Number(process.env.MONITOR_INTERVAL_MINUTES);
   if (Number.isFinite(environmentInterval) && environmentInterval >= 5) {
@@ -171007,7 +171527,13 @@ function notificationEventKey(channelId, title, newChapters) {
 // src/bot/notificacao-service.ts
 var ANILIST_API13 = "https://graphql.anilist.co";
 var COMICK_API_BASE = (process.env.COMICK_API_BASE ?? "https://api.comick.dev").replace(/\/+$/, "");
-var CHECK_INTERVAL_MS = 2 * 60 * 60 * 1e3;
+var DEFAULT_EMBED_MONITOR_INTERVAL_HOURS = 24;
+function getEmbedMonitorIntervalMs() {
+  const configuredHours = Number(process.env.EMBED_MONITOR_INTERVAL_HOURS);
+  const intervalHours = Number.isFinite(configuredHours) && configuredHours >= 1 ? configuredHours : DEFAULT_EMBED_MONITOR_INTERVAL_HOURS;
+  return Math.floor(intervalHours * 60 * 60 * 1e3);
+}
+var CHECK_INTERVAL_MS = getEmbedMonitorIntervalMs();
 var BETWEEN_TITLES_DELAY_MS = 1e4;
 var COMICK_COOLDOWN_STEPS_MS = [
   30 * 60 * 1e3,
@@ -172727,7 +173253,7 @@ function startNotificacaoService(client) {
   };
   setTimeout(runSafe, 6e4);
   setInterval(runSafe, CHECK_INTERVAL_MS);
-  logger.info({ intervalHoras: 2 }, "Servi\xE7o de notifica\xE7\xF5es iniciado");
+  logger.info({ intervalHoras: CHECK_INTERVAL_MS / (60 * 60 * 1e3) }, "Servi\xE7o de notifica\xE7\xF5es por embed iniciado");
 }
 
 // src/bot/commands/verificar.ts
@@ -173971,7 +174497,19 @@ var monitorCommandDefinition = new import_discord35.SlashCommandBuilder().setNam
 ).addSubcommand(
   (command) => command.setName("listar").setDescription("Lista os manhwas ativos")
 ).addSubcommand(
+  (command) => command.setName("renomear").setDescription("Altera o nome de uma obra monitorada").addIntegerOption(
+    (option) => option.setName("id").setDescription("ID exibido pelo /monitor listar").setRequired(true)
+  ).addStringOption(
+    (option) => option.setName("nome").setDescription("Novo nome da obra").setMinLength(1).setMaxLength(200).setRequired(true)
+  )
+).addSubcommand(
   (command) => command.setName("historico").setDescription("Lista os \xFAltimos cap\xEDtulos enviados ao Discord")
+).addSubcommand(
+  (command) => command.setName("reenviar").setDescription("Reenvia um cap\xEDtulo monitorado, tentando recuperar a imagem").addIntegerOption(
+    (option) => option.setName("obra").setDescription("ID da obra exibido pelo /monitor listar").setRequired(true)
+  ).addStringOption(
+    (option) => option.setName("capitulo").setDescription("N\xFAmero do cap\xEDtulo a reenviar, por exemplo 12 ou 12.5").setRequired(true)
+  )
 ).addSubcommand(
   (command) => command.setName("canal").setDescription("Escolhe o canal que receber\xE1 as notifica\xE7\xF5es").addChannelOption(
     (option) => option.setName("canal").setDescription("Canal de texto para as notifica\xE7\xF5es").addChannelTypes(import_discord35.ChannelType.GuildText, import_discord35.ChannelType.GuildAnnouncement).setRequired(true)
@@ -174135,8 +174673,62 @@ async function executeManhwaCommand(interaction) {
     await handleList(interaction);
     return;
   }
+  if (subcommand === "renomear") {
+    const workId = interaction.options.getInteger("id", true);
+    const title = interaction.options.getString("nome", true).trim();
+    if (!title) {
+      await replyError(interaction, "Informe um nome n\xE3o vazio para a obra.");
+      return;
+    }
+    const [work] = await db.update(monitoredWorksTable).set({ title, updatedAt: /* @__PURE__ */ new Date() }).where(eq(monitoredWorksTable.id, workId)).returning();
+    if (!work) {
+      await interaction.editReply({
+        content: `\u274C N\xE3o encontrei nenhuma obra com o ID ${workId}. Use \`/monitor listar\` para conferir os IDs.`
+      });
+      return;
+    }
+    await interaction.editReply({
+      content: [
+        `\u2705 Obra ID ${work.id} renomeada para **${work.title}**.`,
+        "A URL, a plataforma e o hist\xF3rico de cap\xEDtulos foram preservados."
+      ].join("\n")
+    });
+    return;
+  }
   if (subcommand === "historico") {
     await handleHistory(interaction);
+    return;
+  }
+  if (subcommand === "reenviar") {
+    const workId = interaction.options.getInteger("obra", true);
+    const chapterNumber = interaction.options.getString("capitulo", true);
+    const progress = [];
+    const updateProgress = async (message) => {
+      progress.push(message);
+      await interaction.editReply({
+        content: [
+          "\u{1F501} **Reenvio do cap\xEDtulo**",
+          ...progress.map((step, index) => `${index + 1}. ${step}`)
+        ].join("\n")
+      });
+    };
+    try {
+      const result = await runResendNotification(workId, chapterNumber, updateProgress);
+      await interaction.editReply({
+        content: [
+          "\u2705 **Cap\xEDtulo reenviado**",
+          `Obra: **${result.title}**`,
+          `Cap\xEDtulo: **${result.chapter}**`,
+          `Imagem: **${result.imageMode === "none" ? "indispon\xEDvel" : result.imageMode}**`,
+          `Parser: **${result.parser}**`
+        ].join("\n")
+      });
+    } catch (error40) {
+      await replyError(
+        interaction,
+        error40 instanceof Error ? error40.message : "N\xE3o foi poss\xEDvel reenviar o cap\xEDtulo."
+      );
+    }
     return;
   }
   if (subcommand === "canal") {

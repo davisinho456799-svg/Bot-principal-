@@ -5,12 +5,14 @@ import { access, constants as fsConstants } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
+import { ensureCurrentWorker } from "./scripts/worker-build-provenance.mjs";
 
 process.env.NODE_ENV ??= "production";
 process.env.DISCORD_BOT_ENABLED = "true";
 process.env.DISCORD_LIGHT_MODE ??= "true";
 process.env.LIGHT_MODE_NOTIFICATIONS ??= "true";
 process.env.MONITOR_INTERVAL_MINUTES ??= "60";
+process.env.EMBED_MONITOR_INTERVAL_HOURS ??= "24";
 console.log("Panel Watch Discord worker build: embed-limit-fix-v2");
 
 const execFileAsync = promisify(execFile);
@@ -185,27 +187,22 @@ async function ensureMonitorDependencies() {
 }
 
 async function ensureCompiledWorker() {
-  try {
-    await access(workerPath);
-    return;
-  } catch {
-    console.warn("Compiled Discord worker not found; rebuilding it before startup.");
-  }
-
-  const buildScript = path.join(projectRoot, "artifacts", "api-server", "build.mjs");
-  const { stdout, stderr } = await execFileAsync(process.execPath, [buildScript], {
-    cwd: projectRoot,
-    env: {
-      ...process.env,
-      NODE_ENV: "production",
-      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1",
-    },
-    maxBuffer: 10 * 1024 * 1024,
+  await ensureCurrentWorker(projectRoot, async (reason) => {
+    console.warn(`Rebuilding compiled Discord worker: ${reason}`);
+    const buildScript = path.join(projectRoot, "artifacts", "api-server", "build.mjs");
+    const { stdout, stderr } = await execFileAsync(process.execPath, [buildScript], {
+      cwd: projectRoot,
+      env: {
+        ...process.env,
+        NODE_ENV: process.env.NODE_ENV,
+        PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1",
+      },
+      timeout: 10 * 60_000,
+      maxBuffer: 10 * 1024 * 1024,
+    });
+    if (stdout) console.log(stdout.trim());
+    if (stderr) console.error(stderr.trim());
   });
-
-  if (stdout) console.log(stdout.trim());
-  if (stderr) console.error(stderr.trim());
-  await access(workerPath);
 }
 
 try {

@@ -3,23 +3,27 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build as esbuild } from "esbuild";
 import esbuildPluginPino from "esbuild-plugin-pino";
-import { cp, rm } from "node:fs/promises";
+import { cp, mkdtemp, rm } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { tmpdir } from "node:os";
 import { promisify } from "node:util";
+import { getBuildFingerprint, inspectWorkerBuild, promoteBuildArtifacts, writeBuildManifest } from "../../scripts/worker-build-provenance.mjs";
+import { createBuildRequire, getBuildTransports, rebasePinoWorkers } from "../../scripts/worker-build-runtime.mjs";
 
 // Plugins (e.g. 'esbuild-plugin-pino') may use `require` to resolve dependencies
-globalThis.require = createRequire(import.meta.url);
+globalThis.require = createBuildRequire(createRequire(import.meta.url), createRequire);
 
 const artifactDir = path.dirname(fileURLToPath(import.meta.url));
 const workspaceRoot = path.resolve(artifactDir, "../..");
 const execFileAsync = promisify(execFile);
 
 async function buildAll() {
-  const distDir = path.resolve(artifactDir, "dist");
-  const compiledWorkerDir = path.resolve(artifactDir, "compiled-worker");
-  await rm(distDir, { recursive: true, force: true });
-  await rm(compiledWorkerDir, { recursive: true, force: true });
+  const inputHash = await getBuildFingerprint(workspaceRoot);
+  const buildStageDir = await mkdtemp(path.join(artifactDir, ".build-stage-"));
+  const distDir = path.join(buildStageDir, "dist");
+  const compiledWorkerDir = path.join(buildStageDir, "compiled-worker");
+  let preserveStage = false;
+  try {
 
   await esbuild({
     entryPoints: [path.resolve(artifactDir, "src/index.ts")],
@@ -111,7 +115,7 @@ async function buildAll() {
     sourcemap: "linked",
     plugins: [
       // pino relies on workers to handle logging, instead of externalizing it we use a plugin to handle it
-      esbuildPluginPino({ transports: ["pino-pretty"] })
+      esbuildPluginPino({ transports: getBuildTransports(process.env.NODE_ENV) })
     ],
     // Make sure packages that are cjs only (e.g. express) but are bundled continue to work in our esm output file
     banner: {
@@ -125,6 +129,9 @@ globalThis.__dirname = __bannerPath.dirname(globalThis.__filename);
     `,
     },
   });
+  await rebasePinoWorkers(distDir, path.join(artifactDir, "dist"));
+  // Syntax validation does not execute the worker or connect to Discord/database.
+  await execFileAsync(process.execPath, ["--check", path.join(distDir, "index.mjs")]);
 
   // got-scraping/header-generator lê estes arquivos em runtime.
   // Sem copiá-los, o Railway falha com ENOENT para headers-order.json.
@@ -184,6 +191,19 @@ globalThis.__dirname = __bannerPath.dirname(globalThis.__filename);
     );
   } finally {
     await rm(runtimeStageDir, { recursive: true, force: true });
+  }
+  await writeBuildManifest(workspaceRoot, compiledWorkerDir, inputHash);
+  const candidate = await inspectWorkerBuild(workspaceRoot, compiledWorkerDir);
+  if (!candidate.valid) throw new Error(`Invalid staged worker: ${candidate.reason}`);
+  await promoteBuildArtifacts([
+    { staged: distDir, target: path.join(artifactDir, "dist") },
+    { staged: compiledWorkerDir, target: path.join(artifactDir, "compiled-worker") },
+  ], buildStageDir);
+  } catch (error) {
+    preserveStage = error.preserveBuildStage === true;
+    throw error;
+  } finally {
+    if (!preserveStage) await rm(buildStageDir, { recursive: true, force: true });
   }
 }
 

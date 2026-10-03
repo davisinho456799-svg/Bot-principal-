@@ -1,10 +1,14 @@
 import {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
   ChannelType,
+  ComponentType,
   PermissionFlagsBits,
   SlashCommandBuilder,
   type ChatInputCommandInteraction,
 } from "discord.js";
-import { desc, eq, like } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { db } from "@workspace/db";
 import {
   monitorConfigTable,
@@ -12,7 +16,9 @@ import {
   monitoredWorksTable,
 } from "@workspace/db/schema";
 import { logger } from "../lib/logger";
-import { runMonitor, runTestNotification } from "./monitor-service.js";
+import { runMonitor, runResendNotification, runTestNotification } from "./monitor-service.js";
+import { getActiveNumberedMonitorWorks } from "./monitor-work-list.js";
+import { resolveMonitorWorkNumber } from "./monitor-work-numbering.js";
 
 export const monitorCommandDefinition = new SlashCommandBuilder()
     .setName("monitor")
@@ -51,8 +57,46 @@ export const monitorCommandDefinition = new SlashCommandBuilder()
     )
     .addSubcommand((command) =>
       command
+        .setName("renomear")
+        .setDescription("Altera o nome de uma obra monitorada")
+        .addIntegerOption((option) =>
+          option
+            .setName("id")
+            .setDescription("Número atual exibido pelo /monitor listar; exige confirmação")
+            .setMinValue(1)
+            .setRequired(true),
+        )
+        .addStringOption((option) =>
+          option
+            .setName("nome")
+            .setDescription("Novo nome da obra")
+            .setMinLength(1)
+            .setMaxLength(200)
+            .setRequired(true),
+        ),
+    )
+    .addSubcommand((command) =>
+      command
         .setName("historico")
         .setDescription("Lista os últimos capítulos enviados ao Discord"),
+    )
+    .addSubcommand((command) =>
+      command
+        .setName("reenviar")
+        .setDescription("Reenvia um capítulo monitorado, tentando recuperar a imagem")
+        .addIntegerOption((option) =>
+          option
+            .setName("obra")
+            .setDescription("Número atual da obra exibido pelo /monitor listar")
+            .setMinValue(1)
+            .setRequired(true),
+        )
+        .addStringOption((option) =>
+          option
+            .setName("capitulo")
+            .setDescription("Número do capítulo a reenviar, por exemplo 12 ou 12.5")
+            .setRequired(true),
+        ),
     )
     .addSubcommand((command) =>
       command
@@ -76,7 +120,8 @@ export const monitorCommandDefinition = new SlashCommandBuilder()
         .addIntegerOption((option) =>
           option
             .setName("obra")
-            .setDescription("ID da obra exibido pelo /monitor listar")
+            .setDescription("Número atual da obra exibido pelo /monitor listar")
+            .setMinValue(1)
             .setRequired(false),
         ),
     )
@@ -87,7 +132,8 @@ export const monitorCommandDefinition = new SlashCommandBuilder()
         .addIntegerOption((option) =>
           option
             .setName("id")
-            .setDescription("ID exibido pelo /monitor listar")
+            .setDescription("Número atual exibido pelo /monitor listar; exige confirmação")
+            .setMinValue(1)
             .setRequired(true),
         ),
     )
@@ -126,7 +172,7 @@ function normalizeUrl(link: string) {
 
 async function replyError(interaction: ChatInputCommandInteraction, message: string) {
   if (interaction.replied || interaction.deferred) {
-    await interaction.editReply({ content: `❌ ${message}` });
+    await interaction.editReply({ content: `❌ ${message}`, components: [] });
   } else {
     await interaction.reply({ content: `❌ ${message}`, ephemeral: true });
   }
@@ -170,23 +216,23 @@ async function handleAdd(interaction: ChatInputCommandInteraction) {
     .insert(monitoredWorksTable)
     .values({ title, platform, listingUrl, active: true })
     .returning();
+  const works = await getActiveNumberedMonitorWorks();
+  const numberedWork = works.find((candidate) => candidate.id === work.id);
 
   await interaction.editReply({
     content: [
       `✅ **${work.title}** agora está sendo monitorado.`,
       `Plataforma: ${platform}`,
       `A primeira verificação será feita na próxima rodada e criará a linha de base sem repostar o histórico.`,
-      `ID da obra: ${work.id}`,
+      numberedWork
+        ? `Número atual da obra: ${numberedWork.displayNumber}`
+        : "Consulte /monitor listar para conferir a lista atual.",
     ].join("\n"),
   });
 }
 
 async function handleList(interaction: ChatInputCommandInteraction) {
-  const works = await db
-    .select()
-    .from(monitoredWorksTable)
-    .where(eq(monitoredWorksTable.active, true))
-    .orderBy(desc(monitoredWorksTable.createdAt));
+  const works = await getActiveNumberedMonitorWorks();
 
   if (!works.length) {
     await interaction.editReply({
@@ -196,10 +242,10 @@ async function handleList(interaction: ChatInputCommandInteraction) {
   }
 
   const lines = works.map(
-    (work) => `• **${work.title}** · ${work.platform} · ID ${work.id}\n  ${work.listingUrl}`,
+    (work) => `• **Nº ${work.displayNumber} — ${work.title}** · ${work.platform}\n  ${work.listingUrl}`,
   );
   await interaction.editReply({
-    content: `📚 **Manhwas monitorados (${works.length})**\n${lines.join("\n")}`.slice(0, 1900),
+    content: `📚 **Manhwas monitorados (${works.length})**\nOs números mudam ao remover ou reativar obras. Consulte esta lista antes de usar os comandos.\n${lines.join("\n")}`.slice(0, 1900),
   });
 }
 
@@ -295,6 +341,44 @@ export async function executeManhwaCommand(interaction: ChatInputCommandInteract
     await handleHistory(interaction);
     return;
   }
+  if (subcommand === "reenviar") {
+    const workNumber = interaction.options.getInteger("obra", true);
+    const work = resolveMonitorWorkNumber(await getActiveNumberedMonitorWorks(), workNumber);
+    if (!work) {
+      await replyError(interaction, `Não encontrei a obra nº ${workNumber}. Use /monitor listar para conferir a numeração atual.`);
+      return;
+    }
+    const chapterNumber = interaction.options.getString("capitulo", true);
+    const progress: string[] = [];
+    const updateProgress = async (message: string) => {
+      progress.push(message);
+      await interaction.editReply({
+        content: [
+          "🔁 **Reenvio do capítulo**",
+          ...progress.map((step, index) => `${index + 1}. ${step}`),
+        ].join("\n"),
+      });
+    };
+
+    try {
+      const result = await runResendNotification(work.id, chapterNumber, updateProgress);
+      await interaction.editReply({
+        content: [
+          "✅ **Capítulo reenviado**",
+          `Obra: **${result.title}**`,
+          `Capítulo: **${result.chapter}**`,
+          `Imagem: **${result.imageMode === "none" ? "indisponível" : result.imageMode}**`,
+          `Parser: **${result.parser}**`,
+        ].join("\n"),
+      });
+    } catch (error) {
+      await replyError(
+        interaction,
+        error instanceof Error ? error.message : "Não foi possível reenviar o capítulo.",
+      );
+    }
+    return;
+  }
   if (subcommand === "canal") {
     await handleSetChannel(interaction);
     return;
@@ -312,7 +396,13 @@ export async function executeManhwaCommand(interaction: ChatInputCommandInteract
     return;
   }
   if (subcommand === "teste") {
-    const workId = interaction.options.getInteger("obra") ?? undefined;
+    const workNumber = interaction.options.getInteger("obra") ?? undefined;
+    const works = workNumber === undefined ? undefined : await getActiveNumberedMonitorWorks();
+    const work = works && resolveMonitorWorkNumber(works, workNumber!);
+    if (workNumber !== undefined && !work) {
+      await replyError(interaction, `Não encontrei a obra nº ${workNumber}. Use /monitor listar para conferir a numeração atual.`);
+      return;
+    }
     const progress: string[] = [];
     const updateProgress = async (message: string) => {
       progress.push(message);
@@ -325,7 +415,7 @@ export async function executeManhwaCommand(interaction: ChatInputCommandInteract
     };
 
     try {
-      const result = await runTestNotification(updateProgress, workId);
+      const result = await runTestNotification(updateProgress, work?.id);
       await interaction.editReply({
         content: [
           "✅ **Resultado do teste**",
@@ -346,35 +436,85 @@ export async function executeManhwaCommand(interaction: ChatInputCommandInteract
     }
     return;
   }
-  if (subcommand === "remover") {
-    const workId = interaction.options.getInteger("id", true);
-    const [work] = await db
+  if (subcommand === "remover" || subcommand === "renomear") {
+    const workNumber = interaction.options.getInteger("id", true);
+    const selected = resolveMonitorWorkNumber(await getActiveNumberedMonitorWorks(), workNumber);
+    if (!selected) {
+      await replyError(interaction, `Não encontrei a obra nº ${workNumber}. Use /monitor listar para conferir a numeração atual.`);
+      return;
+    }
+    const renaming = subcommand === "renomear";
+    const title = renaming ? interaction.options.getString("nome", true).trim() : undefined;
+    if (renaming && !title) {
+      await replyError(interaction, "Informe um nome não vazio para a obra.");
+      return;
+    }
+    // Bind confirmation to an immutable ID, never re-resolve a changing number.
+    const confirmId = `monitor-${subcommand}:${interaction.id}:${selected.id}`;
+    const cancelId = `monitor-cancel:${interaction.id}`;
+    const question = renaming
+      ? `Renomear **${selected.title}** (nº ${selected.displayNumber}) para **${title}**?`
+      : `Remover **${selected.title}** (nº ${selected.displayNumber}) da monitoração?`;
+    const message = await interaction.editReply({
+      content: `${question}\n${selected.listingUrl}\nConfira o título: a numeração pode ter mudado desde a última listagem. O histórico será preservado.`,
+      components: [
+        new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder().setCustomId(confirmId).setLabel(renaming ? "Confirmar renomeação" : "Confirmar remoção").setStyle(renaming ? ButtonStyle.Primary : ButtonStyle.Danger),
+          new ButtonBuilder().setCustomId(cancelId).setLabel("Cancelar").setStyle(ButtonStyle.Secondary),
+        ),
+      ],
+    });
+    let button;
+    try {
+      button = await message.awaitMessageComponent({
+        componentType: ComponentType.Button,
+        time: 60_000,
+        filter: (candidate) =>
+          candidate.user.id === interaction.user.id &&
+          [confirmId, cancelId].includes(candidate.customId),
+      });
+    } catch (error) {
+      logger.warn({ err: error, workId: selected.id }, "Confirmação de alteração do monitor não concluída");
+      await interaction.editReply({
+        content: "Confirmação não concluída. Nenhuma obra foi alterada. Use /monitor listar antes de tentar novamente.",
+        components: [],
+      });
+      return;
+    }
+    await button.deferUpdate();
+    if (button.customId === cancelId) {
+      await interaction.editReply({ content: "Operação cancelada. Nenhuma obra foi alterada.", components: [] });
+      return;
+    }
+    const [changed] = await db
       .update(monitoredWorksTable)
-      .set({ active: false, updatedAt: new Date() })
-      .where(eq(monitoredWorksTable.id, workId))
+      .set(renaming ? { title, updatedAt: new Date() } : { active: false, updatedAt: new Date() })
+      .where(and(eq(monitoredWorksTable.id, selected.id), eq(monitoredWorksTable.active, true)))
       .returning();
 
-    if (!work) {
+    if (!changed) {
       await interaction.editReply({
-        content: `❌ Não encontrei nenhuma obra com o ID ${workId}. Use \`/monitor listar\` para conferir os IDs ativos.`,
+        content: "Essa obra já foi removida ou pausada. Nenhuma outra obra foi alterada. Consulte /monitor listar.",
+        components: [],
       });
       return;
     }
 
     await interaction.editReply({
       content: [
-        `🗑️ **${work.title}** foi removido da monitoração.`,
-        "O histórico foi preservado e a obra pode ser reativada pelo painel.",
+        renaming
+          ? `✅ Obra nº ${selected.displayNumber} renomeada para **${changed.title}**.`
+          : `🗑️ **${changed.title}** foi removido da monitoração.`,
+        "A URL, a plataforma e o histórico de capítulos foram preservados.",
+        renaming ? "" : "A numeração foi reorganizada. Use /monitor listar antes de selecionar outra obra.",
       ].join("\n"),
+      components: [],
     });
     return;
   }
   if (subcommand === "erros") {
-    const failedWorks = await db
-      .select()
-      .from(monitoredWorksTable)
-      .where(like(monitoredWorksTable.lastStatus, "Check failed:%"))
-      .orderBy(desc(monitoredWorksTable.lastCheckedAt));
+    const works = await getActiveNumberedMonitorWorks();
+    const failedWorks = works.filter((work) => work.lastStatus?.startsWith("Check failed"));
 
     if (!failedWorks.length) {
       await interaction.editReply({
@@ -384,7 +524,7 @@ export async function executeManhwaCommand(interaction: ChatInputCommandInteract
     }
 
     const lines = failedWorks.map((work) => [
-      `• **${work.title}** · ID ${work.id}`,
+      `• **${work.title}** · Nº ${work.displayNumber}`,
       `  ${work.lastStatus}`,
       `  Última tentativa: ${work.lastCheckedAt?.toISOString() ?? "desconhecida"}`,
     ].join("\n"));
