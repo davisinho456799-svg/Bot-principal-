@@ -23,7 +23,15 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Start deployment history
+        run: |
+          node --input-type=module <<'JS'
+          import { createDeploymentJournal } from "./scripts/discloud-deploy.mjs";
+          createDeploymentJournal({ revision: process.env.GITHUB_SHA }).record({ phase: "package.source", status: "started" });
+          JS
+
       - name: Package tracked source without credentials or generated files
+        id: package
         shell: bash
         run: |
           python3 - <<'PY'
@@ -41,7 +49,8 @@ jobs:
           with zipfile.ZipFile("/tmp/discloud-upload.zip", "w", zipfile.ZIP_DEFLATED) as archive:
               for name in filter(None, files):
                   path = pathlib.Path(name)
-                  if ignored.intersection(path.parts) or path.name.startswith(".env"):
+                  if ignored.intersection(path.parts) or path.name.startswith(".env") or any(
+                       part == ".build-history" or part.startswith((".build-stage-", ".promotion-")) for part in path.parts):
                       continue
                   if any(fnmatch.fnmatch(path.name, pattern) for pattern in patterns):
                       continue
@@ -55,140 +64,43 @@ jobs:
           print(f"Packaged {count} tracked source files; no environment file included.")
           PY
 
+      - name: Record packaging result
+        if: always()
+        env:
+          PACKAGE_STATUS: ${{ steps.package.outcome }}
+        run: |
+          node --input-type=module <<'JS'
+          import { createDeploymentJournal } from "./scripts/discloud-deploy.mjs";
+          createDeploymentJournal({ revision: process.env.GITHUB_SHA }).record({
+            phase: "package.source",
+            status: process.env.PACKAGE_STATUS === "success" ? "completed" : "failed"
+          });
+          JS
+
       - name: Update the existing bot and verify the running revision
         shell: bash
         env:
           DISCLOUD_TOKEN: ${{ secrets.DISCLOUD_TOKEN }}
         run: |
+          node scripts/discloud-deploy.mjs
+
+      - name: Finalize deployment history
+        if: always()
+        env:
+          DEPLOYMENT_STATUS: ${{ job.status }}
+        run: |
           node --input-type=module <<'JS'
-          import fs from "node:fs";
-          import { extractBuildEvents } from "./scripts/worker-build-history.mjs";
-          const token = process.env.DISCLOUD_TOKEN;
-          if (!token) throw new Error("DISCLOUD_TOKEN is not configured");
-          const base = "https://api.discloud.app/v2/app/1790572666269";
-          const revision = process.env.GITHUB_SHA;
-          const main = fs.readFileSync("main.js", "utf8");
-          const imageMinutes = Number(main.match(/MONITOR_INTERVAL_MINUTES\s*\?\?=\s*"(\d+)"/)?.[1]);
-          const embedHours = Number(main.match(/EMBED_MONITOR_INTERVAL_HOURS\s*\?\?=\s*"(\d+)"/)?.[1]);
-          if (!imageMinutes || !embedHours) throw new Error("Missing monitor interval defaults");
-
-          async function api(path, options = {}, timeout = 45000) {
-            const response = await fetch(base + path, {
-              ...options,
-              headers: { "api-token": token, ...options.headers },
-              signal: AbortSignal.timeout(timeout),
-            });
-            let body;
-            try {
-              body = await response.json();
-            } catch {
-              const error = new Error(`Discloud ${path || "/info"} returned a non-JSON response (HTTP ${response.status})`);
-              error.httpStatus = response.status;
-              error.ambiguousResponse = response.ok;
-              throw error;
-            }
-            if (!response.ok || body.status === "error") {
-              // Print only our allowlisted phase events, never raw provider logs.
-              for (const event of extractBuildEvents(body.logs)) console.log(JSON.stringify(event));
-              const error = new Error(`Discloud ${path || "/info"} failed (HTTP ${response.status})`);
-              error.httpStatus = response.status;
-              throw error;
-            }
-            return body;
-          }
-          function app(body) {
-            return Array.isArray(body.apps) ? body.apps[0] : body.apps;
-          }
-          const probeCode = `
-            (async () => {
-            const fs = require("node:fs"), crypto = require("node:crypto");
-            const env = {};
-            for (const item of fs.readFileSync("/proc/1/environ", "utf8").split("\\0")) {
-              const index = item.indexOf("=");
-              if (index > 0) env[item.slice(0, index)] = item.slice(index + 1);
-            }
-            const main = fs.readFileSync("main.js", "utf8");
-            const fallback = (name) => main.match(new RegExp(name + '\\\\s*\\\\?\\\\?=\\\\s*"(\\\\d+)"'))?.[1];
-            const host = env.DATABASE_URL ? new URL(env.DATABASE_URL).hostname : "";
-            let workerBuildCurrent = false;
-            if (fs.existsSync("scripts/worker-build-provenance.mjs")) {
-              process.env.NODE_ENV = env.NODE_ENV || "production";
-              const helper = await import(require("node:url").pathToFileURL(
-                require("node:path").resolve("scripts/worker-build-provenance.mjs")).href);
-              workerBuildCurrent = (await helper.inspectWorkerBuild(process.cwd())).valid;
-            }
-            console.log(JSON.stringify({
-              revision: fs.existsSync("deploy-revision.txt") ? fs.readFileSync("deploy-revision.txt", "utf8").trim() : null,
-              databaseConfigured: !!host,
-              databaseIsNeon: /(^|\\.)neon\\.tech$/i.test(host),
-              databaseHostDigest: host ? crypto.createHash("sha256").update(host).digest("hex") : null,
-              discordTokenConfigured: !!env.DISCORD_BOT_TOKEN,
-              imageMinutes: Number(env.MONITOR_INTERVAL_MINUTES || fallback("MONITOR_INTERVAL_MINUTES")),
-              embedHours: Number(env.EMBED_MONITOR_INTERVAL_HOURS || fallback("EMBED_MONITOR_INTERVAL_HOURS")),
-              workerCompiled: fs.existsSync("artifacts/api-server/compiled-worker/index.mjs"),
-              workerBuildCurrent
-            }));
-            })().catch(() => { console.log(JSON.stringify({ probeFailed: true })); process.exitCode = 1; });
-          `;
-          const cmd = `node -e 'eval(Buffer.from("${Buffer.from(probeCode).toString("base64")}","base64").toString())'`;
-          async function probe() {
-            const result = await api("/exec", {
-              method: "PUT",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ cmd }),
-            });
-            return JSON.parse(result.exec.stdout.trim());
-          }
-          const before = await probe();
-          if (!before.databaseConfigured || before.databaseIsNeon || !before.discordTokenConfigured) {
-            throw new Error("Existing production environment did not pass the safety check");
-          }
-          const oldStart = app(await api("/status")).startedAt;
-          const archive = new FormData();
-          archive.append("file", new Blob([fs.readFileSync("/tmp/discloud-upload.zip")]), "bot.zip");
-          console.log("Updating the existing Discloud application; preserving its environment.");
-          try {
-            await api("/commit", { method: "PUT", body: archive }, 600000);
-          } catch (error) {
-            const uncertain = error.ambiguousResponse ||
-              error.httpStatus >= 500 || error.httpStatus === 408 ||
-              ["TimeoutError", "AbortError", "TypeError"].includes(error.name);
-            if (!uncertain) throw error;
-            // A gateway timeout does not mean the accepted build was cancelled.
-            // Never resend this upload: verify its exact revision instead.
-            console.log("Upload response was interrupted; checking the running revision without submitting another deploy.");
-          }
-
-          const deadline = Date.now() + 600000;
-          while (Date.now() < deadline) {
-            await new Promise(resolve => setTimeout(resolve, 15000));
-            try {
-              const [info, status] = await Promise.all([api(""), api("/status")]);
-              if (!app(info)?.online || app(status)?.startedAt === oldStart) continue;
-              const running = await probe();
-              if (running.revision !== revision || !running.workerCompiled || !running.workerBuildCurrent) continue;
-              if (!running.databaseConfigured || running.databaseIsNeon ||
-                  running.databaseHostDigest !== before.databaseHostDigest ||
-                  !running.discordTokenConfigured ||
-                  running.imageMinutes !== imageMinutes || running.embedHours !== embedHours) {
-                throw new Error("SAFETY_CHECK_FAILED");
-              }
-              const terminal = app(await api("/logs"))?.terminal;
-              const logText = terminal?.big || terminal?.small || "";
-              const startedAt = Date.parse(app(status).startedAt);
-              const discordReady = logText.split(/\r?\n/).some(line => {
-                if (!line.includes("ClientReady foi recebido")) return false;
-                const jsonTime = line.match(/"time":(\d{13})/);
-                const loggedAt = jsonTime ? Number(jsonTime[1]) : Date.parse(line.split(/\s/)[0]);
-                return loggedAt >= startedAt;
-              });
-              if (!discordReady) continue;
-              console.log(`Verified running revision ${revision.slice(0, 12)}; build integrity, Discord readiness, database and monitor settings confirmed.`);
-              process.exit(0);
-            } catch (error) {
-              if (error.message === "SAFETY_CHECK_FAILED") throw error;
-              console.log("Waiting for the new runtime to finish starting.");
-            }
-          }
-          throw new Error("Timed out waiting for the new running revision; inspect Discloud runtime logs");
+          import { createDeploymentJournal } from "./scripts/discloud-deploy.mjs";
+          createDeploymentJournal({ revision: process.env.GITHUB_SHA }).finish(
+            process.env.DEPLOYMENT_STATUS === "success" ? "success" : "failed"
+          );
           JS
+
+      - name: Save sanitized deployment history
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: discloud-history-${{ github.sha }}
+          path: /tmp/discloud-deploy-history.json
+          retention-days: 30
+          if-no-files-found: error

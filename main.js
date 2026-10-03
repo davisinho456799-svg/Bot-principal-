@@ -1,12 +1,12 @@
-// Discloud entrypoint for the compiled Discord worker.
-// Defaults are intentionally lightweight for a single 4 GB deployment.
+// Discloud entrypoint; optional monitor recovery must not delay Discord startup.
 import { execFile } from "node:child_process";
-import { access, constants as fsConstants } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { ensureCurrentWorker } from "./scripts/worker-build-provenance.mjs";
 import { createBuildHistory, extractBuildEvents, safeBuildEvent } from "./scripts/worker-build-history.mjs";
+import { startWorker } from "./scripts/worker-startup.mjs";
+import { createMonitorPreparation } from "./scripts/worker-monitor-runtime.mjs";
 
 process.env.NODE_ENV ??= "production";
 process.env.DISCORD_BOT_ENABLED = "true";
@@ -20,201 +20,30 @@ const execFileAsync = promisify(execFile);
 const projectRoot = path.dirname(fileURLToPath(import.meta.url));
 const workerPath = path.join(projectRoot, "artifacts", "api-server", "compiled-worker", "index.mjs");
 const workerUrl = pathToFileURL(workerPath).href;
-const apiServerNodeModules = path.join(projectRoot, "artifacts", "api-server", "node_modules");
-const browserCandidates = [
-  process.env.PLAYWRIGHT_EXECUTABLE_PATH,
-  "/usr/bin/chromium",
-  "/usr/bin/chromium-browser",
-  "/usr/bin/google-chrome",
-  "/usr/bin/google-chrome-stable",
-  "/usr/local/bin/chromium",
-].filter((candidate, index, candidates) =>
-  candidate && candidates.indexOf(candidate) === index
-);
-
-async function findRuntimePackageRoot(packageName) {
-  const packageLocations = [
-    path.join(projectRoot, "node_modules", packageName, "package.json"),
-    path.join(apiServerNodeModules, packageName, "package.json"),
-    path.join(projectRoot, "artifacts", "api-server", "compiled-worker", "node_modules", packageName, "package.json"),
-  ];
-  for (const packagePath of packageLocations) {
-    try {
-      await access(packagePath);
-      return path.dirname(packagePath);
-    } catch {
-      // Check the next location used by pnpm or the Discloud runtime layer.
-    }
-  }
-  return null;
-}
-
-async function hasRuntimePackage(packageName) {
-  return Boolean(await findRuntimePackageRoot(packageName));
-}
-
-async function ensureBrowserExecutable() {
-  for (const candidate of browserCandidates) {
-    try {
-      await access(candidate, fsConstants.X_OK);
-      process.env.PLAYWRIGHT_EXECUTABLE_PATH = candidate;
-      console.log(`Chromium encontrado em ${candidate}.`);
-      return candidate;
-    } catch {
-      // Try the next known location.
-    }
-  }
-
-  try {
-    const { stdout } = await execFileAsync(
-      "sh",
-      [
-        "-c",
-        "command -v chromium || command -v chromium-browser || command -v google-chrome || command -v google-chrome-stable",
-      ],
-      { maxBuffer: 1024 * 1024 },
-    );
-    const discovered = stdout.trim().split(/\s+/)[0];
-    if (discovered) {
-      await access(discovered, fsConstants.X_OK);
-      process.env.PLAYWRIGHT_EXECUTABLE_PATH = discovered;
-      console.log(`Chromium encontrado pelo PATH em ${discovered}.`);
-      return discovered;
-    }
-  } catch {
-    // Playwright may still find its managed browser if one is present.
-  }
-
-  delete process.env.PLAYWRIGHT_EXECUTABLE_PATH;
-  console.warn(
-    "Nenhum Chromium do sistema foi encontrado; o Playwright tentará usar o navegador gerenciado, se estiver instalado.",
-  );
-  return null;
-}
-
-async function ensureManagedBrowser() {
-  const playwrightRoot = await findRuntimePackageRoot("playwright");
-  if (!playwrightRoot) {
-    console.warn(
-      "Playwright não está instalado; não foi possível baixar o navegador gerenciado.",
-    );
-    return false;
-  }
-
-  const playwrightCli = path.join(playwrightRoot, "cli.js");
-  console.warn(
-    "Nenhum Chromium do sistema foi encontrado; baixando o Chromium gerenciado pelo Playwright.",
-  );
-  const installEnv = { ...process.env, CI: "true", NODE_ENV: "production" };
-  delete installEnv.PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD;
-
-  try {
-    const { stdout, stderr } = await execFileAsync(
-      process.execPath,
-      [playwrightCli, "install", "chromium-headless-shell"],
-      {
-        cwd: projectRoot,
-        env: installEnv,
-        maxBuffer: 40 * 1024 * 1024,
-      },
-    );
-    if (stdout) console.log(stdout.trim());
-    if (stderr) console.error(stderr.trim());
-    console.log("Chromium gerenciado pelo Playwright instalado.");
-    return true;
-  } catch (error) {
-    const details = error && typeof error === "object"
-      ? [
-        "stderr" in error && typeof error.stderr === "string" ? error.stderr.trim() : "",
-        "stdout" in error && typeof error.stdout === "string" ? error.stdout.trim() : "",
-      ].filter(Boolean).join("\n")
-      : "";
-    console.warn(
-      "Não foi possível baixar o Chromium gerenciado; o monitor usará o parser sem captura.",
-      details || error,
-    );
-    return false;
-  }
-}
-
-async function ensureMonitorDependencies() {
-  const requiredPackages = ["playwright", "sharp"];
-  const missingPackages = [];
-  for (const packageName of requiredPackages) {
-    if (!(await hasRuntimePackage(packageName))) missingPackages.push(packageName);
-  }
-  if (!missingPackages.length) return;
-
-  console.warn(
-    `Monitor packages ausentes (${missingPackages.join(", ")}); reinstalando dependências de produção.`,
-  );
-  try {
-    const { stdout, stderr } = await execFileAsync(
-      "corepack",
-      ["pnpm", "install", "--prod", "--frozen-lockfile"],
-      {
-        cwd: projectRoot,
-        env: {
-          ...process.env,
-          CI: "true",
-          NODE_ENV: "production",
-        },
-        maxBuffer: 20 * 1024 * 1024,
-      },
-    );
-    if (stdout) console.log(stdout.trim());
-    if (stderr) console.error(stderr.trim());
-    const stillMissing = [];
-    for (const packageName of missingPackages) {
-      if (!(await hasRuntimePackage(packageName))) stillMissing.push(packageName);
-    }
-    if (stillMissing.length) {
-      console.warn(
-        `Dependências do monitor ainda indisponíveis (${stillMissing.join(", ")}); o monitor usará o fallback sem imagem.`,
-      );
-    }
-  } catch (error) {
-    const details = error && typeof error === "object"
-      ? [
-        "stderr" in error && typeof error.stderr === "string" ? error.stderr.trim() : "",
-        "stdout" in error && typeof error.stdout === "string" ? error.stdout.trim() : "",
-      ].filter(Boolean).join("\n")
-      : "";
-    console.warn(
-      "Não foi possível reinstalar as dependências do monitor; o bot continuará sem imagens de fallback.",
-      details || error,
-    );
-  }
-}
 
 async function ensureCompiledWorker() {
   await ensureCurrentWorker(projectRoot, async (reason) => {
     console.warn(`Rebuilding compiled Discord worker: ${reason}`);
     const buildScript = path.join(projectRoot, "artifacts", "api-server", "build.mjs");
-    const { stdout, stderr } = await execFileAsync(process.execPath, [buildScript], {
+    const { stdout } = await execFileAsync(process.execPath, [buildScript], {
       cwd: projectRoot,
-      env: {
-        ...process.env,
-        NODE_ENV: process.env.NODE_ENV,
-        PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1",
-      },
+      env: { ...process.env, NODE_ENV: process.env.NODE_ENV, PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1" },
       timeout: 10 * 60_000,
+      killSignal: "SIGKILL",
       maxBuffer: 10 * 1024 * 1024,
     });
-    if (stdout) console.log(stdout.trim());
-    if (stderr) console.error(stderr.trim());
+    for (const event of extractBuildEvents(stdout)) console.log(JSON.stringify(event));
   });
 }
 
 const startupHistory = await createBuildHistory(projectRoot, { kind: "startup" });
 try {
-  await startupHistory.phase("check.monitor-dependencies", () => ensureMonitorDependencies());
-  await startupHistory.phase("check.browser", async () => {
-    const systemBrowser = await ensureBrowserExecutable();
-    if (!systemBrowser) await ensureManagedBrowser();
+  await startWorker({
+    history: startupHistory,
+    validate: ensureCompiledWorker,
+    load: () => import(workerUrl),
+    prepare: createMonitorPreparation({ root: projectRoot, history: startupHistory }),
   });
-  await startupHistory.phase("validate.worker-cache", () => ensureCompiledWorker());
-  await startupHistory.phase("load.worker-module", () => import(workerUrl));
 } catch (error) {
   for (const event of extractBuildEvents(error.stdout)) console.error(JSON.stringify(event));
   console.error("Failed to start the compiled Discord worker:", JSON.stringify(safeBuildEvent({

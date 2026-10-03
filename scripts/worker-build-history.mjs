@@ -41,6 +41,7 @@ export async function createBuildHistory(root, { kind = "build", output = line =
     if (/^[a-f0-9]{40}$/.test(candidate)) revision = candidate;
   } catch (error) { if (error.code !== "ENOENT") console.warn("Build revision could not be read"); }
   let persistent = true;
+  const phaseStarts = new Map();
   try {
     await mkdir(directory, { recursive: true });
     const histories = (await readdir(directory)).filter(name => /^\d{4}-.*\.jsonl$/.test(name)).sort();
@@ -52,6 +53,11 @@ export async function createBuildHistory(root, { kind = "build", output = line =
     console.warn("Build history storage unavailable; structured console history remains enabled");
   }
   async function record(event) {
+    if (event.status === "started") phaseStarts.set(event.phase, performance.now());
+    if (["completed", "failed", "degraded"].includes(event.status) && phaseStarts.has(event.phase)) {
+      event = { ...event, durationMs: event.durationMs ?? Math.round(performance.now() - phaseStarts.get(event.phase)) };
+      phaseStarts.delete(event.phase);
+    }
     const { event: eventName, ...details } = safeBuildEvent({
       ...event, event: "worker_build", runId, revision, kind, at: new Date().toISOString(),
     });
