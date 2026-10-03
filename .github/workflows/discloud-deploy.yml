@@ -77,10 +77,20 @@ jobs:
               headers: { "api-token": token, ...options.headers },
               signal: AbortSignal.timeout(timeout),
             });
-            const body = await response.json();
+            let body;
+            try {
+              body = await response.json();
+            } catch {
+              const error = new Error(`Discloud ${path || "/info"} returned a non-JSON response (HTTP ${response.status})`);
+              error.httpStatus = response.status;
+              error.ambiguousResponse = response.ok;
+              throw error;
+            }
             if (!response.ok || body.status === "error") {
               // Do not echo provider responses, build logs, or environment values.
-              throw new Error(`Discloud ${path || "/info"} failed (HTTP ${response.status})`);
+              const error = new Error(`Discloud ${path || "/info"} failed (HTTP ${response.status})`);
+              error.httpStatus = response.status;
+              throw error;
             }
             return body;
           }
@@ -125,7 +135,17 @@ jobs:
           const archive = new FormData();
           archive.append("file", new Blob([fs.readFileSync("/tmp/discloud-upload.zip")]), "bot.zip");
           console.log("Updating the existing Discloud application; preserving its environment.");
-          await api("/commit", { method: "PUT", body: archive }, 600000);
+          try {
+            await api("/commit", { method: "PUT", body: archive }, 600000);
+          } catch (error) {
+            const uncertain = error.ambiguousResponse ||
+              error.httpStatus >= 500 || error.httpStatus === 408 ||
+              ["TimeoutError", "AbortError", "TypeError"].includes(error.name);
+            if (!uncertain) throw error;
+            // A gateway timeout does not mean the accepted build was cancelled.
+            // Never resend this upload: verify its exact revision instead.
+            console.log("Upload response was interrupted; checking the running revision without submitting another deploy.");
+          }
 
           const deadline = Date.now() + 600000;
           while (Date.now() < deadline) {
