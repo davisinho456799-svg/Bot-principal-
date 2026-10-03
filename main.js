@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { ensureCurrentWorker } from "./scripts/worker-build-provenance.mjs";
+import { createBuildHistory, extractBuildEvents, safeBuildEvent } from "./scripts/worker-build-history.mjs";
 
 process.env.NODE_ENV ??= "production";
 process.env.DISCORD_BOT_ENABLED = "true";
@@ -205,13 +206,20 @@ async function ensureCompiledWorker() {
   });
 }
 
+const startupHistory = await createBuildHistory(projectRoot, { kind: "startup" });
 try {
-  await ensureMonitorDependencies();
-  const systemBrowser = await ensureBrowserExecutable();
-  if (!systemBrowser) await ensureManagedBrowser();
-  await ensureCompiledWorker();
-  await import(workerUrl);
+  await startupHistory.phase("check.monitor-dependencies", () => ensureMonitorDependencies());
+  await startupHistory.phase("check.browser", async () => {
+    const systemBrowser = await ensureBrowserExecutable();
+    if (!systemBrowser) await ensureManagedBrowser();
+  });
+  await startupHistory.phase("validate.worker-cache", () => ensureCompiledWorker());
+  await startupHistory.phase("load.worker-module", () => import(workerUrl));
 } catch (error) {
-  console.error("Failed to start the compiled Discord worker:", error);
+  for (const event of extractBuildEvents(error.stdout)) console.error(JSON.stringify(event));
+  console.error("Failed to start the compiled Discord worker:", JSON.stringify(safeBuildEvent({
+    errorName: error.name, code: error.code,
+    exitCode: Number.isFinite(error.code) ? error.code : error.status,
+  })));
   process.exitCode = 1;
 }

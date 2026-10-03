@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { access, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { access, cp, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 const MANIFEST = "build-manifest.json";
@@ -45,7 +45,7 @@ export async function getBuildFingerprint(root) {
     ...await optionalFiles(path.join(root, "scripts/worker-build")),
   ];
   // These helpers affect build correctness, but unrelated migration scripts do not.
-  for (const name of ["worker-build-provenance.mjs", "worker-build-runtime.mjs"]) {
+  for (const name of ["worker-build-provenance.mjs", "worker-build-runtime.mjs", "worker-build-history.mjs"]) {
     const filename = path.join(root, "scripts", name);
     try { await access(filename); files.push(filename); }
     catch (error) { if (error.code !== "ENOENT") throw error; }
@@ -129,28 +129,98 @@ export async function ensureCurrentWorker(root, build) {
   return { rebuilt: true, ...current };
 }
 
-/** Swap only fully built artifacts; restore both old directories if promotion fails. */
-export async function promoteBuildArtifacts(artifacts, backupDirectory, filesystem = { rename, rm }) {
+const copyOptions = { recursive: true, force: true, verbatimSymlinks: true };
+const volumeErrors = new Set(["EXDEV", "EBUSY"]);
+
+/** Prepare on the destination volume, then swap children without moving its mount point. */
+async function replaceMountedContents(source, target, io) {
+  await io.mkdir(target, { recursive: true });
+  const temporary = await io.mkdtemp(path.join(target, ".promotion-"));
+  const incoming = path.join(temporary, "incoming");
+  const previous = path.join(temporary, "previous");
+  try {
+    // Copy must finish before touching active files. Preserve pnpm's relative symlinks.
+    await io.cp(source, incoming, copyOptions);
+    await io.mkdir(previous);
+    const current = new Set((await io.readdir(target)).filter(name => name !== path.basename(temporary)));
+    const next = new Set(await io.readdir(incoming));
+    const priority = name => name === MANIFEST ? 2 : name === "index.mjs" ? 1 : 0;
+    const names = [...new Set([...current, ...next])].sort((a, b) => priority(a) - priority(b));
+    for (const name of names) {
+      if (current.has(name)) {
+        const oldPath = path.join(target, name);
+        const backupPath = path.join(previous, name);
+        try { await io.rename(oldPath, backupPath); }
+        catch (error) {
+          // Docker overlay layers may reject directory renames even within a volume.
+          if (!volumeErrors.has(error.code)) throw error;
+          await io.cp(oldPath, backupPath, copyOptions);
+          await io.rm(oldPath, { recursive: true, force: true });
+        }
+      }
+      if (next.has(name)) await io.rename(path.join(incoming, name), path.join(target, name));
+    }
+  } finally {
+    // The outer promotion retains a complete backup until all artifacts succeed.
+    await io.rm(temporary, { recursive: true, force: true });
+  }
+}
+
+/** Swap only fully built artifacts; support mounted outputs and restore failures. */
+export async function promoteBuildArtifacts(artifacts, backupDirectory, filesystem = {}, onEvent = async () => {}) {
+  const io = { cp, mkdir, mkdtemp, readdir, rename, rm, stat, ...filesystem };
   const changes = [];
   try {
     for (const [index, artifact] of artifacts.entries()) {
-      const change = { ...artifact, backup: path.join(backupDirectory, `previous-${index}`), backedUp: false, promoted: false };
+      const change = { ...artifact, backup: path.join(backupDirectory, `previous-${index}`), backedUp: false, promoted: false, mounted: false };
       changes.push(change);
       try {
-        await filesystem.rename(change.target, change.backup);
+        await io.rename(change.target, change.backup);
         change.backedUp = true;
       } catch (error) {
-        if (error.code !== "ENOENT") throw error;
+        if (volumeErrors.has(error.code)) {
+          let exists = true;
+          try { await io.stat(change.target); }
+          catch (missing) {
+            if (missing.code !== "ENOENT") throw missing;
+            exists = false;
+          }
+          if (exists) {
+            await io.cp(change.target, change.backup, copyOptions);
+            change.backedUp = true;
+          }
+          change.mounted = true;
+          await onEvent({ status: "volume-fallback", artifact: path.basename(change.target), code: error.code });
+        } else if (error.code !== "ENOENT") throw error;
       }
-      await filesystem.rename(change.staged, change.target);
-      change.promoted = true;
+      if (change.mounted) {
+        change.promoted = true; // Even a partially completed child swap must be restored.
+        await replaceMountedContents(change.staged, change.target, io);
+      } else {
+        try {
+          await io.rename(change.staged, change.target);
+          change.promoted = true;
+        } catch (error) {
+          if (!volumeErrors.has(error.code)) throw error;
+          change.mounted = true;
+          change.promoted = true;
+          await onEvent({ status: "volume-fallback", artifact: path.basename(change.target), code: error.code });
+          await replaceMountedContents(change.staged, change.target, io);
+        }
+      }
     }
   } catch (error) {
     const failures = [];
     for (const change of changes.reverse()) {
       try {
-        if (change.promoted) await filesystem.rm(change.target, { recursive: true, force: true });
-        if (change.backedUp) await filesystem.rename(change.backup, change.target);
+        await onEvent({ status: "rollback-started", artifact: path.basename(change.target) });
+        if (change.mounted && change.backedUp) {
+          await replaceMountedContents(change.backup, change.target, io);
+        } else {
+          if (change.promoted) await io.rm(change.target, { recursive: true, force: true });
+          if (change.backedUp) await io.rename(change.backup, change.target);
+        }
+        await onEvent({ status: "rollback-completed", artifact: path.basename(change.target) });
       } catch (rollbackError) { failures.push(rollbackError); }
     }
     if (failures.length) {
