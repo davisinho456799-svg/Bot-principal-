@@ -1,0 +1,152 @@
+name: Deploy BotPrincipal to Discloud
+
+on:
+  push:
+    branches: [feature/light-bot-mode]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: discloud-bot-principal
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/feature/light-bot-mode'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out the exact revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Package tracked source without credentials or generated files
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import fnmatch, os, pathlib, subprocess, zipfile
+          config = pathlib.Path("discloud.config").read_text()
+          if "RAM=3072" not in config or "VLAN=true" not in config:
+              raise SystemExit("Unexpected production memory/private-network configuration")
+          if "@workspace/db run push" in config:
+              raise SystemExit("Automatic production schema changes are not allowed")
+          ignored = {".git", ".github", ".agents", ".local", ".cache",
+                     "attached_assets", "exports", "node_modules", "dist", "compiled-worker"}
+          patterns = ["*.zip", "*.log", "*.tsbuildinfo", "*.pem", "*.key"]
+          files = subprocess.check_output(["git", "ls-files", "-z"]).decode().split("\0")
+          count = 0
+          with zipfile.ZipFile("/tmp/discloud-upload.zip", "w", zipfile.ZIP_DEFLATED) as archive:
+              for name in filter(None, files):
+                  path = pathlib.Path(name)
+                  if ignored.intersection(path.parts) or path.name.startswith(".env"):
+                      continue
+                  if any(fnmatch.fnmatch(path.name, pattern) for pattern in patterns):
+                      continue
+                  if path.is_symlink():
+                      raise SystemExit("Tracked symlinks are not allowed in the deployment archive")
+                  archive.write(path, name)
+                  count += 1
+              archive.writestr("deploy-revision.txt", os.environ["GITHUB_SHA"] + "\n")
+          if pathlib.Path("/tmp/discloud-upload.zip").stat().st_size > 100 * 1024 * 1024:
+              raise SystemExit("Deployment archive exceeds the Discloud upload limit")
+          print(f"Packaged {count} tracked source files; no environment file included.")
+          PY
+
+      - name: Update the existing bot and verify the running revision
+        shell: bash
+        env:
+          DISCLOUD_TOKEN: ${{ secrets.DISCLOUD_TOKEN }}
+        run: |
+          node --input-type=module <<'JS'
+          import fs from "node:fs";
+          const token = process.env.DISCLOUD_TOKEN;
+          if (!token) throw new Error("DISCLOUD_TOKEN is not configured");
+          const base = "https://api.discloud.app/v2/app/1790572666269";
+          const revision = process.env.GITHUB_SHA;
+          const main = fs.readFileSync("main.js", "utf8");
+          const imageMinutes = Number(main.match(/MONITOR_INTERVAL_MINUTES\s*\?\?=\s*"(\d+)"/)?.[1]);
+          const embedHours = Number(main.match(/EMBED_MONITOR_INTERVAL_HOURS\s*\?\?=\s*"(\d+)"/)?.[1]);
+          if (!imageMinutes || !embedHours) throw new Error("Missing monitor interval defaults");
+
+          async function api(path, options = {}, timeout = 45000) {
+            const response = await fetch(base + path, {
+              ...options,
+              headers: { "api-token": token, ...options.headers },
+              signal: AbortSignal.timeout(timeout),
+            });
+            const body = await response.json();
+            if (!response.ok || body.status === "error") {
+              // Do not echo provider responses, build logs, or environment values.
+              throw new Error(`Discloud ${path || "/info"} failed (HTTP ${response.status})`);
+            }
+            return body;
+          }
+          function app(body) {
+            return Array.isArray(body.apps) ? body.apps[0] : body.apps;
+          }
+          const probeCode = `
+            const fs = require("node:fs"), crypto = require("node:crypto");
+            const env = {};
+            for (const item of fs.readFileSync("/proc/1/environ", "utf8").split("\\0")) {
+              const index = item.indexOf("=");
+              if (index > 0) env[item.slice(0, index)] = item.slice(index + 1);
+            }
+            const main = fs.readFileSync("main.js", "utf8");
+            const fallback = (name) => main.match(new RegExp(name + '\\\\s*\\\\?\\\\?=\\\\s*"(\\\\d+)"'))?.[1];
+            const host = env.DATABASE_URL ? new URL(env.DATABASE_URL).hostname : "";
+            console.log(JSON.stringify({
+              revision: fs.existsSync("deploy-revision.txt") ? fs.readFileSync("deploy-revision.txt", "utf8").trim() : null,
+              databaseConfigured: !!host,
+              databaseIsNeon: /(^|\\.)neon\\.tech$/i.test(host),
+              databaseHostDigest: host ? crypto.createHash("sha256").update(host).digest("hex") : null,
+              discordTokenConfigured: !!env.DISCORD_BOT_TOKEN,
+              imageMinutes: Number(env.MONITOR_INTERVAL_MINUTES || fallback("MONITOR_INTERVAL_MINUTES")),
+              embedHours: Number(env.EMBED_MONITOR_INTERVAL_HOURS || fallback("EMBED_MONITOR_INTERVAL_HOURS")),
+              workerCompiled: fs.existsSync("artifacts/api-server/compiled-worker/index.mjs")
+            }));
+          `;
+          const cmd = `node -e 'eval(Buffer.from("${Buffer.from(probeCode).toString("base64")}","base64").toString())'`;
+          async function probe() {
+            const result = await api("/exec", {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ cmd }),
+            });
+            return JSON.parse(result.exec.stdout.trim());
+          }
+          const before = await probe();
+          if (!before.databaseConfigured || before.databaseIsNeon || !before.discordTokenConfigured) {
+            throw new Error("Existing production environment did not pass the safety check");
+          }
+          const oldStart = app(await api("/status")).startedAt;
+          const archive = new FormData();
+          archive.append("file", new Blob([fs.readFileSync("/tmp/discloud-upload.zip")]), "bot.zip");
+          console.log("Updating the existing Discloud application; preserving its environment.");
+          await api("/commit", { method: "PUT", body: archive }, 600000);
+
+          const deadline = Date.now() + 600000;
+          while (Date.now() < deadline) {
+            await new Promise(resolve => setTimeout(resolve, 15000));
+            try {
+              const [info, status] = await Promise.all([api(""), api("/status")]);
+              if (!app(info)?.online || app(status)?.startedAt === oldStart) continue;
+              const running = await probe();
+              if (running.revision !== revision || !running.workerCompiled) continue;
+              if (!running.databaseConfigured || running.databaseIsNeon ||
+                  running.databaseHostDigest !== before.databaseHostDigest ||
+                  !running.discordTokenConfigured ||
+                  running.imageMinutes !== imageMinutes || running.embedHours !== embedHours) {
+                throw new Error("SAFETY_CHECK_FAILED");
+              }
+              console.log(`Verified running revision ${revision.slice(0, 12)}; database and monitor settings preserved.`);
+              process.exit(0);
+            } catch (error) {
+              if (error.message === "SAFETY_CHECK_FAILED") throw error;
+              console.log("Waiting for the new runtime to finish starting.");
+            }
+          }
+          throw new Error("Timed out waiting for the new running revision; inspect Discloud runtime logs");
+          JS
