@@ -4,7 +4,7 @@
  * Pipeline de fallback:
  *   1. Trace.moe   → screenshot com timestamp (melhor para cenas de anime)
  *   2. SauceNAO    → identificação genérica de arte/cena
- *   3. OCR + APIs  → extrai texto da imagem e pesquisa em AniList, MAL, Kitsu, AniDB, TMDB
+ *   3. OCR + APIs  → extrai texto da imagem e pesquisa em AniList, MAL, Kitsu, AniDB
  */
 
 import {

@@ -2489,5 +2489,5 @@ export function startNotificacaoService(client: Client) {
 
   setTimeout(runSafe, 60_000);
   setInterval(runSafe, CHECK_INTERVAL_MS);
-  logger.info({ intervalHoras: 2 }, "Serviço de notificações iniciado");
+  logger.info({ intervalHoras: CHECK_INTERVAL_MS / 3_600_000 }, "Serviço de notificações iniciado");
 }
