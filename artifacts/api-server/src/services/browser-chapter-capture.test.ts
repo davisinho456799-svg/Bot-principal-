@@ -65,6 +65,8 @@ describe("single-thumbnail chapter capture", () => {
       </article>`);
     await applyToptoonPairCapture(page, [{ captureId: "chapter-36", urls: [second, third] }]);
     expect(await page.locator(".thumb img").count()).toBe(2);
+    expect((await page.locator(".thumb img").first().boundingBox())?.height).toBe(138);
+    expect((await page.locator("[data-monitor-capture-card]").boundingBox())?.height).toBe(162);
     expect(await page.locator("[data-monitor-extra-thumbnail='2']").getAttribute("src")).toBe(second);
     expect(await page.locator("[data-monitor-extra-thumbnail='3']").getAttribute("src")).toBe(third);
     const screenshot = await page.locator("article").screenshot();

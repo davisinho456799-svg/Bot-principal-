@@ -14,9 +14,9 @@ describe("monitor release image", () => {
     const { data, info } = await sharp(png).removeAlpha().raw().toBuffer({ resolveWithObject: true });
     const pixel = (x: number, y: number) => Array.from(data.subarray((y * info.width + x) * info.channels, (y * info.width + x) * info.channels + 3));
     expect(info.width).toBe(1024);
-    expect(info.height).toBe(310);
-    expect(pixel(100, 100)).toEqual([212, 59, 53]);
-    expect(pixel(300, 100)).toEqual([55, 163, 107]);
+    expect(info.height).toBe(162);
+    expect(pixel(60, 70)).toEqual([212, 59, 53]);
+    expect(pixel(170, 70)).toEqual([55, 163, 107]);
   });
 
   it("adds the release banner above a browser capture", async () => {
