@@ -5,6 +5,7 @@ import type { MonitorPlatform, ParsedChapter } from "./parsers/index";
 import { enrichChapterSubtitles } from "./parsers/chapter-subtitles";
 import { applyCaptureSubtitles, type CaptureSubtitle } from "./chapter-subtitle-capture";
 import { applyToptoonPairCapture } from "./toptoon-pair-capture";
+import { loadMonitorDependency } from "../lib/monitor-dependencies";
 
 const PAGE_TIMEOUT_MS = 30_000;
 const MAX_CAPTURE_WIDTH = 2_400;
@@ -59,7 +60,9 @@ type Chromium = typeof import("playwright").chromium;
 let chromiumPromise: Promise<Chromium> | null = null;
 
 async function getChromium(): Promise<Chromium> {
-  chromiumPromise ??= import("playwright").then((module) => module.chromium);
+  chromiumPromise ??= loadMonitorDependency("playwright")
+    .then((module) => (module as typeof import("playwright")).chromium)
+    .catch(error => { chromiumPromise = null; throw error; });
   return chromiumPromise;
 }
 

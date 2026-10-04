@@ -193,6 +193,18 @@ async function replyError(interaction: ChatInputCommandInteraction, message: str
     await interaction.reply({ content: `❌ ${message}`, ephemeral: true });
   }
 }
+
+function formatTestFailure(progress: string[], error: string): string {
+  const header = "❌ **Teste não enviado**\n🧭 **Caminho do teste**";
+  const footer = `\n\n❌ ${error.slice(0, 500)}`;
+  const steps = progress.map((step, index) => `${index + 1}. ${step}`);
+  let omitted = false;
+  while (steps.length && (header + "\n" + steps.join("\n") + footer).length > 1930) {
+    steps.shift();
+    omitted = true;
+  }
+  return [header, ...(omitted ? ["… etapas iniciais omitidas por limite de espaço."] : []), ...steps].join("\n") + footer;
+}
 async function handleAdd(interaction: ChatInputCommandInteraction) {
   const rawLink = interaction.options.getString("link", true).trim();
   const requestedTitle = interaction.options.getString("nome")?.trim();
@@ -467,10 +479,10 @@ export async function executeManhwaCommand(interaction: ChatInputCommandInteract
         ].join("\n"),
       });
     } catch (error) {
-      await replyError(
-        interaction,
-        error instanceof Error ? error.message : "Não foi possível enviar a notificação de teste.",
-      );
+      await interaction.editReply({
+        content: formatTestFailure(progress, error instanceof Error ? error.message : "Não foi possível enviar a notificação de teste."),
+        components: [],
+      });
     }
     return;
   }

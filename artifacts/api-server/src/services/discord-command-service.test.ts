@@ -209,6 +209,34 @@ describe("safe monitor commands", () => {
     expect(state.notification).toHaveBeenCalledWith(expect.any(Function), 10, true);
   });
 
+  it("preserves the completed test steps when image generation fails", async () => {
+    state.notification.mockImplementationOnce(async (progress) => {
+      await progress("Obra escolhida: C.");
+      await progress("Capítulo escolhido: 69.");
+      throw new Error("Miniatura extra 3 indisponível.");
+    });
+    const { fake, command } = interaction("teste", 2, true);
+    await executeManhwaCommand(command);
+    const final = fake.editReply.mock.calls.at(-1)![0].content;
+    expect(final).toContain("Teste não enviado");
+    expect(final).toContain("1. Obra escolhida: C.");
+    expect(final).toContain("2. Capítulo escolhido: 69.");
+    expect(final).toContain("Miniatura extra 3 indisponível.");
+  });
+
+  it("keeps long failure histories within Discord's limit and retains recent steps", async () => {
+    state.notification.mockImplementationOnce(async (progress) => {
+      for (let index = 0; index < 30; index++) await progress(`Etapa ${index}: ${"x".repeat(100)}`);
+      throw new Error("Falha final.");
+    });
+    const { fake, command } = interaction("teste", 2, true);
+    await executeManhwaCommand(command);
+    const final = fake.editReply.mock.calls.at(-1)![0].content;
+    expect(final.length).toBeLessThanOrEqual(2000);
+    expect(final).toContain("Etapa 29:");
+    expect(final).toContain("Falha final.");
+  });
+
   it.each(["teste", "remover", "renomear", "reenviar"])("rejects an old internal ID for %s without falling back", async (command) => {
     await executeManhwaCommand(interaction(command, 10).command);
     expect(state.notification).not.toHaveBeenCalled();

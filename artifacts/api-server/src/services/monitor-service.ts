@@ -9,6 +9,7 @@ import {
   monitoredWorksTable,
 } from "@workspace/db/schema";
 import { logger } from "../lib/logger";
+import { loadMonitorDependency } from "../lib/monitor-dependencies";
 import { measureImageMonitorRound, type ImageMonitorTiming } from "./monitor-timing";
 import { monitorExecution } from "./monitor-execution.js";
 import { translateChapterSubtitles } from "./chapter-subtitle-translation";
@@ -64,20 +65,19 @@ const HISTORICAL_RELEASE_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1_000;
 type SharpFactory = typeof sharp;
 
 let sharpFactoryPromise: Promise<SharpFactory> | null = null;
-let sharpUnavailable = false;
 let sharpWarningLogged = false;
 
 async function getSharp(): Promise<SharpFactory> {
-  sharpFactoryPromise ??= import("sharp").then((module) => module.default);
+  sharpFactoryPromise ??= loadMonitorDependency("sharp")
+    .then((module) => (module as typeof import("sharp")).default)
+    .catch(error => { sharpFactoryPromise = null; throw error; });
   return sharpFactoryPromise;
 }
 
 async function getOptionalSharp(): Promise<SharpFactory | null> {
-  if (sharpUnavailable) return null;
   try {
     return await getSharp();
   } catch (error) {
-    sharpUnavailable = true;
     if (!sharpWarningLogged) {
       sharpWarningLogged = true;
       logger.warn(
@@ -349,14 +349,17 @@ async function buildStrip(
   return output;
 }
 
+class PairTestImageError extends Error {}
+
 async function buildPairTestStrip(title: string, chapters: ChapterCandidate[]): Promise<Buffer | null> {
   if (chapters.length !== 1 || !chapters[0].extraThumbnailUrls) {
-    throw new Error("O teste precisa de um capítulo com as duas miniaturas extras.");
+    throw new PairTestImageError("O capítulo não tem duas miniaturas extras disponíveis.");
   }
-  if (!await getOptionalSharp()) return null;
+  if (!await getOptionalSharp()) throw new PairTestImageError("O gerador de imagens (Sharp) não está disponível no worker.");
   const images = await Promise.all(chapters[0].extraThumbnailUrls.map(downloadThumbnail));
   if (!images[0] || !images[1]) {
-    throw new Error("Não consegui carregar ambas as imagens extras; a principal não será usada neste teste.");
+    const missing = images.flatMap((image, index) => image ? [] : [index + 2]);
+    throw new PairTestImageError(`Não consegui carregar a miniatura extra ${missing.join(" e ")}.`);
   }
   const card = await renderToptoonPairCard(chapters[0], [images[0], images[1]]);
   return addReleaseBanner(card, title, 1);
@@ -446,7 +449,12 @@ async function postStrip(
     try {
       png = pairTest ? await buildPairTestStrip(title, chapters) : await buildStrip(title, chapters);
     } catch (error) {
-      // A falha das duas imagens não deve impedir o aviso textual.
+      if (pairTest) {
+        logger.warn({ err: error, title }, "Falha ao gerar as duas imagens extras do teste");
+        const reason = error instanceof PairTestImageError ? error.message : "Falha na montagem das duas miniaturas extras.";
+        throw new Error(`${reason} Nenhuma imagem principal foi enviada.`);
+      }
+      // Normal notifications may still deliver their textual release notice.
       logger.warn({ err: error, title }, "Falha ao gerar imagem do monitor; enviando aviso sem anexo");
       png = null;
     }

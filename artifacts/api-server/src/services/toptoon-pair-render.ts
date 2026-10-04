@@ -1,13 +1,14 @@
 import type { ParsedChapter } from "./parsers/parser-types";
 import { subtitleLines } from "./chapter-subtitle-render";
 import { TOPTOON_PAIR_LAYOUT } from "./toptoon-pair-layout";
+import { loadMonitorDependency } from "../lib/monitor-dependencies";
 
 const xml = (text: string) => text.replace(/[&<>"']/g, c =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" })[c]!);
 
 /** Same two portrait panels for browser-less tests; no primary image is accepted. */
 export async function renderToptoonPairCard(chapter: ParsedChapter, images: [Buffer, Buffer]): Promise<Buffer> {
-  const sharp = (await import("sharp")).default;
+  const sharp = (await loadMonitorDependency("sharp") as typeof import("sharp")).default;
   const { panelWidth, panelHeight, gap, padding, minCardHeight } = TOPTOON_PAIR_LAYOUT;
   const textX = padding + panelWidth * 2 + gap + 16;
   const lines = subtitleLines(chapter.subtitlePt ?? "", 60);
