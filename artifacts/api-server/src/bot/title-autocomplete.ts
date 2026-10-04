@@ -3,7 +3,9 @@ import { logger } from "../lib/logger.js";
 
 type Kind = "anime" | "manga";
 type Choice = { name: string; value: string };
-type CacheEntry = { choices: Choice[]; expires: number };
+type CacheEntry = { choices: Choice[]; expires: number; aliases: Map<string, string[]> };
+const compactTitle = (text: string) =>
+  text.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
 const QUERY = `query TitleSuggestions($search: String!) {
   Page(perPage: 10) {
     media(search: $search, type: ANIME, isAdult: false, sort: SEARCH_MATCH) {
@@ -31,16 +33,34 @@ export function createTitleAutocomplete({
     manga: { busy: false, nextRequest: 0 },
   };
 
-  function remember(key: string, choices: Choice[], ttl: number) {
+  function remember(key: string, choices: Choice[], ttl: number, aliases = new Map<string, string[]>()) {
     cache.delete(key);
-    cache.set(key, { choices, expires: now() + ttl });
+    cache.set(key, { choices, expires: now() + ttl, aliases });
     while (cache.size > 128) cache.delete(cache.keys().next().value!);
+  }
+
+  function fromPrefix(kind: Kind, query: string): Choice[] {
+    const needle = compactTitle(query);
+    if (!needle) return [];
+    const entries = [...cache.entries()].filter(([key, entry]) =>
+      key.startsWith(`${kind}:`) && entry.expires > now() &&
+      needle.startsWith(compactTitle(key.slice(kind.length + 1))),
+    ).sort(([a], [b]) => b.length - a.length);
+    for (const [, entry] of entries) {
+      const matches = entry.choices.filter(choice =>
+        (entry.aliases.get(choice.value) ?? [compactTitle(choice.name)])
+          .some(alias => alias.includes(needle)),
+      );
+      if (matches.length) return matches;
+    }
+    return [];
   }
 
   async function load(kind: Kind, query: string, key: string): Promise<Choice[]> {
     const state = sources[kind];
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
+    const aliases = new Map<string, string[]>();
     try {
       const operation = async () => {
         const params = new URLSearchParams({
@@ -99,7 +119,10 @@ export function createTitleAutocomplete({
           if (seen.has(identity) || seenIds.has(String(id))) continue;
           seen.add(identity);
           seenIds.add(String(id));
-          choices.push({ name, value: `${kind === "anime" ? "anilist-anime" : "mangadex"}:${id}` });
+          const value = `${kind === "anime" ? "anilist-anime" : "mangadex"}:${id}`;
+          aliases.set(value, candidates.filter((t): t is string => typeof t === "string")
+            .map(compactTitle));
+          choices.push({ name, value });
           if (choices.length === 10) break;
         }
         return choices;
@@ -113,7 +136,7 @@ export function createTitleAutocomplete({
           }, timeoutMs);
         }),
       ]);
-      remember(key, choices, choices.length ? 60_000 : 15_000);
+      remember(key, choices, choices.length ? 60_000 : 15_000, aliases);
       return choices;
     } catch (error) {
       state.nextRequest = Math.max(state.nextRequest, now() + 10_000);
@@ -132,12 +155,26 @@ export function createTitleAutocomplete({
     if (query.length < 3 || query.length > 100) return [];
     const key = `${kind}:${query}`;
     const cached = cache.get(key);
-    if (cached && cached.expires > now()) return cached.choices;
+    if (cached && cached.expires > now()) return cached.choices.length
+      ? cached.choices : fromPrefix(kind, query);
     cache.delete(key);
     const existing = pending.get(key);
     if (existing) return existing;
     const state = sources[kind];
-    if (state.busy || now() < state.nextRequest) return [];
+    if (state.busy || now() < state.nextRequest) {
+      const matches = fromPrefix(kind, query);
+      if (matches.length) return matches;
+      // Continuing to type must not clear suggestions merely because the
+      // shorter query is still loading. Share it and filter its real results.
+      for (const [pendingKey, promise] of pending) {
+        if (pendingKey.startsWith(`${kind}:`) &&
+            compactTitle(query).startsWith(compactTitle(pendingKey.slice(kind.length + 1)))) {
+          await promise;
+          return fromPrefix(kind, query);
+        }
+      }
+      return [];
+    }
     state.busy = true;
     state.nextRequest = now() + 3_000;
     const result = load(kind, query, key);

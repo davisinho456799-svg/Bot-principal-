@@ -17,7 +17,7 @@ import {
 } from "./interaction-rate-limit.js";
 
 const AUTOCOMPLETE_DEBOUNCE_MS = 250;
-const AUTOCOMPLETE_RESPONSE_INTERVAL_MS = 1_000;
+const AUTOCOMPLETE_RESPONSE_INTERVAL_MS = 500;
 const latestAutocompleteRequest = new Map<string, number>();
 const lastAutocompleteResponse = new Map<string, number>();
 let autocompleteRequestSequence = 0;
@@ -151,20 +151,6 @@ export function registerInteractionRouter(client: Client) {
       const receivedAt = Date.now();
       const command = commands.get(interaction.commandName);
       const autocompleteKey = `${interaction.user.id}:${interaction.commandName}`;
-      const focusedValue = interaction.options.getFocused();
-
-      if (
-        interaction.commandName === "anime" &&
-        typeof focusedValue === "string" &&
-        focusedValue.trim().length < 2
-      ) {
-        logger.debug(
-          { command: interaction.commandName, interactionId: interaction.id },
-          "Autocomplete sem consulta suficiente ignorado",
-        );
-        return;
-      }
-
       const requestSequence = ++autocompleteRequestSequence;
       latestAutocompleteRequest.set(autocompleteKey, requestSequence);
 
@@ -194,9 +180,11 @@ export function registerInteractionRouter(client: Client) {
           return;
         }
 
+        // Reserve acknowledgement before waiting, so two concurrent calls cannot
+        // both send a response for the same interaction.
+        responseAttempted = true;
         const cooldownRemainingMs = interactionCallbackCooldownRemaining();
         if (cooldownRemainingMs > 0) {
-          responseAttempted = true;
           logger.debug(
             {
               command: interaction.commandName,
@@ -210,23 +198,30 @@ export function registerInteractionRouter(client: Client) {
 
         const now = Date.now();
         const previousResponseAt = lastAutocompleteResponse.get(autocompleteKey) ?? 0;
-        if (now - previousResponseAt < AUTOCOMPLETE_RESPONSE_INTERVAL_MS) {
-          responseAttempted = true;
+        const delay = Math.max(0, previousResponseAt + AUTOCOMPLETE_RESPONSE_INTERVAL_MS - now);
+        // Pace the latest response rather than silently dropping it. Never add
+        // a delay that would consume Discord's remaining acknowledgement window.
+        if (delay > 0 && now + delay < interaction.createdTimestamp + 2_700) {
           logger.debug(
             {
               command: interaction.commandName,
               interactionId: interaction.id,
-              minIntervalMs: AUTOCOMPLETE_RESPONSE_INTERVAL_MS,
+              delayMs: delay,
             },
-            "Autocomplete ignorado para limitar callbacks",
+            "Autocomplete aguardando janela de resposta",
           );
+          await wait(delay);
+        }
+
+        if (!isLatestAutocomplete() || interaction.responded ||
+            interactionCallbackCooldownRemaining() > 0) {
           return;
         }
 
-        responseAttempted = true;
-        lastAutocompleteResponse.set(autocompleteKey, now);
+        const sentAt = Date.now();
+        lastAutocompleteResponse.set(autocompleteKey, sentAt);
         setTimeout(() => {
-          if (lastAutocompleteResponse.get(autocompleteKey) === now) {
+          if (lastAutocompleteResponse.get(autocompleteKey) === sentAt) {
             lastAutocompleteResponse.delete(autocompleteKey);
           }
         }, AUTOCOMPLETE_RESPONSE_INTERVAL_MS);

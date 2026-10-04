@@ -12,6 +12,43 @@ const manga = () => new Response(JSON.stringify({
 afterEach(() => vi.useRealTimers());
 
 describe("bounded title suggestions", () => {
+  it("keeps matching suggestions when typing extends a cached prefix during throttling", async () => {
+    const request = vi.fn<typeof fetch>(async () => anime());
+    const suggest = createTitleAutocomplete({ request });
+    await suggest("anime", "nar");
+    expect(await suggest("anime", "naruto")).toEqual([
+      { name: "Naruto", value: "anilist-anime:20" },
+    ]);
+    expect(await suggest("anime", "naruto unknown")).toEqual([]);
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("shares a still-loading prefix instead of clearing the latest typed query", async () => {
+    let finish!: (response: Response) => void;
+    const request = vi.fn<typeof fetch>(() => new Promise(resolve => { finish = resolve; }));
+    const suggest = createTitleAutocomplete({ request });
+    const first = suggest("anime", "nar");
+    const latest = suggest("anime", "naruto");
+    finish(anime());
+    expect(await first).toHaveLength(1);
+    expect(await latest).toHaveLength(1);
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("matches alternate titles when the displayed name is translated", async () => {
+    const request = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+      data: { Page: { media: [
+        { id: 20, title: { english: "Attack on Titan", romaji: "Shingeki no Kyojin" } },
+      ] } },
+    })));
+    const suggest = createTitleAutocomplete({ request });
+    await suggest("anime", "shi");
+    expect(await suggest("anime", "shingeki")).toEqual([
+      { name: "Attack on Titan", value: "anilist-anime:20" },
+    ]);
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
   it("does not consult sources before three characters or for oversized queries", async () => {
     const request = vi.fn<typeof fetch>();
     const suggest = createTitleAutocomplete({ request });
