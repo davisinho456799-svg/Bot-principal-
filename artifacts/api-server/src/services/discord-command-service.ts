@@ -476,6 +476,7 @@ export async function executeManhwaCommand(interaction: ChatInputCommandInteract
           `Capítulo/imagem: ${result.chapter}`,
           `Parser usado: ${result.parser}`,
           `Modo da captura: ${result.captureMode}`,
+          ...(result.imageSelection ? [`Imagem usada: ${result.imageSelection === "extras" ? "duas extras (2 e 3)" : result.imageSelection === "text" ? "somente texto; nenhuma imagem disponível" : result.captureMode === "primary+banner" ? "principal do mesmo capítulo (reserva)" : "principal"}.`] : []),
         ].join("\n"),
       });
     } catch (error) {

@@ -209,6 +209,17 @@ describe("safe monitor commands", () => {
     expect(state.notification).toHaveBeenCalledWith(expect.any(Function), 10, true);
   });
 
+  it.each([
+    ["primary", "primary+banner", "principal do mesmo capítulo (reserva)"],
+    ["extras", "sharp+banner", "duas extras (2 e 3)"],
+    ["text", "none", "somente texto"],
+  ])("identifies the actual image selected by the test: %s", async (imageSelection, captureMode, expected) => {
+    state.notification.mockResolvedValueOnce({ title: "C", chapter: "36", parser: "test", captureMode, imageSelection });
+    const { fake, command } = interaction("teste", 2, true);
+    await executeManhwaCommand(command);
+    expect(fake.editReply.mock.calls.at(-1)![0].content).toContain(`Imagem usada: ${expected}`);
+  });
+
   it("preserves the completed test steps when image generation fails", async () => {
     state.notification.mockImplementationOnce(async (progress) => {
       await progress("Obra escolhida: C.");

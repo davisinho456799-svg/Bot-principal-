@@ -15,6 +15,7 @@ import { monitorExecution } from "./monitor-execution.js";
 import { translateChapterSubtitles } from "./chapter-subtitle-translation";
 import { buildSubtitleFallbackRow, buildSubtitleRowsLayout } from "./chapter-subtitle-render";
 import { renderToptoonPairCard } from "./toptoon-pair-render";
+import { selectPairTestImage, type TestImageSelection } from "./monitor-test-fallback";
 import { RELEASE_BANNER_HEIGHT, buildReleaseBannerMarkup, buildReleaseBannerSvg } from "./release-banner";
 import {
   buildChapterKey,
@@ -58,7 +59,7 @@ type ExistingChapter = {
   publishedAt: Date | null;
 };
 
-type MonitorImageMode = "browser+banner" | "sharp+banner" | "none";
+type MonitorImageMode = "browser+banner" | "sharp+banner" | "primary+banner" | "none";
 
 const HISTORICAL_RELEASE_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1_000;
 
@@ -275,14 +276,17 @@ async function fetchListing(
   };
 }
 
-async function downloadThumbnail(url: string): Promise<Buffer | null> {
+async function downloadThumbnail(url: string, timeoutMs?: number): Promise<Buffer | null> {
   try {
     if (/fullversion|full[-_ ]?version|download[-_ ]?app|app[-_ ]?version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)|(?:^|[/._-])(?:banner|bnr|lock|locked|no[-_ ]?image|placeholder)(?:[/._-]|$)/i.test(url)) {
       return null;
     }
     const sharp = await getOptionalSharp();
     if (!sharp) return null;
-    const response = await fetch(url, { headers: { "User-Agent": "ChapterMonitor/1.0" } });
+    const response = await fetch(url, {
+      headers: { "User-Agent": "ChapterMonitor/1.0" },
+      ...(timeoutMs ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
+    });
     if (!response.ok) return null;
     const bytes = Buffer.from(await response.arrayBuffer());
     const metadata = await sharp(bytes).metadata();
@@ -306,6 +310,7 @@ async function downloadThumbnail(url: string): Promise<Buffer | null> {
 async function buildStrip(
   title: string,
   chapters: ChapterCandidate[],
+  requireThumbnail = false,
 ): Promise<Buffer | null> {
   const sharp = await getOptionalSharp();
   if (!sharp) return null;
@@ -316,8 +321,9 @@ async function buildStrip(
   const height = layout.height;
   const images = await Promise.all(chapters.map(async (chapter) => ({
     chapter,
-    data: await downloadThumbnail(chapter.thumbnailUrl),
+    data: await downloadThumbnail(chapter.thumbnailUrl, requireThumbnail ? 10_000 : undefined),
   })));
+  if (requireThumbnail && images.every(image => !image.data)) return null;
   const imageRows = images.map(({ chapter, data }, index) => {
     const y = layout.rows[index].y;
     if (chapter.subtitlePt) return buildSubtitleFallbackRow(chapter, y, layout.rows[index].height, Boolean(data));
@@ -356,7 +362,7 @@ async function buildPairTestStrip(title: string, chapters: ChapterCandidate[]): 
     throw new PairTestImageError("O capítulo não tem duas miniaturas extras disponíveis.");
   }
   if (!await getOptionalSharp()) throw new PairTestImageError("O gerador de imagens (Sharp) não está disponível no worker.");
-  const images = await Promise.all(chapters[0].extraThumbnailUrls.map(downloadThumbnail));
+  const images = await Promise.all(chapters[0].extraThumbnailUrls.map(url => downloadThumbnail(url, 10_000)));
   if (!images[0] || !images[1]) {
     const missing = images.flatMap((image, index) => image ? [] : [index + 2]);
     throw new PairTestImageError(`Não consegui carregar a miniatura extra ${missing.join(" e ")}.`);
@@ -419,7 +425,7 @@ function escapeXml(value: string) {
   return value.replace(/[<>&'"]/g, (character) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", "'": "&apos;", "\"": "&quot;" })[character] ?? character);
 }
 
-async function postStrip(
+export async function postStrip(
   channelId: string,
   title: string,
   chapters: ChapterCandidate[],
@@ -428,6 +434,7 @@ async function postStrip(
   isTest = false,
   capturedImage?: Buffer,
   pairTest = false,
+  progress?: MonitorProgressReporter,
 ): Promise<MonitorImageMode> {
   const token = process.env.DISCORD_BOT_TOKEN;
   if (!token) throw new Error("DISCORD_BOT_TOKEN is not configured");
@@ -445,29 +452,34 @@ async function postStrip(
   }
 
   let png = browserImage;
-  if (!png) {
+  let primaryFallback = false;
+  if (pairTest) {
+    const selected = await selectPairTestImage({
+      captured: browserImage,
+      renderPair: () => buildPairTestStrip(title, chapters),
+      renderPrimary: () => buildStrip(title, chapters, true),
+      report: message => reportProgress(progress, message),
+      onFailure: (stage, error) => logger.warn({ err: error, title, stage }, "Falha na imagem do teste; tentando próxima reserva"),
+    });
+    png = selected.image;
+    primaryFallback = selected.selection === "primary";
+  } else if (!png) {
     try {
-      png = pairTest ? await buildPairTestStrip(title, chapters) : await buildStrip(title, chapters);
+      png = await buildStrip(title, chapters);
     } catch (error) {
-      if (pairTest) {
-        logger.warn({ err: error, title }, "Falha ao gerar as duas imagens extras do teste");
-        const reason = error instanceof PairTestImageError ? error.message : "Falha na montagem das duas miniaturas extras.";
-        throw new Error(`${reason} Nenhuma imagem principal foi enviada.`);
-      }
       // Normal notifications may still deliver their textual release notice.
       logger.warn({ err: error, title }, "Falha ao gerar imagem do monitor; enviando aviso sem anexo");
       png = null;
     }
   }
-  const imageMode: MonitorImageMode = browserImage
-    ? "browser+banner"
-    : png
-      ? "sharp+banner"
-      : "none";
+  const imageMode: MonitorImageMode = primaryFallback
+    ? "primary+banner"
+    : browserImage
+      ? "browser+banner"
+      : png
+        ? "sharp+banner"
+        : "none";
   const form = new FormData();
-  if (pairTest && !png) {
-    throw new Error("Não foi possível gerar o teste com as duas imagens extras. Nenhuma imagem principal foi enviada.");
-  }
   const chapterSummary = chapters.length === 1
     ? `1 capítulo novo · capítulo ${chapters[0].number}`
     : `${chapters.length} capítulos novos · capítulos ${chapters.map((chapter) => chapter.number).join(", ")}`;
@@ -478,7 +490,7 @@ async function postStrip(
     );
   }
   form.append("payload_json", JSON.stringify({
-    content: `${isTest ? "🧪 **TESTE** · " : ""}**${title}** · ${chapterSummary}${total > 1 ? ` · parte ${part}/${total}` : ""}${png ? "" : " · imagem indisponível no modo leve"}`,
+    content: `${isTest ? "🧪 **TESTE** · " : ""}**${title}** · ${chapterSummary}${total > 1 ? ` · parte ${part}/${total}` : ""}${primaryFallback ? " · imagem principal usada como reserva" : ""}${png ? "" : pairTest ? " · aviso em texto: imagens indisponíveis" : " · imagem indisponível no modo leve"}`,
     allowed_mentions: { parse: [] },
   }));
   if (png) {
@@ -662,16 +674,16 @@ export async function runTestNotification(
       throw new Error(`Não encontrei capítulos para o título "${work.title}".`);
     }
 
+    const newest = [...candidates].sort((a, b) => Number(b.number) - Number(a.number));
     const eligible = topToonPairTest
-      ? candidates.filter(chapter => chapter.extraThumbnailUrls).sort((a, b) => Number(b.number) - Number(a.number))
+      ? newest.filter(chapter => chapter.extraThumbnailUrls)
       : candidates;
-    if (!eligible.length) throw new Error("A fonte não disponibilizou duas imagens extras para testar esta obra.");
-    const chapter = topToonPairTest ? eligible[0]! : eligible[Math.floor(Math.random() * eligible.length)]!;
-    if (topToonPairTest) await reportProgress(progress, "Teste reversível: usando as imagens 2 e 3, sem a principal. Rodadas automáticas permanecem inalteradas.");
+    const chapter = topToonPairTest ? (eligible[0] ?? newest[0])! : eligible[Math.floor(Math.random() * eligible.length)]!;
+    if (topToonPairTest) await reportProgress(progress, "Teste reversível: tentando imagens 2 e 3, com a principal como reserva. Rodadas automáticas permanecem inalteradas.");
     await translateChapterSubtitles([chapter]);
     await reportProgress(progress, `Capítulo escolhido: ${chapter.number}. Parser final: ${parser}.`);
     let capturedImage: Buffer | undefined;
-    if (listing.captureSession && chapter.captureId) {
+    if (listing.captureSession && chapter.captureId && (!topToonPairTest || chapter.extraThumbnailUrls)) {
       await reportProgress(progress, "Tentando capturar o card real renderizado pelo site.");
       try {
         const [group] = await listing.captureSession.captureGroups([chapter.captureId], captureSubtitles([chapter]), topToonPairTest);
@@ -693,7 +705,7 @@ export async function runTestNotification(
         await reportProgress(progress, "A captura direta falhou; usando fallback SVG/Sharp.");
       }
     } else {
-      await reportProgress(progress, "Não houve sessão de captura; usando fallback SVG/Sharp.");
+      await reportProgress(progress, "A captura direta não está disponível; tentando montagem SVG/Sharp e as reservas.");
     }
     await reportProgress(progress, "Montando e enviando a imagem para o canal do monitor.");
     const imageMode = await postStrip(
@@ -705,14 +717,18 @@ export async function runTestNotification(
       true,
       capturedImage,
       topToonPairTest,
+      progress,
     );
     await reportProgress(progress, `Mensagem enviada ao Discord (${imageMode}).`);
+    const imageSelection: TestImageSelection = imageMode === "none" ? "text"
+      : topToonPairTest && imageMode !== "primary+banner" ? "extras" : "primary";
 
     return {
       title: work.title,
       chapter: chapter.number,
       parser,
       captureMode: imageMode,
+      imageSelection,
       channelId: config.discordChannelId,
     };
   } finally {
