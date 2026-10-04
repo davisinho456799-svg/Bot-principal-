@@ -3,6 +3,17 @@ import { describe, expect, it } from "vitest";
 import { commandDefinitions, commandRegistry } from "../command-registry.js";
 
 describe("active bot commands", () => {
+  it("enables title autocomplete for anime and manga without changing free-text options", () => {
+    for (const name of ["anime", "manga"]) {
+      const definition = commandDefinitions.find(command => command.name === name)!;
+      const title = definition.options?.find(option => option.name === "titulo");
+      expect(title).toMatchObject({ autocomplete: true, required: name === "manga" });
+      expect(typeof commandRegistry.get(name)?.autocomplete).toBe("function");
+    }
+    const anime = commandDefinitions.find(command => command.name === "anime")!;
+    expect(anime.options?.find(option => option.name === "descricao")).not.toHaveProperty("autocomplete", true);
+  });
+
   it("keeps a unique executable handler for every published command", () => {
     const names = commandDefinitions.map(command => command.name);
     expect(new Set(names).size).toBe(names.length);
