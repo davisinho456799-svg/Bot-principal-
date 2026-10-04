@@ -311,12 +311,13 @@ async function buildStrip(
   title: string,
   chapters: ChapterCandidate[],
   requireThumbnail = false,
+  includeBanner = true,
 ): Promise<Buffer | null> {
   const sharp = await getOptionalSharp();
   if (!sharp) return null;
   const rowHeight = 164;
   const width = 920;
-  const headerHeight = RELEASE_BANNER_HEIGHT;
+  const headerHeight = includeBanner ? RELEASE_BANNER_HEIGHT : 0;
   const layout = buildSubtitleRowsLayout(chapters, headerHeight, rowHeight);
   const height = layout.height;
   const images = await Promise.all(chapters.map(async (chapter) => ({
@@ -329,7 +330,7 @@ async function buildStrip(
     if (chapter.subtitlePt) return buildSubtitleFallbackRow(chapter, y, layout.rows[index].height, Boolean(data));
     return `<rect x="24" y="${y}" width="872" height="140" rx="14" fill="#f5f0e8" stroke="#ded5c8"/><text x="52" y="${y + 78}" fill="#132b3f" font-family="Arial,sans-serif" font-size="25" font-weight="700">${escapeXml(chapter.number)}</text>${data ? "" : `<text x="185" y="${y + 78}" fill="#7a746c" font-family="Arial,sans-serif" font-size="18">Thumbnail unavailable</text>`}`;
   }).join("");
-  const baseSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="100%" height="100%" fill="#fffaf3"/>${buildReleaseBannerMarkup(title, chapters.length)}${imageRows}</svg>`;
+  const baseSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="100%" height="100%" fill="#fffaf3"/>${includeBanner ? buildReleaseBannerMarkup(title, chapters.length) : ""}${imageRows}</svg>`;
   let output = await sharp(Buffer.from(baseSvg)).png().toBuffer();
   const composites = await Promise.all(images.map(async ({ data, chapter }, index) => {
     if (!data) return null;
@@ -358,17 +359,55 @@ async function buildStrip(
 class PairTestImageError extends Error {}
 
 async function buildPairTestStrip(title: string, chapters: ChapterCandidate[]): Promise<Buffer | null> {
-  if (chapters.length !== 1 || !chapters[0].extraThumbnailUrls) {
+  if (chapters.length !== 1) throw new PairTestImageError("O teste deve selecionar um único capítulo.");
+  const card = await buildPairCard(chapters[0]);
+  return addReleaseBanner(card, title, 1);
+}
+
+async function buildPairCard(chapter: ChapterCandidate): Promise<Buffer> {
+  if (!chapter.extraThumbnailUrls) {
     throw new PairTestImageError("O capítulo não tem duas miniaturas extras disponíveis.");
   }
   if (!await getOptionalSharp()) throw new PairTestImageError("O gerador de imagens (Sharp) não está disponível no worker.");
-  const images = await Promise.all(chapters[0].extraThumbnailUrls.map(url => downloadThumbnail(url, 10_000)));
+  const images = await Promise.all(chapter.extraThumbnailUrls.map(url => downloadThumbnail(url, 10_000)));
   if (!images[0] || !images[1]) {
     const missing = images.flatMap((image, index) => image ? [] : [index + 2]);
     throw new PairTestImageError(`Não consegui carregar a miniatura extra ${missing.join(" e ")}.`);
   }
-  const card = await renderToptoonPairCard(chapters[0], [images[0], images[1]]);
-  return addReleaseBanner(card, title, 1);
+  return renderToptoonPairCard(chapter, [images[0], images[1]]);
+}
+
+/** Preserve notification batches, with independent fallback for each chapter. */
+export async function buildAutomaticToptoonStrip(title: string, chapters: ChapterCandidate[]) {
+  const primaryChapters: string[] = [];
+  const textChapters: string[] = [];
+  const sharp = await getOptionalSharp();
+  if (!sharp) return { image: null, primaryChapters, textChapters: chapters.map(chapter => chapter.number) };
+  const rows: Array<{ input: Buffer; height: number }> = [];
+  for (const chapter of chapters) {
+    const selected = await selectPairTestImage({
+      renderPair: () => buildPairCard(chapter),
+      renderPrimary: () => buildStrip(title, [chapter], true, false),
+      onFailure: (stage, error) => logger.warn({ err: error, title, chapter: chapter.number, stage }, "Imagem automática indisponível; tentando reserva do mesmo capítulo"),
+    });
+    if (selected.selection === "primary") primaryChapters.push(chapter.number);
+    if (!selected.image) { textChapters.push(chapter.number); continue; }
+    const input = await sharp(selected.image).resize({ width: 1024 }).png().toBuffer();
+    const metadata = await sharp(input).metadata();
+    rows.push({ input, height: metadata.height! });
+  }
+  if (!rows.length) return { image: null, primaryChapters, textChapters };
+  let top = 0;
+  const composite = rows.map(row => {
+    const item = { input: row.input, left: 0, top };
+    top += row.height;
+    return item;
+  });
+  const strip = await sharp({ create: { width: 1024, height: top, channels: 4, background: "#202122" } })
+    .composite(composite).png().toBuffer();
+  const image = await addReleaseBanner(strip, title, chapters.length);
+  if (!image) throw new PairTestImageError("Não foi possível decorar a montagem automática.");
+  return { image, primaryChapters, textChapters };
 }
 
 export async function addReleaseBanner(
@@ -453,7 +492,28 @@ export async function postStrip(
 
   let png = browserImage;
   let primaryFallback = false;
-  if (pairTest) {
+  let automaticFallbackNote = "";
+  if (pairTest && !isTest) {
+    if (!png) {
+      try {
+        const selected = await buildAutomaticToptoonStrip(title, chapters);
+        png = selected.image;
+        automaticFallbackNote = [
+          ...(selected.primaryChapters.length ? [`principal como reserva: capítulos ${selected.primaryChapters.join(", ")}`] : []),
+          ...(selected.textChapters.length ? [`somente texto: capítulos ${selected.textChapters.join(", ")}`] : []),
+        ].map(note => ` · ${note}`).join("");
+      } catch (error) {
+        logger.warn({ err: error, title }, "Montagem automática falhou; tentando imagens principais");
+        try {
+          png = await buildStrip(title, chapters, true);
+          primaryFallback = Boolean(png);
+        } catch (primaryError) {
+          logger.warn({ err: primaryError, title }, "Reserva principal indisponível; preservando o aviso em texto");
+          png = null;
+        }
+      }
+    }
+  } else if (pairTest) {
     const selected = await selectPairTestImage({
       captured: browserImage,
       renderPair: () => buildPairTestStrip(title, chapters),
@@ -490,7 +550,7 @@ export async function postStrip(
     );
   }
   form.append("payload_json", JSON.stringify({
-    content: `${isTest ? "🧪 **TESTE** · " : ""}**${title}** · ${chapterSummary}${total > 1 ? ` · parte ${part}/${total}` : ""}${primaryFallback ? " · imagem principal usada como reserva" : ""}${png ? "" : pairTest ? " · aviso em texto: imagens indisponíveis" : " · imagem indisponível no modo leve"}`,
+    content: `${isTest ? "🧪 **TESTE** · " : ""}**${title}** · ${chapterSummary}${total > 1 ? ` · parte ${part}/${total}` : ""}${automaticFallbackNote}${primaryFallback ? " · imagem principal usada como reserva" : ""}${png ? "" : pairTest ? " · aviso em texto: imagens indisponíveis" : " · imagem indisponível no modo leve"}`,
     allowed_mentions: { parse: [] },
   }));
   if (png) {
@@ -679,7 +739,7 @@ export async function runTestNotification(
       ? newest.filter(chapter => chapter.extraThumbnailUrls)
       : candidates;
     const chapter = topToonPairTest ? (eligible[0] ?? newest[0])! : eligible[Math.floor(Math.random() * eligible.length)]!;
-    if (topToonPairTest) await reportProgress(progress, "Teste reversível: tentando imagens 2 e 3, com a principal como reserva. Rodadas automáticas permanecem inalteradas.");
+    if (topToonPairTest) await reportProgress(progress, "Tentando imagens 2 e 3, com a principal como reserva — o mesmo formato usado no monitor automático do Toptoon.");
     await translateChapterSubtitles([chapter]);
     await reportProgress(progress, `Capítulo escolhido: ${chapter.number}. Parser final: ${parser}.`);
     let capturedImage: Buffer | undefined;
@@ -917,6 +977,7 @@ async function runMonitorRound(timing: ImageMonitorTiming) {
           capturedGroups = await listing.captureSession.captureGroups(
             toPublish.map((chapter) => chapter.captureId).filter(Boolean) as string[],
             captureSubtitles(toPublish),
+            work.platform === "toptoon",
           );
         } catch (error) {
           logger.warn(
@@ -1005,6 +1066,7 @@ async function runMonitorRound(timing: ImageMonitorTiming) {
           groups.length,
           false,
           group.image,
+          work.platform === "toptoon",
         );
         imageModes.add(imageMode);
         postsSent++;

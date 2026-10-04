@@ -137,7 +137,7 @@ export const monitorCommandDefinition = new SlashCommandBuilder()
         )
         .addBooleanOption((option) =>
           option.setName("duas_imagens")
-            .setDescription("Teste Toptoon: imagens 2 e 3, sem alterar notificações automáticas")
+            .setDescription("Teste Toptoon com imagens 2 e 3 e principal como reserva")
             .setRequired(false),
         ),
     )
