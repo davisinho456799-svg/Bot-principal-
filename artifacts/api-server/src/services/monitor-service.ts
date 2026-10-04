@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, or } from "drizzle-orm";
 import type sharp from "sharp";
 import { db } from "@workspace/db";
 import {
@@ -16,6 +16,7 @@ import { translateChapterSubtitles } from "./chapter-subtitle-translation";
 import { buildSubtitleFallbackRow, buildSubtitleRowsLayout } from "./chapter-subtitle-render";
 import { renderToptoonPairCard } from "./toptoon-pair-render";
 import { selectPairTestImage, type TestImageSelection } from "./monitor-test-fallback";
+import { fetchThumbnailBytes } from "./monitor-thumbnail-download";
 import { RELEASE_BANNER_HEIGHT, buildReleaseBannerMarkup, buildReleaseBannerSvg } from "./release-banner";
 import {
   buildChapterKey,
@@ -57,6 +58,7 @@ type ExistingChapter = {
   number: string;
   thumbnailUrl: string;
   publishedAt: Date | null;
+  deliveryPending: boolean;
 };
 
 type MonitorImageMode = "browser+banner" | "sharp+banner" | "primary+banner" | "none";
@@ -283,16 +285,12 @@ async function downloadThumbnail(url: string, timeoutMs?: number): Promise<Buffe
     }
     const sharp = await getOptionalSharp();
     if (!sharp) return null;
-    const response = await fetch(url, {
-      headers: { "User-Agent": "ChapterMonitor/1.0" },
-      ...(timeoutMs ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
-    });
-    if (!response.ok) return null;
-    const bytes = Buffer.from(await response.arrayBuffer());
-    const metadata = await sharp(bytes).metadata();
+    const bytes = await fetchThumbnailBytes(url, { timeoutMs });
+    if (!bytes) return null;
+    const metadata = await sharp(bytes, { limitInputPixels: 24_000_000 }).metadata();
     if (!metadata.width || !metadata.height) return null;
     if (metadata.width / metadata.height > 4.2) return null;
-    const stats = await sharp(bytes).stats();
+    const stats = await sharp(bytes, { limitInputPixels: 24_000_000 }).stats();
     const colorChannels = stats.channels.slice(0, 3);
     const alpha = stats.channels[3];
     const isFullyTransparent = Boolean(alpha && alpha.max < 8);
@@ -563,7 +561,9 @@ export async function postStrip(
     method: "POST",
     headers: { Authorization: `Bot ${token}` },
     body: form,
+    signal: AbortSignal.timeout(30_000),
   });
+  void response.body?.cancel().catch(() => {});
   if (!response.ok) throw new Error(`Discord returned ${response.status}`);
   return imageMode;
 }
@@ -818,6 +818,7 @@ async function runMonitorRound(timing: ImageMonitorTiming) {
           number: detectedChaptersTable.chapterNumber,
         thumbnailUrl: detectedChaptersTable.thumbnailUrl,
         publishedAt: detectedChaptersTable.publishedAt,
+        deliveryPending: detectedChaptersTable.deliveryPending,
         })
         .from(detectedChaptersTable)
         .where(eq(detectedChaptersTable.workId, work.id));
@@ -899,14 +900,12 @@ async function runMonitorRound(timing: ImageMonitorTiming) {
           chapter,
         ]),
       );
-      const pending = lastPublishedNumber === null
-        ? []
-        : existing
+      const pending = existing
           .filter((chapter) => {
             const number = numericChapterNumber(chapter.number);
             return chapter.publishedAt === null &&
               number !== null &&
-              number > lastPublishedNumber &&
+              (chapter.deliveryPending || (lastPublishedNumber !== null && number > lastPublishedNumber)) &&
               !isAbsurdChapterOutlier(chapter.number, highestExisting);
           })
           .map((chapter): ChapterCandidate =>
@@ -917,7 +916,13 @@ async function runMonitorRound(timing: ImageMonitorTiming) {
               parser: `${parser} recovery`,
             },
           );
-      const toPublish = [...pending, ...fresh];
+      const deliveryNumbers = new Set<string>();
+      const toPublish = [...pending, ...fresh].filter(chapter => {
+        const identity = chapterNumberIdentity(chapter.number);
+        if (deliveryNumbers.has(identity)) return false;
+        deliveryNumbers.add(identity);
+        return true;
+      });
 
       if (existing.length === 0 && work.lastCheckedAt == null) {
         await db.transaction(async (tx) => {
@@ -952,18 +957,26 @@ async function runMonitorRound(timing: ImageMonitorTiming) {
         continue;
       }
       chaptersFound += toPublish.length;
-      if (historical.length) {
-        await db.insert(detectedChaptersTable).values(historical.map((chapter) => ({
-          workId: work.id,
-          chapterKey: chapter.key,
-          chapterNumber: chapter.number,
-          thumbnailUrl: chapter.thumbnailUrl,
-          detectedAt: checkedAt,
-        })));
-      }
+      // Durable intent distinguishes actual deliveries from baseline snapshots.
+      await db.transaction(async tx => {
+        await migrateLegacyKeys(tx, work, existing);
+        if (historical.length) await tx.insert(detectedChaptersTable).values(historical.map(chapter => ({
+          workId: work.id, chapterKey: chapter.key, chapterNumber: chapter.number,
+          thumbnailUrl: chapter.thumbnailUrl, detectedAt: checkedAt,
+        }))).onConflictDoNothing();
+        if (fresh.length) await tx.insert(detectedChaptersTable).values(fresh.map(chapter => ({
+          workId: work.id, chapterKey: chapter.key, chapterNumber: chapter.number,
+          thumbnailUrl: chapter.thumbnailUrl, detectedAt: checkedAt, deliveryPending: true,
+        }))).onConflictDoNothing();
+        for (const chapter of pending) {
+          const matches = existing.filter(item => chapterNumberIdentity(item.number) === chapterNumberIdentity(chapter.number));
+          for (const item of matches) await tx.update(detectedChaptersTable)
+            .set({ deliveryPending: true }).where(and(eq(detectedChaptersTable.id, item.id), eq(detectedChaptersTable.workId, work.id)));
+        }
+      });
       if (!config?.discordChannelId) {
         await db.update(monitoredWorksTable).set({
-          chaptersSeen: existing.length + historical.length,
+          chaptersSeen: existing.length + historical.length + fresh.length,
           lastCheckedAt: checkedAt,
           lastStatus: `${parser}: new chapters found — choose a Discord channel`,
           updatedAt: checkedAt,
@@ -1070,61 +1083,54 @@ async function runMonitorRound(timing: ImageMonitorTiming) {
         );
         imageModes.add(imageMode);
         postsSent++;
+        const notifiedAt = new Date();
+        // Confirm only this delivered group before attempting the next one.
+        await db.transaction(async tx => {
+          for (const chapter of group.chapters) {
+            const matches = existing.filter(item => chapterNumberIdentity(item.number) === chapterNumberIdentity(chapter.number));
+            await tx.update(detectedChaptersTable).set({ publishedAt: notifiedAt, deliveryPending: false })
+              .where(and(eq(detectedChaptersTable.workId, work.id), or(
+                eq(detectedChaptersTable.chapterKey, buildChapterKey(work.platform as MonitorPlatform, work.title, chapter.number)),
+                ...matches.map(item => eq(detectedChaptersTable.id, item.id)),
+              )));
+          }
+          const previousHistory = await tx
+            .select({ chapterNumber: monitorHistoryTable.chapterNumber })
+            .from(monitorHistoryTable)
+            .where(eq(monitorHistoryTable.workId, work.id));
+          const historyKeys = new Set(
+            previousHistory.map((item) => chapterNumberIdentity(item.chapterNumber)),
+          );
+          const historyToInsert = group.chapters.filter((chapter) => {
+            const key = chapterNumberIdentity(chapter.number);
+            if (historyKeys.has(key)) return false;
+            historyKeys.add(key);
+            return true;
+          });
+          if (historyToInsert.length) {
+            await tx.insert(monitorHistoryTable).values(historyToInsert.map((chapter) => ({
+              workId: work.id,
+              chapterNumber: chapter.number,
+              releaseDate: chapter.releaseDate ?? null,
+              notifiedAt,
+            })));
+          }
+          await tx.insert(monitorActivityTable).values({
+            workId: work.id,
+            chapterCount: group.chapters.length,
+            status: `Published (image: ${imageMode})`,
+            createdAt: notifiedAt,
+          });
+          await tx.update(monitoredWorksTable).set({
+            chaptersSeen: existing.length + historical.length + fresh.length,
+            lastPublishedAt: notifiedAt, updatedAt: notifiedAt,
+          }).where(eq(monitoredWorksTable.id, work.id));
+        });
       }
       await db.transaction(async (tx) => {
-        await migrateLegacyKeys(tx, work, existing);
-        if (fresh.length) {
-          await tx.insert(detectedChaptersTable).values(fresh.map((chapter) => ({
-            workId: work.id,
-            chapterKey: chapter.key,
-            chapterNumber: chapter.number,
-            thumbnailUrl: chapter.thumbnailUrl,
-            detectedAt: checkedAt,
-            publishedAt: checkedAt,
-          })));
-        }
-        for (const chapter of pending) {
-          const existingChapter = existing.find((item) =>
-            chapterNumberIdentity(item.number) === chapterNumberIdentity(chapter.number),
-          );
-          if (existingChapter) {
-            await tx
-              .update(detectedChaptersTable)
-              .set({ publishedAt: checkedAt })
-              .where(eq(detectedChaptersTable.id, existingChapter.id));
-          }
-        }
-
-        const previousHistory = await tx
-          .select({ chapterNumber: monitorHistoryTable.chapterNumber })
-          .from(monitorHistoryTable)
-          .where(eq(monitorHistoryTable.workId, work.id));
-        const historyKeys = new Set(
-          previousHistory.map((item) => chapterNumberIdentity(item.chapterNumber)),
-        );
-        const historyToInsert = toPublish.filter((chapter) => {
-          const key = chapterNumberIdentity(chapter.number);
-          if (historyKeys.has(key)) return false;
-          historyKeys.add(key);
-          return true;
-        });
-        if (historyToInsert.length) {
-          await tx.insert(monitorHistoryTable).values(historyToInsert.map((chapter) => ({
-            workId: work.id,
-            chapterNumber: chapter.number,
-            releaseDate: chapter.releaseDate ?? null,
-            notifiedAt: checkedAt,
-          })));
-        }
-        await tx.insert(monitorActivityTable).values({
-          workId: work.id,
-          chapterCount: toPublish.length,
-          status: `Published (image: ${[...imageModes].join("+")})`,
-        });
         await tx.update(monitoredWorksTable).set({
           chaptersSeen: existing.length + historical.length + fresh.length,
           lastCheckedAt: checkedAt,
-          lastPublishedAt: checkedAt,
           lastStatus: `${toPublish.length} new chapter${toPublish.length === 1 ? "" : "s"} published (image: ${[...imageModes].join("+")})`,
           updatedAt: checkedAt,
         }).where(eq(monitoredWorksTable.id, work.id));
