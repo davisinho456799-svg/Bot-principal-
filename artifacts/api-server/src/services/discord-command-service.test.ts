@@ -78,7 +78,7 @@ vi.mock("./monitor-diagnostic.js", () => ({
 
 import { executeManhwaCommand, monitorCommandDefinition } from "./discord-command-service.js";
 
-function interaction(subcommand: string, number: number | null = null) {
+function interaction(subcommand: string, number: number | null = null, pairTest = false) {
   let confirmationIds: string[] = [];
   const message = {
     awaitMessageComponent: vi.fn(async (options) => {
@@ -109,6 +109,7 @@ function interaction(subcommand: string, number: number | null = null) {
     options: {
       getSubcommand: () => subcommand,
       getInteger: () => number,
+      getBoolean: () => pairTest,
       getString: (key: string) => ({ link: "https://www.lezhin.com/new", nome: "D", plataforma: "lezhin", capitulo: "12.5" })[key],
     },
   };
@@ -169,7 +170,7 @@ describe("safe monitor commands", () => {
 
   it("tests the database ID selected by the current display number", async () => {
     await executeManhwaCommand(interaction("teste", 2).command);
-    expect(state.notification).toHaveBeenCalledWith(expect.any(Function), 10);
+    expect(state.notification).toHaveBeenCalledWith(expect.any(Function), 10, false);
   });
 
   it("resends using the immutable ID of the current display number", async () => {
@@ -200,7 +201,12 @@ describe("safe monitor commands", () => {
 
   it("preserves random tests when no number is specified", async () => {
     await executeManhwaCommand(interaction("teste").command);
-    expect(state.notification).toHaveBeenCalledWith(expect.any(Function), undefined);
+    expect(state.notification).toHaveBeenCalledWith(expect.any(Function), undefined, false);
+  });
+
+  it("enables the two-image experiment only when explicitly selected", async () => {
+    await executeManhwaCommand(interaction("teste", 2, true).command);
+    expect(state.notification).toHaveBeenCalledWith(expect.any(Function), 10, true);
   });
 
   it.each(["teste", "remover", "renomear", "reenviar"])("rejects an old internal ID for %s without falling back", async (command) => {

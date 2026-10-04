@@ -2,6 +2,9 @@
 
 import type { Browser, BrowserContext, Page } from "playwright";
 import type { MonitorPlatform, ParsedChapter } from "./parsers/index";
+import { enrichChapterSubtitles } from "./parsers/chapter-subtitles";
+import { applyCaptureSubtitles, type CaptureSubtitle } from "./chapter-subtitle-capture";
+import { applyToptoonPairCapture } from "./toptoon-pair-capture";
 
 const PAGE_TIMEOUT_MS = 30_000;
 const MAX_CAPTURE_WIDTH = 2_400;
@@ -41,7 +44,7 @@ export type BrowserListingDiagnostics = {
 export type BrowserListingSession = {
   candidates: BrowserChapter[];
   diagnostics: BrowserListingDiagnostics;
-  captureGroups(chapterIds: string[]): Promise<CapturedChapterGroup[]>;
+  captureGroups(chapterIds: string[], subtitles?: CaptureSubtitle[], topToonPairTest?: boolean): Promise<CapturedChapterGroup[]>;
   close(): Promise<void>;
 };
 
@@ -582,6 +585,7 @@ async function findRenderedChapters(
         return {
           number: record.number,
           thumbnailUrl: record.thumbnailUrl,
+          subtitle: record.element.querySelector(".ep_stitle,.episode-subtitle,.chapter-subtitle,[data-chapter-subtitle]")?.textContent?.trim() || undefined,
           releaseDate: releaseDateFrom(
             record.element.innerText || record.element.textContent || "",
           ),
@@ -1016,6 +1020,7 @@ async function captureGroup(
   page: Page,
   chapters: BrowserChapterSnapshot[],
   platform: MonitorPlatform,
+  pairTest = false,
 ): Promise<Buffer> {
   if (!chapters.length) throw new Error("Cannot capture an empty chapter group");
 
@@ -1068,6 +1073,14 @@ async function captureGroup(
     captureId: chapter.captureId,
     thumbnailUrl: chapter.thumbnailUrl,
   }));
+  if (pairTest && platform === "toptoon") {
+    if (chapters.some(chapter => !chapter.extraThumbnailUrls)) {
+      throw new Error("The selected test chapter does not provide both extra thumbnails");
+    }
+    await applyToptoonPairCapture(page, chapters.map(chapter => ({
+      captureId: chapter.captureId, urls: chapter.extraThumbnailUrls!,
+    })));
+  }
   for (const cardId of cardIds) {
     await page
       .locator(`[data-monitor-capture-card="${cardId}"]`)
@@ -1159,7 +1172,7 @@ async function captureGroup(
 
   // Wait for the thumbnail selected during detection, not merely any image
   // inside the card. A site can render its extra thumb panels first.
-  const mediaReady = await waitForPrimaryThumbnails(
+  const mediaReady = pairTest && platform === "toptoon" ? true : await waitForPrimaryThumbnails(
     page,
     captureTargets,
     platform,
@@ -1170,7 +1183,7 @@ async function captureGroup(
   }
 
   await page.waitForTimeout(150);
-  await isolatePrimaryThumbnails(page, captureTargets);
+  if (!pairTest || platform !== "toptoon") await isolatePrimaryThumbnails(page, captureTargets);
 
   const boxes = (
     await Promise.all(
@@ -1293,13 +1306,15 @@ export async function openBrowserListing(
     });
     diagnostics.authentication = authentication;
     const candidates = await findRenderedChapters(page, platform);
+    const enriched = enrichChapterSubtitles(await page.content(), listingUrl, platform, candidates);
 
     return {
-      candidates: candidates.map(({ box: _box, ...chapter }) => chapter),
+      candidates: enriched.map(({ box: _box, ...chapter }) => chapter),
       diagnostics,
-      async captureGroups(chapterIds) {
+      async captureGroups(chapterIds, subtitles = [], pairTest = false) {
         signal?.throwIfAborted();
-        const selected = candidates
+        await applyCaptureSubtitles(page, subtitles);
+        const selected = enriched
           .filter((chapter) => chapterIds.includes(chapter.captureId))
           .sort((left, right) => left.captureOrder - right.captureOrder);
         const groups = makeGreedyGroups(selected);
@@ -1310,7 +1325,7 @@ export async function openBrowserListing(
           try {
             captured.push({
               chapterNumbers: group.map((chapter) => chapter.number),
-              image: await captureGroup(page, group, platform),
+              image: await captureGroup(page, group, platform, pairTest),
             });
           } catch (error) {
             if (group.length === 1) throw error;
@@ -1325,7 +1340,7 @@ export async function openBrowserListing(
             ]) {
               captured.push({
                 chapterNumbers: smallerGroup.map((chapter) => chapter.number),
-                image: await captureGroup(page, smallerGroup, platform),
+                image: await captureGroup(page, smallerGroup, platform, pairTest),
               });
             }
           }

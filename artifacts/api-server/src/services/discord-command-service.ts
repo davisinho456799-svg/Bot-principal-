@@ -134,6 +134,11 @@ export const monitorCommandDefinition = new SlashCommandBuilder()
             .setDescription("Número atual da obra exibido pelo /monitor listar")
             .setMinValue(1)
             .setRequired(false),
+        )
+        .addBooleanOption((option) =>
+          option.setName("duas_imagens")
+            .setDescription("Teste Toptoon: imagens 2 e 3, sem alterar notificações automáticas")
+            .setRequired(false),
         ),
     )
     .addSubcommand((command) =>
@@ -448,7 +453,7 @@ export async function executeManhwaCommand(interaction: ChatInputCommandInteract
     };
 
     try {
-      const result = await runTestNotification(updateProgress, work?.id);
+      const result = await runTestNotification(updateProgress, work?.id, interaction.options.getBoolean("duas_imagens") ?? false);
       await interaction.editReply({
         content: [
           "✅ **Resultado do teste**",

@@ -9,6 +9,10 @@ export type ParserContext = {
 export type ParsedChapter = {
   number: string;
   thumbnailUrl: string;
+  extraThumbnailUrls?: [string, string];
+  subtitle?: string;
+  subtitleLanguage?: string;
+  subtitlePt?: string;
   /**
    * Date shown by the source card, when the platform exposes one.
    * It is used only to prevent a parser migration from publishing history.

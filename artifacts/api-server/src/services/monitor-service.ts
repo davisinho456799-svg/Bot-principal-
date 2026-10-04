@@ -11,6 +11,10 @@ import {
 import { logger } from "../lib/logger";
 import { measureImageMonitorRound, type ImageMonitorTiming } from "./monitor-timing";
 import { monitorExecution } from "./monitor-execution.js";
+import { translateChapterSubtitles } from "./chapter-subtitle-translation";
+import { buildSubtitleFallbackRow, buildSubtitleRowsLayout } from "./chapter-subtitle-render";
+import { renderToptoonPairCard } from "./toptoon-pair-render";
+import { RELEASE_BANNER_HEIGHT, buildReleaseBannerMarkup, buildReleaseBannerSvg } from "./release-banner";
 import {
   buildChapterKey,
   genericParser,
@@ -37,6 +41,13 @@ type ChapterCandidate = ParsedChapter & {
   parser: string;
   captureId?: string;
 };
+
+function captureSubtitles(chapters: ChapterCandidate[]) {
+  return chapters.filter(chapter => chapter.captureId && chapter.subtitle).map(chapter => ({
+    captureId: chapter.captureId!,
+    subtitlePt: chapter.subtitlePt,
+  }));
+}
 
 type ExistingChapter = {
   id: number;
@@ -301,27 +312,29 @@ async function buildStrip(
   const rowHeight = 164;
   const width = 920;
   const headerHeight = RELEASE_BANNER_HEIGHT;
-  const height = headerHeight + chapters.length * rowHeight + 24;
+  const layout = buildSubtitleRowsLayout(chapters, headerHeight, rowHeight);
+  const height = layout.height;
   const images = await Promise.all(chapters.map(async (chapter) => ({
     chapter,
     data: await downloadThumbnail(chapter.thumbnailUrl),
   })));
   const imageRows = images.map(({ chapter, data }, index) => {
-    const y = headerHeight + index * rowHeight;
-    return `<rect x="24" y="${y}" width="872" height="140" rx="14" fill="#f5f0e8" stroke="#ded5c8"/><text x="52" y="${y + 78}" fill="#132b3f" font-family="Arial,sans-serif" font-size="25" font-weight="700">EP ${escapeXml(chapter.number)}</text>${data ? "" : `<text x="185" y="${y + 78}" fill="#7a746c" font-family="Arial,sans-serif" font-size="18">Thumbnail unavailable</text>`}`;
+    const y = layout.rows[index].y;
+    if (chapter.subtitlePt) return buildSubtitleFallbackRow(chapter, y, layout.rows[index].height, Boolean(data));
+    return `<rect x="24" y="${y}" width="872" height="140" rx="14" fill="#f5f0e8" stroke="#ded5c8"/><text x="52" y="${y + 78}" fill="#132b3f" font-family="Arial,sans-serif" font-size="25" font-weight="700">${escapeXml(chapter.number)}</text>${data ? "" : `<text x="185" y="${y + 78}" fill="#7a746c" font-family="Arial,sans-serif" font-size="18">Thumbnail unavailable</text>`}`;
   }).join("");
   const baseSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="100%" height="100%" fill="#fffaf3"/>${buildReleaseBannerMarkup(title, chapters.length)}${imageRows}</svg>`;
   let output = await sharp(Buffer.from(baseSvg)).png().toBuffer();
-  const composites = await Promise.all(images.map(async ({ data }, index) => {
+  const composites = await Promise.all(images.map(async ({ data, chapter }, index) => {
     if (!data) return null;
     const thumbnail = await sharp(data)
-      .resize(690, 120, { fit: "cover", position: "centre" })
+      .resize(chapter.subtitlePt ? 240 : 690, 120, { fit: "cover", position: "centre" })
       .png()
       .toBuffer();
     return {
       input: thumbnail,
-      left: 185,
-      top: headerHeight + index * rowHeight + 10,
+      left: chapter.subtitlePt ? 40 : 185,
+      top: layout.rows[index].y + 10,
     };
   }));
   const validComposites = composites.filter(
@@ -336,10 +349,17 @@ async function buildStrip(
   return output;
 }
 
-const RELEASE_BANNER_HEIGHT = 92;
-
-function buildReleaseBannerMarkup(title: string, chapterCount: number): string {
-  return `<text x="34" y="44" fill="#132b3f" font-family="Arial,sans-serif" font-size="25" font-weight="700">${escapeXml(title)}</text><text x="34" y="70" fill="#d8624c" font-family="Arial,sans-serif" font-size="13" letter-spacing="2">NEW CHAPTERS · ${chapterCount}</text>`;
+async function buildPairTestStrip(title: string, chapters: ChapterCandidate[]): Promise<Buffer | null> {
+  if (chapters.length !== 1 || !chapters[0].extraThumbnailUrls) {
+    throw new Error("O teste precisa de um capítulo com as duas miniaturas extras.");
+  }
+  if (!await getOptionalSharp()) return null;
+  const images = await Promise.all(chapters[0].extraThumbnailUrls.map(downloadThumbnail));
+  if (!images[0] || !images[1]) {
+    throw new Error("Não consegui carregar ambas as imagens extras; a principal não será usada neste teste.");
+  }
+  const card = await renderToptoonPairCard(chapters[0], [images[0], images[1]]);
+  return addReleaseBanner(card, title, 1);
 }
 
 export async function addReleaseBanner(
@@ -355,7 +375,7 @@ export async function addReleaseBanner(
     if (!metadata.width || !metadata.height) return null;
 
     const banner = Buffer.from(
-      `<svg xmlns="http://www.w3.org/2000/svg" width="${metadata.width}" height="${RELEASE_BANNER_HEIGHT}" viewBox="0 0 ${metadata.width} ${RELEASE_BANNER_HEIGHT}"><rect width="100%" height="100%" fill="#fffaf3"/>${buildReleaseBannerMarkup(title, chapterCount)}</svg>`,
+      buildReleaseBannerSvg(metadata.width, title, chapterCount),
     );
 
     const decorated = await sharp(image)
@@ -404,6 +424,7 @@ async function postStrip(
   total: number,
   isTest = false,
   capturedImage?: Buffer,
+  pairTest = false,
 ): Promise<MonitorImageMode> {
   const token = process.env.DISCORD_BOT_TOKEN;
   if (!token) throw new Error("DISCORD_BOT_TOKEN is not configured");
@@ -423,7 +444,7 @@ async function postStrip(
   let png = browserImage;
   if (!png) {
     try {
-      png = await buildStrip(title, chapters);
+      png = pairTest ? await buildPairTestStrip(title, chapters) : await buildStrip(title, chapters);
     } catch (error) {
       // A falha das duas imagens não deve impedir o aviso textual.
       logger.warn({ err: error, title }, "Falha ao gerar imagem do monitor; enviando aviso sem anexo");
@@ -436,6 +457,9 @@ async function postStrip(
       ? "sharp+banner"
       : "none";
   const form = new FormData();
+  if (pairTest && !png) {
+    throw new Error("Não foi possível gerar o teste com as duas imagens extras. Nenhuma imagem principal foi enviada.");
+  }
   const chapterSummary = chapters.length === 1
     ? `1 capítulo novo · capítulo ${chapters[0].number}`
     : `${chapters.length} capítulos novos · capítulos ${chapters.map((chapter) => chapter.number).join(", ")}`;
@@ -547,11 +571,12 @@ export async function runResendNotification(
       );
     }
 
+    await translateChapterSubtitles([chapter]);
     let capturedImage: Buffer | undefined;
     if (listing.captureSession && chapter.captureId) {
       await reportProgress(progress, "Tentando capturar novamente o card renderizado.");
       try {
-        const groups = await listing.captureSession.captureGroups([chapter.captureId]);
+        const groups = await listing.captureSession.captureGroups([chapter.captureId], captureSubtitles([chapter]));
         const group = groups.find((candidate) =>
           candidate.chapterNumbers.some((number) => chapterNumberIdentity(number) === wanted),
         );
@@ -593,6 +618,7 @@ export async function runResendNotification(
 export async function runTestNotification(
   progress?: MonitorProgressReporter,
   workId?: number,
+  topToonPairTest = false,
 ) {
   await reportProgress(progress, "Iniciando o teste da notificação.");
   const [config] = await db.select().from(monitorConfigTable).limit(1);
@@ -608,13 +634,17 @@ export async function runTestNotification(
     throw new Error("Não há nenhum título ativo no monitor para usar no teste.");
   }
 
+  const eligibleWorks = topToonPairTest ? works.filter(work => work.platform === "toptoon") : works;
   const work = workId === undefined
-    ? works[Math.floor(Math.random() * works.length)]
+    ? eligibleWorks[Math.floor(Math.random() * eligibleWorks.length)]
     : works.find((candidate) => candidate.id === workId);
   if (!work) {
     throw new Error(
       "A obra selecionada não está mais ativa. Use /monitor listar para conferir a numeração atual.",
     );
+  }
+  if (topToonPairTest && work.platform !== "toptoon") {
+    throw new Error("O teste das imagens 2 e 3 está disponível somente para obras do Toptoon.");
   }
   await reportProgress(progress, `Obra escolhida: ${work.title}.`);
   const listing = await fetchListing(work, progress);
@@ -624,13 +654,19 @@ export async function runTestNotification(
       throw new Error(`Não encontrei capítulos para o título "${work.title}".`);
     }
 
-    const chapter = candidates[Math.floor(Math.random() * candidates.length)]!;
+    const eligible = topToonPairTest
+      ? candidates.filter(chapter => chapter.extraThumbnailUrls).sort((a, b) => Number(b.number) - Number(a.number))
+      : candidates;
+    if (!eligible.length) throw new Error("A fonte não disponibilizou duas imagens extras para testar esta obra.");
+    const chapter = topToonPairTest ? eligible[0]! : eligible[Math.floor(Math.random() * eligible.length)]!;
+    if (topToonPairTest) await reportProgress(progress, "Teste reversível: usando as imagens 2 e 3, sem a principal. Rodadas automáticas permanecem inalteradas.");
+    await translateChapterSubtitles([chapter]);
     await reportProgress(progress, `Capítulo escolhido: ${chapter.number}. Parser final: ${parser}.`);
     let capturedImage: Buffer | undefined;
     if (listing.captureSession && chapter.captureId) {
       await reportProgress(progress, "Tentando capturar o card real renderizado pelo site.");
       try {
-        const [group] = await listing.captureSession.captureGroups([chapter.captureId]);
+        const [group] = await listing.captureSession.captureGroups([chapter.captureId], captureSubtitles([chapter]), topToonPairTest);
         if (await isUsableBrowserCapture(group?.image)) {
           capturedImage = group?.image;
           await reportProgress(progress, "Captura direta do card concluída.");
@@ -660,6 +696,7 @@ export async function runTestNotification(
       1,
       true,
       capturedImage,
+      topToonPairTest,
     );
     await reportProgress(progress, `Mensagem enviada ao Discord (${imageMode}).`);
 
@@ -849,11 +886,13 @@ async function runMonitorRound(timing: ImageMonitorTiming) {
         }).where(eq(monitoredWorksTable.id, work.id));
         continue;
       }
+      await translateChapterSubtitles(toPublish);
       let capturedGroups: CapturedChapterGroup[] = [];
       if (listing.captureSession) {
         try {
           capturedGroups = await listing.captureSession.captureGroups(
             toPublish.map((chapter) => chapter.captureId).filter(Boolean) as string[],
+            captureSubtitles(toPublish),
           );
         } catch (error) {
           logger.warn(

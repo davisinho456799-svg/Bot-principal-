@@ -1,4 +1,5 @@
 import type { MonitorPlatform, ParsedChapter, ParserContext } from "./parser-types";
+import { enrichChapterSubtitles } from "./chapter-subtitles";
 
 const USER_AGENT = "ChapterMonitor/1.0 (+public-thumbnail-monitor)";
 
@@ -153,7 +154,10 @@ function parsePlatformCards(
     const href = getAttribute(markup, ["href", "data-href", "data-url"]);
     const number = extractChapterNumber(markup, href, true);
     const thumbnail = getThumbnail(markup, listingUrl);
-    if (number && thumbnail) candidates.push({ number, thumbnailUrl: thumbnail });
+    const subtitle = markup.match(/<(?:p|span|div)\b[^>]*class=['"][^'"]*\b(?:ep_stitle|episode-subtitle|chapter-subtitle)\b[^'"]*['"][^>]*>([\s\S]*?)<\/(?:p|span|div)>/i)?.[1];
+    if (number && thumbnail) candidates.push({
+      number, thumbnailUrl: thumbnail, ...(subtitle?.trim() ? { subtitle: cleanText(subtitle) } : {}),
+    });
   }
 
   // Some localized pages render the chapter metadata on a wrapper and the
@@ -190,7 +194,7 @@ export function parsePlatformChapterHtml(
           ? ["data-episode", "data-episode-no", "data-ep", "episodeNo"]
           : ["data-episode", "data-chapter", "data-episode-no", "chapterNumber", "episodeNo"],
   };
-  return parsePlatformCards(html, listingUrl, rules);
+  return enrichChapterSubtitles(html, listingUrl, platform, parsePlatformCards(html, listingUrl, rules));
 }
 
 export function buildChapterKey(
