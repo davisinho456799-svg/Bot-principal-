@@ -651,12 +651,18 @@ export async function runResendNotification(
       );
     }
 
+    const useToptoonPairs = work.platform === "toptoon";
+    if (useToptoonPairs) {
+      await reportProgress(progress, "Toptoon: tentando as miniaturas 2 e 3; se falharem, usando a principal do mesmo capítulo ou texto.");
+    }
     await translateChapterSubtitles([chapter]);
     let capturedImage: Buffer | undefined;
     if (listing.captureSession && chapter.captureId) {
       await reportProgress(progress, "Tentando capturar novamente o card renderizado.");
       try {
-        const groups = await listing.captureSession.captureGroups([chapter.captureId], captureSubtitles([chapter]));
+        const groups = await listing.captureSession.captureGroups(
+          [chapter.captureId], captureSubtitles([chapter]), useToptoonPairs,
+        );
         const group = groups.find((candidate) =>
           candidate.chapterNumbers.some((number) => chapterNumberIdentity(number) === wanted),
         );
@@ -680,6 +686,7 @@ export async function runResendNotification(
       1,
       false,
       capturedImage,
+      useToptoonPairs,
     );
 
     return {

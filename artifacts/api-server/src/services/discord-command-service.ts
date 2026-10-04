@@ -85,7 +85,7 @@ export const monitorCommandDefinition = new SlashCommandBuilder()
     .addSubcommand((command) =>
       command
         .setName("reenviar")
-        .setDescription("Reenvia um capítulo monitorado, tentando recuperar a imagem")
+        .setDescription("Reenvia um capítulo; Toptoon usa duplas com reserva da principal")
         .addIntegerOption((option) =>
           option
             .setName("obra")

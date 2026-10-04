@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import sharp from "sharp";
 import { getTableName } from "drizzle-orm";
-import { runMonitor } from "./monitor-service";
+import { runMonitor, runResendNotification } from "./monitor-service";
 import { buildChapterKey } from "./parsers/index";
 
 const state = vi.hoisted(() => ({
@@ -28,7 +28,9 @@ function installDatabase() {
         .filter(row => !predicate || predicate(row, table)).slice(0, limit)
         .map(row => fields ? Object.fromEntries(Object.entries(fields).map(([alias, column]) =>
           [alias, row[Object.keys(table).find(key => table[key] === column)!]])) : { ...row });
-      return { where: (predicate: any) => Promise.resolve(select(predicate)),
+      return { where: (predicate: any) => Object.assign(Promise.resolve(select(predicate)), {
+        limit: (limit: number) => Promise.resolve(select(predicate, limit)),
+      }),
         limit: (limit: number) => Promise.resolve(select(undefined, limit)) };
     },
   }));
@@ -79,11 +81,11 @@ async function installListing(numbers: string[]) {
     candidates: numbers.map(number => ({ number, captureId: number,
       thumbnailUrl: `https://example.test/${number}.png`,
       releaseDate: new Date().toISOString().slice(0, 10) })),
-    captureGroups: async (ids: string[]) => {
+    captureGroups: vi.fn(async (ids: string[]) => {
       const groups = [];
       for (let i = 0; i < ids.length; i += 3) groups.push({ chapterNumbers: ids.slice(i, i + 3), image });
       return groups;
-    },
+    }),
     close: async () => {},
   }));
 }
@@ -126,5 +128,69 @@ describe("durable monitor delivery progress", () => {
     expect(fetcher).not.toHaveBeenCalled();
     expect(state.records.detected_chapters).toHaveLength(3);
     expect(state.records.detected_chapters.every(row => !row.deliveryPending && row.publishedAt === null)).toBe(true);
+  });
+});
+
+describe("manual resends preserve Toptoon pairs and independent fallback", () => {
+  it.each(["pairs", "primary", "text", "stored"])("resends the exact requested chapter with %s rendering", async mode => {
+    const photo = await sharp({ create: { width: 40, height: 60, channels: 3, background: "#d43b35" } }).png().toBuffer();
+    const capture = vi.fn(async () => []);
+    state.listing.mockResolvedValue({
+      candidates: [{ number: "2", captureId: "chapter-2", thumbnailUrl: "https://example.test/2.png",
+        extraThumbnailUrls: ["https://example.test/2-extra-2.png", "https://example.test/2-extra-3.png"],
+        releaseDate: new Date().toISOString().slice(0, 10) }],
+      captureGroups: capture, close: vi.fn(async () => {}),
+    });
+    const before = structuredClone(state.records);
+    const requests: string[] = [];
+    let payload: any;
+    let sentForm: FormData | undefined;
+    vi.stubGlobal("fetch", vi.fn(async (url, options) => {
+      requests.push(String(url));
+      if (String(url).startsWith("https://discord.com/api/")) {
+        sentForm = options.body as FormData;
+        payload = JSON.parse((options.body as FormData).get("payload_json") as string);
+        return new Response("", { status: 200 });
+      }
+      const missing = mode === "text" || (mode === "primary" && String(url).includes("extra-3"));
+      return missing ? new Response("missing", { status: 404 }) : new Response(new Uint8Array(photo));
+    }));
+    const progress = vi.fn();
+    const result = await runResendNotification(1, mode === "stored" ? "1" : "02", progress);
+    expect(result.chapter).toBe(mode === "stored" ? "1" : "2");
+    expect(result.imageMode).toBe(mode === "text" ? "none" : "sharp+banner");
+    if (mode !== "stored") expect(capture).toHaveBeenCalledWith(["chapter-2"], expect.any(Array), true);
+    else expect(capture).not.toHaveBeenCalled();
+    if (mode === "pairs") {
+      expect(requests).toContain("https://example.test/2-extra-2.png");
+      expect(requests).toContain("https://example.test/2-extra-3.png");
+      expect(requests).not.toContain("https://example.test/2.png");
+    }
+    if (mode === "primary" || mode === "stored") {
+      expect(payload.content).toContain("principal como reserva");
+      expect(requests).toContain(`https://example.test/${mode === "stored" ? "1" : "2"}.png`);
+    }
+    if (mode === "text") {
+      expect(sentForm?.has("files[0]")).toBe(false);
+      expect(payload.content).toContain("somente texto: capítulos 2");
+    }
+    expect(payload.content).not.toContain("TESTE");
+    expect(progress).toHaveBeenCalledWith(expect.stringContaining("miniaturas 2 e 3"));
+    expect(state.records).toEqual(before);
+    expect(state.db.update).not.toHaveBeenCalled();
+    expect(state.db.insert).not.toHaveBeenCalled();
+  });
+
+  it.each(["toptoon", "lezhin", "toomics"])("uses the platform-specific browser capture without changing %s history", async platform => {
+    state.records.monitored_works[0].platform = platform;
+    await installListing(["2"]);
+    const imageSession = await state.listing();
+    state.listing.mockResolvedValue(imageSession);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("", { status: 200 })));
+    const before = structuredClone(state.records);
+    const result = await runResendNotification(1, "2");
+    expect(result.imageMode).toBe("browser+banner");
+    expect(imageSession.captureGroups).toHaveBeenCalledWith(["2"], expect.any(Array), platform === "toptoon");
+    expect(state.records).toEqual(before);
   });
 });
