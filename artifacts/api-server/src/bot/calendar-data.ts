@@ -32,6 +32,7 @@ interface Airing {
 const MEDIA_FIELDS = "id title { romaji english } genres siteUrl isAdult";
 const AIRING_QUERY = `query CalendarAiring($page: Int, $start: Int, $end: Int) {
   Page(page: $page, perPage: 25) {
+    pageInfo { hasNextPage }
     airingSchedules(airingAt_greater: $start, airingAt_lesser: $end, sort: TIME) {
       airingAt episode media { ${MEDIA_FIELDS} }
     }
@@ -75,7 +76,7 @@ function formatDate(timestamp: number, withTime = false) {
 async function anilistPages<T>(
   query: string, field: "media" | "airingSchedules", variables: Record<string, unknown>,
 ): Promise<T[]> {
-  const pages = await Promise.allSettled([1, 2, 3].map(async (page) => {
+  async function request(page: number) {
     const response = await fetch("https://graphql.anilist.co", {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
@@ -84,15 +85,31 @@ async function anilistPages<T>(
     });
     if (!response.ok) throw new Error(`AniList HTTP ${response.status}`);
     const body = await response.json() as {
-      data?: { Page?: Partial<Record<typeof field, T[]>> }; errors?: unknown[];
+      data?: { Page?: Partial<Record<typeof field, T[]>> & {
+        pageInfo?: { hasNextPage: boolean };
+      } }; errors?: unknown[];
     };
     const rows = body.data?.Page?.[field];
     if (body.errors?.length || !Array.isArray(rows)) throw new Error("AniList calendar response invalid");
-    return rows;
-  }));
-  const success = pages.filter((page) => page.status === "fulfilled");
-  if (!success.length) throw new Error("AniList calendar unavailable");
-  return success.flatMap((page) => page.value);
+    const hasNextPage = body.data?.Page?.pageInfo?.hasNextPage;
+    if (field === "airingSchedules" && typeof hasNextPage !== "boolean") {
+      throw new Error("AniList calendar pagination invalid");
+    }
+    return { rows, hasNextPage };
+  }
+  if (field === "airingSchedules") {
+    const entries: T[] = [];
+    // Follow provider pagination instead of silently cutting off at 75
+    // episodes. Never return an incomplete list if a later request fails.
+    for (let page = 1; page <= 100; page++) {
+      const result = await request(page);
+      entries.push(...result.rows);
+      if (!result.hasNextPage) return entries;
+    }
+    throw new Error("AniList calendar pagination exceeds safety limit");
+  }
+  const pages = await Promise.all([1, 2, 3].map(request));
+  return pages.flatMap((page) => page.rows);
 }
 
 function mediaEntry(media: Media, tab: CalendarTab, airing?: { episode: number; airingAt: number }): CalendarEntry {
@@ -116,20 +133,29 @@ const isAdultGenre = (genres: string[]) =>
 async function animeEntries(adult: boolean, period: CalendarPeriod): Promise<CalendarEntry[]> {
   const range = calendarRange(period);
   try {
-    if (adult) {
+    if (adult && period === "todos") {
       const media = await anilistPages<Media>(ADULT_ANIME_QUERY, "media", {});
       if (media.length) return media.map((item) => mediaEntry(item, "anime", item.nextAiringEpisode ?? undefined))
         .filter((item) => period === "todos" ||
           (item.timestamp !== undefined && item.timestamp >= range.start && item.timestamp <= range.end))
         .sort((a, b) => (a.timestamp ?? Infinity) - (b.timestamp ?? Infinity));
     } else {
-      const rows = await anilistPages<Airing>(AIRING_QUERY, "airingSchedules", range);
-      if (rows.length) return rows.filter((item) => !item.media.isAdult)
+      // AniList's greater/lesser filters are exclusive; our range is inclusive.
+      const rows = await anilistPages<Airing>(AIRING_QUERY, "airingSchedules", {
+        start: range.start - 1, end: range.end + 1,
+      });
+      return rows.filter((item) => Boolean(item.media.isAdult) === adult)
         .map((item) => mediaEntry(item.media, "anime", item))
         .sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0));
     }
   } catch {
     // Use the existing independent Tenrai fallback if AniList is unavailable.
+  }
+  if (period === "mes") {
+    // Tenrai only provides a weekly broadcast slot. Repeating it through the
+    // month would invent future episodes; showing only the next slot would
+    // incorrectly look like a complete monthly agenda.
+    throw new Error("A agenda mensal de episódios do AniList está indisponível");
   }
   const fallback = await fetchTenraiSeasonAnime();
   return fallback.flatMap((item): CalendarEntry[] => {

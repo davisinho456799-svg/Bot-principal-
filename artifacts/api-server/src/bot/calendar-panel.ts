@@ -5,6 +5,7 @@ import {
 import { db, assinaturasTable } from "@workspace/db";
 import { getUnifiedAnimeById, getUnifiedById } from "./unified.js";
 import { loadCalendarEntries, type CalendarEntry } from "./calendar-data.js";
+import { getCalendarSnapshot, saveCalendarSnapshot } from "./calendar-snapshots.js";
 import { logger } from "../lib/logger.js";
 
 export type CalendarTab = "anime" | "manhwa" | "manga" | "vn";
@@ -25,7 +26,7 @@ const PERIODS: Record<CalendarPeriod, string> = {
   hoje: "Hoje", amanha: "Amanhã", semana: "Próximos 7 dias", mes: "Este mês", todos: "Em lançamento",
 };
 const PREFIX = "calendar:v1:";
-const MAX_PAGE = 100;
+const MAX_PAGE = 999;
 
 export function calendarCustomId(state: CalendarState): string {
   return `${PREFIX}${state.adult ? "adult" : "normal"}:${state.tab}:${state.period}:${state.page}:${state.action}`;
@@ -109,15 +110,20 @@ export function buildCalendarResults(state: CalendarState, entries: CalendarEntr
   const label = TABS.find((tab) => tab.id === state.tab)!.label;
   const scope = state.tab === "anime" ? PERIODS[state.period]
     : state.tab === "vn" ? "Últimos 2 meses e próximo mês" : "Séries em lançamento";
+  const sources = [...new Set(entries.map((entry) =>
+    entry.source.startsWith("anilist") ? "AniList" : entry.source === "tenrai" ? "Tenrai" : "VNDB"))];
+  const fallbackNotice = state.tab === "anime" && sources.includes("Tenrai")
+    ? "\nAgenda alternativa: apenas a próxima exibição semanal prevista, não a agenda completa de episódios.\n"
+    : "";
   const embed = new EmbedBuilder()
     .setTitle(`${state.adult ? "Calendário +18" : "Calendário"} — ${label}`)
     .setColor(state.adult ? 0xc0392b : 0x02a9ff)
     .setDescription(
-      `**${scope}**\n\n` +
+      `**${scope}**\n${fallbackNotice}\n` +
       (slice.length ? slice.map((entry, index) => entryLine(entry, offset + index)).join("\n\n")
         : "Nenhum resultado encontrado nesta categoria para o período. Você pode consultar novamente pelo painel."),
     )
-    .setFooter({ text: `Página ${page + 1}/${pages.length} • ${entries.length} resultado(s) • Horários de Brasília • AniList/Tenrai/VNDB` })
+    .setFooter({ text: `Página ${page + 1}/${pages.length} • ${entries.length} resultado(s) • Horários de Brasília • ${sources.join("/") || "Sem resultados"}` })
     .setTimestamp();
   const components: ActionRowBuilder<ButtonBuilder | StringSelectMenuBuilder>[] = [
     tabRow(state.adult, state.period, state.tab),
@@ -200,12 +206,30 @@ export async function handleCalendarComponent(
     if (interaction.isStringSelectMenu()) {
       await subscribe(interaction, state);
     } else {
-      const entries = await loadCalendarEntries(state.adult, state.tab, state.period);
-      await interaction.editReply(buildCalendarResults(state, entries));
+      if (state.action === "page") {
+        const entries = getCalendarSnapshot(interaction.message.id, interaction.user.id, state);
+        if (!entries) {
+          await interaction.followUp({
+            content: "Esta consulta não está mais disponível. Clique na categoria do painel para abrir uma nova lista; a página atual não foi alterada.",
+            ephemeral: true,
+          });
+          return true;
+        }
+        await interaction.editReply(buildCalendarResults(state, entries));
+      } else {
+        const entries = await loadCalendarEntries(state.adult, state.tab, state.period);
+        const message = await interaction.editReply(buildCalendarResults(state, entries));
+        saveCalendarSnapshot(message.id, {
+          userId: interaction.user.id, adult: state.adult,
+          tab: state.tab, period: state.period, entries,
+        });
+      }
     }
   } catch (err) {
     logger.error({ err, customId: interaction.customId }, "Falha na interação do calendário");
-    const content = "Não foi possível carregar esta opção agora. Tente novamente pelo painel; os botões continuam disponíveis.";
+    const content = state.tab === "anime" && state.period === "mes" && state.action === "open"
+      ? "Não foi possível carregar a agenda completa do mês agora. A fonte alternativa só informa a próxima exibição semanal, por isso não foi apresentada como uma agenda mensal. Tente novamente pelo painel; os botões continuam disponíveis."
+      : "Não foi possível carregar esta opção agora. Tente novamente pelo painel; os botões continuam disponíveis.";
     if (interaction.deferred || interaction.replied) {
       if (state.action === "page") await interaction.followUp({ content, ephemeral: true }).catch(() => null);
       else await interaction.editReply({ content }).catch(() => null);

@@ -21,8 +21,8 @@ beforeEach(() => {
   mocks.vn.mockResolvedValue([]);
 });
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
-function response(field: string, rows: unknown[]) {
-  return { ok: true, json: async () => ({ data: { Page: { [field]: rows } } }) };
+function response(field: string, rows: unknown[], hasNextPage = false) {
+  return { ok: true, json: async () => ({ data: { Page: { [field]: rows, pageInfo: { hasNextPage } } } }) };
 }
 const media = {
   id: 123, title: { romaji: "Title", english: null }, genres: ["Action"],
@@ -58,14 +58,67 @@ describe("calendar data and relative dates", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].details).toContain("Ep 2");
   });
+  it("loads the full monthly schedule beyond 75 episodes and October 11", async () => {
+    const start = calendarRange("mes").start;
+    fetchMock.mockImplementation(async (_url: string, init: { body: string }) => {
+      const { variables, query } = JSON.parse(init.body);
+      expect(query).toContain("pageInfo { hasNextPage }");
+      expect(variables.start).toBe(start - 1);
+      expect(variables.end).toBe(calendarRange("mes").end + 1);
+      const offset = (variables.page - 1) * 25;
+      return response("airingSchedules", Array.from({ length: 25 }, (_, index) => ({
+        airingAt: start + (offset + index) * 4 * 3600,
+        episode: offset + index + 1, media,
+      })), variables.page < 5);
+    });
+    const rows = await loadCalendarEntries(false, "anime", "mes");
+    expect(rows).toHaveLength(125);
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+    expect(rows.at(-1)!.details).toContain("25/10");
+    expect(mocks.anime).not.toHaveBeenCalled();
+  });
+  it("never exposes a partial AniList schedule when a later page fails", async () => {
+    fetchMock.mockResolvedValueOnce(response("airingSchedules", [
+      { airingAt: calendarRange("semana").start + 100, episode: 1, media },
+    ], true)).mockResolvedValueOnce({ ok: false, status: 429 });
+    mocks.anime.mockResolvedValue([{ mal_id: 55, title: "Fallback", genres: [{ name: "Action" }] }]);
+    const rows = await loadCalendarEntries(false, "anime", "semana");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].source).toBe("tenrai");
+    expect(rows.some((row) => row.source === "anilist-anime")).toBe(false);
+  });
+  it("keeps a valid empty AniList schedule instead of inventing fallback episodes", async () => {
+    fetchMock.mockResolvedValue(response("airingSchedules", []));
+    expect(await loadCalendarEntries(false, "anime", "amanha")).toEqual([]);
+    expect(mocks.anime).not.toHaveBeenCalled();
+  });
+  it("does not silently present partially fetched comics as a complete list", async () => {
+    fetchMock.mockImplementation(async (_url: string, init: { body: string }) =>
+      JSON.parse(init.body).variables.page === 2
+        ? { ok: false, status: 429 } : response("media", [media]));
+    mocks.comics.mockResolvedValue([{ mal_id: 55, title: "Fallback", genres: [{ name: "Action" }] }]);
+    expect((await loadCalendarEntries(false, "manga", "hoje"))[0].source).toBe("tenrai");
+  });
   it("filters tomorrow's adult anime without including today's episodes", async () => {
-    fetchMock.mockResolvedValue(response("media", [
-      { ...media, id: 1, nextAiringEpisode: { episode: 1, airingAt: calendarRange("hoje").start + 100 } },
-      { ...media, id: 2, nextAiringEpisode: { episode: 1, airingAt: calendarRange("amanha").start + 100 } },
-      { ...media, id: 3, nextAiringEpisode: null },
+    fetchMock.mockResolvedValueOnce(response("airingSchedules", [
+      { media: { ...media, id: 2, isAdult: true }, episode: 1, airingAt: calendarRange("amanha").start + 100 },
+      { media: { ...media, id: 4, isAdult: false }, episode: 1, airingAt: calendarRange("amanha").start + 100 },
     ]));
     expect((await loadCalendarEntries(true, "anime", "amanha")).map((row) => row.id)).toEqual(["2"]);
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.variables.start).toBe(calendarRange("amanha").start - 1);
+    expect(body.variables.end).toBe(calendarRange("amanha").end + 1);
+    fetchMock.mockResolvedValue(response("media", [
+      { ...media, id: 1, isAdult: true, nextAiringEpisode: { episode: 1, airingAt: calendarRange("hoje").start + 100 } },
+      { ...media, id: 2, isAdult: true, nextAiringEpisode: { episode: 1, airingAt: calendarRange("amanha").start + 100 } },
+      { ...media, id: 3, isAdult: true, nextAiringEpisode: null },
+    ]));
     expect(await loadCalendarEntries(true, "anime", "todos")).toHaveLength(3);
+  });
+  it.each([false, true])("never substitutes a next-week fallback for a monthly agenda (adult=%s)", async (adult) => {
+    fetchMock.mockRejectedValue(new Error("AniList HTTP 429"));
+    await expect(loadCalendarEntries(adult, "anime", "mes")).rejects.toThrow("agenda mensal");
+    expect(mocks.anime).not.toHaveBeenCalled();
   });
   it("preserves Tenrai IDs and excludes adult fallback comics in the normal calendar", async () => {
     fetchMock.mockRejectedValue(new Error("offline"));

@@ -27,17 +27,18 @@ const entries = Array.from({ length: 23 }, (_, index) => ({
   details: "Ep 1 — 05/10 às 12:00",
 }));
 
+let messageSequence = 0;
 function interaction(customId = calendarCustomId(state), select = false, nsfw = false) {
   const fixture = {
     customId, user: { id: "person" }, guildId: "guild",
-    channel: { nsfw }, message: { id: "panel", components: [] as unknown[] },
+    channel: { nsfw }, message: { id: `message-${++messageSequence}`, components: [] as unknown[] },
     values: ["anilist-anime:1"],
     deferred: false, replied: false,
     isStringSelectMenu: () => select,
     reply: vi.fn(async () => { fixture.replied = true; }),
     deferReply: vi.fn(async () => { fixture.deferred = true; }),
     deferUpdate: vi.fn(async () => { fixture.deferred = true; }),
-    editReply: vi.fn(async () => undefined), followUp: vi.fn(async () => undefined),
+    editReply: vi.fn(async () => ({ id: fixture.message.id })), followUp: vi.fn(async () => undefined),
   };
   return fixture;
 }
@@ -147,11 +148,75 @@ describe("permanent calendar panels", () => {
   });
 
   it("updates only the private result when paginating and clamps stale pages", async () => {
+    const opened = interaction();
+    await handleCalendarComponent(asButton(opened));
     const click = interaction(calendarCustomId({ ...state, page: 99, action: "page" }));
+    click.message.id = opened.message.id;
     await handleCalendarComponent(asButton(click));
     expect(click.deferUpdate).toHaveBeenCalledOnce();
     expect(click.deferReply).not.toHaveBeenCalled();
     expect(click.editReply.mock.calls[0][0].embeds[0].toJSON().footer?.text).toContain("Página 3/3");
+  });
+
+  it("preserves all 74 results and eight pages without refetching or changing source", async () => {
+    const original = Array.from({ length: 74 }, (_, index) => ({
+      ...entries[index % entries.length], id: String(index + 1), title: `Anime ${index + 1}`,
+    }));
+    mocks.load.mockResolvedValueOnce(original);
+    const opened = interaction();
+    await handleCalendarComponent(asButton(opened));
+    mocks.load.mockResolvedValue(original.slice(0, 17).map((entry) => ({ ...entry, source: "tenrai" })));
+    for (const page of [1, 7, 0]) {
+      const click = interaction(calendarCustomId({ ...state, page, action: "page" }));
+      click.message.id = opened.message.id;
+      await handleCalendarComponent(asButton(click));
+      const embed = click.editReply.mock.calls[0][0].embeds[0].toJSON();
+      expect(embed.footer?.text).toContain(`Página ${page + 1}/8 • 74 resultado(s)`);
+      expect(embed.footer?.text).toContain("AniList");
+      expect(embed.footer?.text).not.toContain("Tenrai");
+    }
+    expect(mocks.load).toHaveBeenCalledOnce();
+  });
+
+  it("does not reuse another user's private consultation", async () => {
+    const opened = interaction();
+    await handleCalendarComponent(asButton(opened));
+    const click = interaction(calendarCustomId({ ...state, page: 1, action: "page" }));
+    click.message.id = opened.message.id;
+    click.user.id = "another-user";
+    await handleCalendarComponent(asButton(click));
+    expect(click.editReply).not.toHaveBeenCalled();
+    expect(click.followUp).toHaveBeenCalledWith(expect.objectContaining({ ephemeral: true }));
+    expect(mocks.load).toHaveBeenCalledOnce();
+  });
+
+  it("expires private snapshots explicitly without replacing the page or expiring the public panel", async () => {
+    vi.useFakeTimers();
+    const opened = interaction();
+    await handleCalendarComponent(asButton(opened));
+    vi.advanceTimersByTime(31 * 60_000);
+    const click = interaction(calendarCustomId({ ...state, page: 1, action: "page" }));
+    click.message.id = opened.message.id;
+    await handleCalendarComponent(asButton(click));
+    expect(click.editReply).not.toHaveBeenCalled();
+    expect(click.followUp).toHaveBeenCalledWith(expect.objectContaining({
+      content: expect.stringContaining("nova lista"), ephemeral: true,
+    }));
+    const reopened = interaction();
+    await handleCalendarComponent(asButton(reopened));
+    expect(reopened.editReply).toHaveBeenCalledOnce();
+    expect(mocks.load).toHaveBeenCalledTimes(2);
+  });
+
+  it("identifies the real provider and the fallback's limited weekly coverage", () => {
+    const result = buildCalendarResults({ ...state, period: "mes" }, [{
+      ...entries[0], source: "tenrai",
+    }]);
+    const embed = result.embeds[0].toJSON();
+    expect(embed.description).toContain("Este mês");
+    expect(embed.description).toContain("não a agenda completa");
+    expect(embed.footer?.text).toContain("Tenrai");
+    expect(embed.footer?.text).not.toContain("AniList");
   });
 
   it.each([false, true])("uses unique component IDs on every result page (adult=%s)", (adult) => {
@@ -192,7 +257,7 @@ describe("permanent calendar panels", () => {
     expect(click.editReply).not.toHaveBeenCalled();
   });
 
-  it.each(["calendar:v1:normal:anime:todos:0:open", "calendar:v1:adult:vn:hoje:101:page", "calendar:v1:adult:invalid:hoje:0:open"])(
+  it.each(["calendar:v1:normal:anime:todos:0:open", "calendar:v1:adult:vn:hoje:1000:page", "calendar:v1:adult:invalid:hoje:0:open"])(
     "rejects malformed or out-of-range IDs: %s", (id) => expect(parseCalendarCustomId(id)).toBeNull(),
   );
   it("ignores buttons owned by other features", async () => {
