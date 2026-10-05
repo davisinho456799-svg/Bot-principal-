@@ -154,6 +154,25 @@ describe("permanent calendar panels", () => {
     expect(click.editReply.mock.calls[0][0].embeds[0].toJSON().footer?.text).toContain("Página 3/3");
   });
 
+  it.each([false, true])("uses unique component IDs on every result page (adult=%s)", (adult) => {
+    for (const tab of ["anime", "manhwa", "manga", "vn"] as const) {
+      for (const page of [0, 1, 2]) {
+        const result = buildCalendarResults({ ...state, adult, tab, page }, entries);
+        const components = result.components.flatMap((row) => row.toJSON().components);
+        const ids = components.flatMap((component) =>
+          "custom_id" in component ? [component.custom_id!] : []);
+        // Discord requires uniqueness even for disabled buttons.
+        expect(new Set(ids).size).toBe(ids.length);
+        expect(ids.every((id) => id.length <= 100)).toBe(true);
+        for (const component of components) {
+          if (component.type === ComponentType.Button && !component.disabled) {
+            expect(parseCalendarCustomId(component.custom_id!)).not.toBeNull();
+          }
+        }
+      }
+    }
+  });
+
   it("keeps the panel usable after errors and distinguishes failure from empty results", async () => {
     mocks.load.mockRejectedValueOnce(new Error("provider unavailable"));
     const failed = interaction();

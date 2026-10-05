@@ -127,7 +127,8 @@ export function buildCalendarResults(state: CalendarState, entries: CalendarEntr
       new ButtonBuilder().setLabel("Anterior").setStyle(ButtonStyle.Secondary)
         .setDisabled(page === 0).setCustomId(calendarCustomId({ ...state, page: Math.max(0, page - 1), action: "page" })),
       new ButtonBuilder().setLabel(`${page + 1}/${pages.length}`).setStyle(ButtonStyle.Secondary)
-        .setDisabled(true).setCustomId(calendarCustomId({ ...state, page, action: "page" })),
+        // Disabled components still need distinct IDs in Discord's message payload.
+        .setDisabled(true).setCustomId(`${calendarCustomId({ ...state, page, action: "page" })}:indicator`),
       new ButtonBuilder().setLabel("Próxima").setStyle(ButtonStyle.Secondary)
         .setDisabled(page === pages.length - 1).setCustomId(calendarCustomId({ ...state, page: page + 1, action: "page" })),
     ));
