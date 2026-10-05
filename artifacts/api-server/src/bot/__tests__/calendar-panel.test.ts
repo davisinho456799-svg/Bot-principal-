@@ -59,6 +59,15 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); });
 
 describe("permanent calendar panels", () => {
+  it.each([false, true])("explains the duration rule in anime results, including empty lists (%s)", (adult) => {
+    for (const rows of [entries, []]) {
+      const description = buildCalendarResults({ ...state, adult }, rows).embeds[0].toJSON().description;
+      expect(description).toContain("abaixo de 10 minutos");
+      expect(description).toContain("Duração não informada é mantida");
+    }
+    expect(buildCalendarResults({ ...state, adult, tab: "manga" }, entries)
+      .embeds[0].toJSON().description).not.toContain("abaixo de 10 minutos");
+  });
   it.each([false, true])("offers four categories with no collectors or disabled buttons (adult=%s)", (adult) => {
     const panel = buildCalendarPanel(adult, adult ? "todos" : "hoje");
     const row = panel.components[0].toJSON();

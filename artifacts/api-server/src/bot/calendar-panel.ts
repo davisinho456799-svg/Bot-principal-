@@ -7,6 +7,7 @@ import { getUnifiedAnimeById, getUnifiedById } from "./unified.js";
 import { loadCalendarEntries, type CalendarEntry } from "./calendar-data.js";
 import { getCalendarSnapshot, saveCalendarSnapshot } from "./calendar-snapshots.js";
 import { logger } from "../lib/logger.js";
+import { CALENDAR_ANIME_DURATION_NOTICE } from "./calendar-anime-policy.js";
 
 export type CalendarTab = "anime" | "manhwa" | "manga" | "vn";
 export type CalendarPeriod = "hoje" | "amanha" | "semana" | "mes" | "todos";
@@ -126,7 +127,8 @@ export function buildCalendarResults(state: CalendarState, entries: CalendarEntr
     .setTitle(`${state.adult ? "Calendário +18" : "Calendário"} — ${label}`)
     .setColor(state.adult ? 0xc0392b : 0x02a9ff)
     .setDescription(
-      `**${scope}**\n${fallbackNotice}${cachedNotice}\n` +
+      `**${scope}**\n${fallbackNotice}${cachedNotice}` +
+      (state.tab === "anime" ? `\n${CALENDAR_ANIME_DURATION_NOTICE}\n` : "") + "\n" +
       (slice.length ? slice.map((entry, index) => entryLine(entry, offset + index)).join("\n\n")
         : "Nenhum resultado encontrado nesta categoria para o período. Você pode consultar novamente pelo painel."),
     )

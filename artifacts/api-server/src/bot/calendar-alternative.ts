@@ -2,6 +2,7 @@ import { genresOfTenrai } from "./tenrai-fallback.js";
 import { calendarAnimeTitles, fetchCalendarAnimeCatalog, type CalendarCatalogAnime } from "./calendar-catalog.js";
 import { CalendarCache } from "./calendar-cache.js";
 import type { CalendarEntry } from "./calendar-data.js";
+import { isCalendarAnimeDurationAllowed } from "./calendar-anime-policy.js";
 
 interface ScheduleItem {
   id: string;
@@ -62,6 +63,7 @@ export async function fetchAlternativeCalendar(
     weeks.set(`${week.year}:${week.week}`, week);
   }
   const entries: CalendarEntry[] = [];
+  let hasClassifiedEpisode = false;
   for (const { year, week } of weeks.values()) {
     const params = new URLSearchParams({
       type: "raw", year: String(year), week: String(week), tz: "America/Sao_Paulo",
@@ -95,6 +97,8 @@ export async function fetchAlternativeCalendar(
       if ((!anime.genres?.length || !genres.length) && !explicitAdultRating) continue;
       const isAdult = explicitAdultRating || genres.some((genre) => /^(hentai|erotica|adult)$/i.test(genre));
       if (isAdult !== adult) continue;
+      hasClassifiedEpisode = true;
+      if (!isCalendarAnimeDurationAllowed(anime.duration)) continue;
       const date = new Date(timestamp * 1000).toLocaleString("pt-BR", {
         timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit",
         hour: "2-digit", minute: "2-digit",
@@ -108,6 +112,8 @@ export async function fetchAlternativeCalendar(
       });
     }
   }
-  if (!entries.length) throw new Error("Agenda alternativa sem obras identificadas com segurança");
+  if (!entries.length && !hasClassifiedEpisode) {
+    throw new Error("Agenda alternativa sem obras identificadas com segurança");
+  }
   return entries.sort((a, b) => a.timestamp! - b.timestamp!);
 }

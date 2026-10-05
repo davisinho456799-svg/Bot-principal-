@@ -7,6 +7,7 @@ import type { CalendarPeriod, CalendarTab } from "./calendar-panel.js";
 import { CalendarCache } from "./calendar-cache.js";
 import { fetchAlternativeCalendar } from "./calendar-alternative.js";
 import { logger } from "../lib/logger.js";
+import { isCalendarAnimeDurationAllowed } from "./calendar-anime-policy.js";
 
 export interface CalendarEntry {
   id: string;
@@ -28,6 +29,7 @@ interface Media {
   updatedAt?: number;
   nextAiringEpisode?: { episode: number; airingAt: number } | null;
   isAdult?: boolean;
+  duration?: number | null;
 }
 interface Airing {
   airingAt: number;
@@ -36,11 +38,12 @@ interface Airing {
 }
 
 const MEDIA_FIELDS = "id title { romaji english } genres siteUrl isAdult";
+const ANIME_MEDIA_FIELDS = `${MEDIA_FIELDS} duration`;
 const AIRING_QUERY = `query CalendarAiring($page: Int, $start: Int, $end: Int) {
   Page(page: $page, perPage: 50) {
     pageInfo { hasNextPage }
     airingSchedules(airingAt_greater: $start, airingAt_lesser: $end, sort: TIME) {
-      airingAt episode media { ${MEDIA_FIELDS} }
+      airingAt episode media { ${ANIME_MEDIA_FIELDS} }
     }
   }
 }`;
@@ -65,7 +68,7 @@ class AniListCalendarError extends Error {
 const ADULT_ANIME_QUERY = `query CalendarAdultAnime($page: Int) {
   Page(page: $page, perPage: 25) {
     media(type: ANIME, status: RELEASING, isAdult: true, sort: POPULARITY_DESC) {
-      ${MEDIA_FIELDS} nextAiringEpisode { episode airingAt }
+      ${ANIME_MEDIA_FIELDS} nextAiringEpisode { episode airingAt }
     }
   }
 }`;
@@ -174,7 +177,8 @@ async function animeEntries(adult: boolean, period: CalendarPeriod): Promise<Cal
   try {
     if (adult && period === "todos") {
       const media = await anilistPages<Media>(ADULT_ANIME_QUERY, "media", {});
-      if (media.length) return media.map((item) => mediaEntry(item, "anime", item.nextAiringEpisode ?? undefined))
+      if (media.length) return media.filter((item) => isCalendarAnimeDurationAllowed(item.duration))
+        .map((item) => mediaEntry(item, "anime", item.nextAiringEpisode ?? undefined))
         .filter((item) => period === "todos" ||
           (item.timestamp !== undefined && item.timestamp >= range.start && item.timestamp <= range.end))
         .sort((a, b) => (a.timestamp ?? Infinity) - (b.timestamp ?? Infinity));
@@ -184,7 +188,8 @@ async function animeEntries(adult: boolean, period: CalendarPeriod): Promise<Cal
         anilistPages<Airing>(AIRING_QUERY, "airingSchedules", {
           start: range.start - 1, end: range.end + 1,
         }));
-      return cached.value.filter((item) => Boolean(item.media.isAdult) === adult)
+      return cached.value.filter((item) => Boolean(item.media.isAdult) === adult &&
+          isCalendarAnimeDurationAllowed(item.media.duration))
         .map((item) => mediaEntry(item.media, "anime", item))
         .map((item) => cached.stale ? { ...item, cachedAt: cached.fetchedAt } : item)
         .sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0));
@@ -203,6 +208,7 @@ async function animeEntries(adult: boolean, period: CalendarPeriod): Promise<Cal
   }
   const fallback = await fetchTenraiSeasonAnime();
   return fallback.flatMap((item): CalendarEntry[] => {
+    if (!isCalendarAnimeDurationAllowed(item.duration)) return [];
     const genres = genresOfTenrai(item);
     if (isAdultGenre(genres) !== adult) return [];
     const timestamp = nextTenraiBroadcast(item.broadcast);

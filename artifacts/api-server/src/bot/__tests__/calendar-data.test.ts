@@ -33,6 +33,41 @@ const media = {
   siteUrl: "https://anilist.co/manga/123", updatedAt: 1791212400, isAdult: false,
 };
 describe("calendar data and relative dates", () => {
+  it.each([false, true])("filters short episodes for every normal/adult airing period (%s)", async (adult) => {
+    fetchMock.mockResolvedValue(response("airingSchedules", [1, 9, 10, 24, null].map((duration, index) => ({
+      airingAt: calendarRange("hoje").start + 100, episode: 1,
+      media: { ...media, id: index + 1, isAdult: adult, duration },
+    }))));
+    for (const period of ["hoje", "amanha", "semana", "mes"] as const) {
+      expect((await loadCalendarEntries(adult, "anime", period)).map((entry) => entry.id)).toEqual(["3", "4", "5"]);
+    }
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).query).toContain("duration");
+    expect(mocks.alternative).not.toHaveBeenCalled();
+  });
+  it("keeps a valid empty calendar when all primary episodes are shorter than ten minutes", async () => {
+    fetchMock.mockResolvedValue(response("airingSchedules", [
+      { airingAt: calendarRange("mes").start + 100, episode: 1, media: { ...media, duration: 1 } },
+    ]));
+    expect(await loadCalendarEntries(false, "anime", "mes")).toEqual([]);
+    expect(mocks.alternative).not.toHaveBeenCalled();
+  });
+  it("also filters the adult in-release list, even without an upcoming date", async () => {
+    fetchMock.mockResolvedValue(response("media", [
+      { ...media, id: 1, isAdult: true, duration: 9 },
+      { ...media, id: 2, isAdult: true, duration: 10 },
+      { ...media, id: 3, isAdult: true, duration: null },
+    ]));
+    expect((await loadCalendarEntries(true, "anime", "todos")).map((entry) => entry.id)).toEqual(["2", "3"]);
+    expect(mocks.anime).not.toHaveBeenCalled();
+  });
+  it.each([false, true])("applies the same cutoff to the weekly Tenrai fallback (%s)", async (adult) => {
+    fetchMock.mockResolvedValue({ ok: false, status: 503 });
+    mocks.anime.mockResolvedValue(["53 sec", "9 min", "10 min per ep", "Unknown"].map((duration, index) => ({
+      mal_id: index + 1, title: `Anime ${index}`, duration,
+      genres: [{ name: adult ? "Hentai" : "Action" }],
+    })));
+    expect((await loadCalendarEntries(adult, "anime", "hoje")).map((entry) => entry.id)).toEqual(["3", "4"]);
+  });
   it("uses Brasília's date rather than tomorrow's UTC date", () => {
     const range = calendarRange("hoje", new Date("2026-10-06T01:00:00Z"));
     expect(new Date(range.start * 1000).toISOString()).toBe("2026-10-05T03:00:00.000Z");

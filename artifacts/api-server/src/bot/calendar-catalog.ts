@@ -1,6 +1,7 @@
 import { CalendarCache } from "./calendar-cache.js";
 import type { TenraiAnime } from "./tenrai-fallback.js";
 import { logger } from "../lib/logger.js";
+import { calendarAnimeDurationMinutes } from "./calendar-anime-policy.js";
 
 export interface CalendarCatalogAnime extends TenraiAnime {
   title_japanese?: string | null;
@@ -124,6 +125,7 @@ export async function fetchCalendarAnimeCatalog(): Promise<CalendarCatalogAnime[
         genres: [...(previous.genres ?? []), ...(anime.genres ?? [])],
         themes: [...(previous.themes ?? []), ...(anime.themes ?? [])],
         rating: /^Rx\b/i.test(previous.rating ?? "") ? previous.rating : anime.rating,
+        duration: calendarAnimeDurationMinutes(anime.duration) !== null ? anime.duration : previous.duration,
       } : anime;
       unique.set(anime.mal_id, {
         ...combined, calendarTitles: [...new Set([

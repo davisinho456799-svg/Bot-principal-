@@ -36,6 +36,25 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); });
 
 describe("dated AnimeSchedule/Asunatracks alternative", () => {
+  it.each([false, true])("uses verified episode duration, not titles or broadcast format (%s)", async (adult) => {
+    const titles = ["Mofusand", "A real short anime", "Ten-minute ONA", "Unknown duration"];
+    mocks.metadata.mockResolvedValue(["53 sec", "9 min per ep", "10 min per ep", null].map((duration, index) => ({
+      mal_id: index + 1, title: titles[index], duration, type: "ONA",
+      genres: [{ name: adult ? "Hentai" : "Comedy" }],
+    })));
+    request.mockImplementation(async (url: string) => response(url, titles.map((title, index) => ({
+      ...item, id: String(index + 1), title, external_ids: { mal: index + 1 },
+    }))));
+    expect((await fetchAlternativeCalendar(adult, range)).map((entry) => entry.subscription?.id))
+      .toEqual(["3", "4", "3", "4", "3", "4", "3", "4"]);
+  });
+  it("returns a valid empty agenda when every identified episode was excluded by duration", async () => {
+    mocks.metadata.mockResolvedValue([{
+      mal_id: 10, title: "Normal Anime", duration: "53 sec", genres: [{ name: "Action" }],
+    }]);
+    expect(await fetchAlternativeCalendar(false, range)).toEqual([]);
+    expect(request).toHaveBeenCalledTimes(4);
+  });
   it("loads every remaining ISO week and keeps actual dated episodes and MAL subscriptions", async () => {
     request.mockImplementation(async (url: string) => {
       const week = new URL(url).searchParams.get("week");

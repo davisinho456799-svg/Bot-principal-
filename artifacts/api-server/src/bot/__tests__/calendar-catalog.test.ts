@@ -19,6 +19,12 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
 
 describe("expanded calendar identification catalog", () => {
+  it("does not erase known duration with missing duration from the overlapping endpoint", async () => {
+    request.mockImplementation(async (url: string) => response([{
+      ...anime(1), duration: new URL(url).pathname.endsWith("seasons/now") ? "53 sec" : null,
+    }]));
+    expect((await fetchCalendarAnimeCatalog())[0].duration).toBe("53 sec");
+  });
   it("follows season and airing pages, including older ongoing shows, without duplicate IDs", async () => {
     request.mockImplementation(async (url: string) => {
       const parsed = new URL(url), page = Number(parsed.searchParams.get("page"));
