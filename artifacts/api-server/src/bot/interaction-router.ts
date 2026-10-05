@@ -7,6 +7,7 @@ import { commandRegistry as commands } from "./command-registry.js";
 import { logUsage } from "./usage-logger.js";
 import { getPendingAnime, deletePendingAnime } from "./anime-status-store.js";
 import { recordBotError } from "./error-log.js";
+import { handleCalendarComponent } from "./calendar-panel.js";
 import {
   config as getDiscordConfig,
   getConfiguredSeasonPage,
@@ -41,6 +42,9 @@ export function registerInteractionRouter(client: Client) {
       },
       "Interação do Discord recebida",
     );
+
+    if ((interaction.isButton() || interaction.isStringSelectMenu()) &&
+        await handleCalendarComponent(interaction)) return;
 
     if (interaction.isModalSubmit() && interaction.customId.startsWith("anst_modal_")) {
       const status = interaction.customId.replace("anst_modal_", "") as StatusLeitura;

@@ -1,0 +1,184 @@
+import { fetchVNDBCalendar } from "./vndb.js";
+import {
+  fetchTenraiPublishingManga, fetchTenraiSeasonAnime,
+  genresOfTenrai, nextTenraiBroadcast, titleOfTenrai,
+} from "./tenrai-fallback.js";
+import type { CalendarPeriod, CalendarTab } from "./calendar-panel.js";
+
+export interface CalendarEntry {
+  id: string;
+  source: "anilist" | "anilist-anime" | "tenrai" | "vndb";
+  title: string;
+  siteUrl: string;
+  details: string;
+  timestamp?: number;
+}
+
+interface Media {
+  id: number;
+  title: { romaji: string; english: string | null };
+  genres: string[];
+  siteUrl: string;
+  updatedAt?: number;
+  nextAiringEpisode?: { episode: number; airingAt: number } | null;
+  isAdult?: boolean;
+}
+interface Airing {
+  airingAt: number;
+  episode: number;
+  media: Media;
+}
+
+const MEDIA_FIELDS = "id title { romaji english } genres siteUrl isAdult";
+const AIRING_QUERY = `query CalendarAiring($page: Int, $start: Int, $end: Int) {
+  Page(page: $page, perPage: 25) {
+    airingSchedules(airingAt_greater: $start, airingAt_lesser: $end, sort: TIME) {
+      airingAt episode media { ${MEDIA_FIELDS} }
+    }
+  }
+}`;
+const ADULT_ANIME_QUERY = `query CalendarAdultAnime($page: Int) {
+  Page(page: $page, perPage: 25) {
+    media(type: ANIME, status: RELEASING, isAdult: true, sort: POPULARITY_DESC) {
+      ${MEDIA_FIELDS} nextAiringEpisode { episode airingAt }
+    }
+  }
+}`;
+const COMIC_QUERY = `query CalendarComic($page: Int, $country: CountryCode, $adult: Boolean) {
+  Page(page: $page, perPage: 25) {
+    media(type: MANGA, status: RELEASING, countryOfOrigin: $country,
+      isAdult: $adult, sort: UPDATED_AT_DESC) {
+      ${MEDIA_FIELDS} updatedAt
+    }
+  }
+}`;
+
+// Resolve relative periods when clicked, never from the panel's creation date.
+// UTC-3 is the current Brasília offset and has no daylight-saving transitions.
+export function calendarRange(period: CalendarPeriod, now = new Date()) {
+  const local = new Date(now.getTime() - 3 * 3_600_000);
+  let start = Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate(), 3);
+  if (period === "amanha") start += 86_400_000;
+  const end = period === "mes"
+    ? Date.UTC(local.getUTCFullYear(), local.getUTCMonth() + 1, 1, 3)
+    : start + (period === "semana" ? 7 : 1) * 86_400_000;
+  return { start: Math.floor(start / 1000), end: Math.floor(end / 1000) - 1 };
+}
+
+function formatDate(timestamp: number, withTime = false) {
+  return new Date(timestamp * 1000).toLocaleString("pt-BR", {
+    timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit",
+    ...(withTime ? { hour: "2-digit", minute: "2-digit" } : { year: "numeric" }),
+  });
+}
+
+async function anilistPages<T>(
+  query: string, field: "media" | "airingSchedules", variables: Record<string, unknown>,
+): Promise<T[]> {
+  const pages = await Promise.allSettled([1, 2, 3].map(async (page) => {
+    const response = await fetch("https://graphql.anilist.co", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ query, variables: { ...variables, page } }),
+      signal: AbortSignal.timeout(12_000),
+    });
+    if (!response.ok) throw new Error(`AniList HTTP ${response.status}`);
+    const body = await response.json() as {
+      data?: { Page?: Partial<Record<typeof field, T[]>> }; errors?: unknown[];
+    };
+    const rows = body.data?.Page?.[field];
+    if (body.errors?.length || !Array.isArray(rows)) throw new Error("AniList calendar response invalid");
+    return rows;
+  }));
+  const success = pages.filter((page) => page.status === "fulfilled");
+  if (!success.length) throw new Error("AniList calendar unavailable");
+  return success.flatMap((page) => page.value);
+}
+
+function mediaEntry(media: Media, tab: CalendarTab, airing?: { episode: number; airingAt: number }): CalendarEntry {
+  return {
+    id: String(media.id), source: tab === "anime" ? "anilist-anime" : "anilist",
+    title: media.title.english || media.title.romaji || "Sem título",
+    siteUrl: media.siteUrl,
+    timestamp: airing?.airingAt ?? media.updatedAt,
+    details: [
+      airing ? `Ep ${airing.episode} — ${formatDate(airing.airingAt, true)}`
+        : tab === "anime" ? "Sem episódio agendado"
+          : media.updatedAt ? `Atualizado: ${formatDate(media.updatedAt)}` : "Em lançamento",
+      media.genres.slice(0, 3).join(", "),
+    ].filter(Boolean).join(" • "),
+  };
+}
+
+const isAdultGenre = (genres: string[]) =>
+  genres.some((genre) => ["hentai", "erotica", "adult"].includes(genre.toLowerCase()));
+
+async function animeEntries(adult: boolean, period: CalendarPeriod): Promise<CalendarEntry[]> {
+  const range = calendarRange(period);
+  try {
+    if (adult) {
+      const media = await anilistPages<Media>(ADULT_ANIME_QUERY, "media", {});
+      if (media.length) return media.map((item) => mediaEntry(item, "anime", item.nextAiringEpisode ?? undefined))
+        .filter((item) => period === "todos" ||
+          (item.timestamp !== undefined && item.timestamp >= range.start && item.timestamp <= range.end))
+        .sort((a, b) => (a.timestamp ?? Infinity) - (b.timestamp ?? Infinity));
+    } else {
+      const rows = await anilistPages<Airing>(AIRING_QUERY, "airingSchedules", range);
+      if (rows.length) return rows.filter((item) => !item.media.isAdult)
+        .map((item) => mediaEntry(item.media, "anime", item))
+        .sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0));
+    }
+  } catch {
+    // Use the existing independent Tenrai fallback if AniList is unavailable.
+  }
+  const fallback = await fetchTenraiSeasonAnime();
+  return fallback.flatMap((item): CalendarEntry[] => {
+    const genres = genresOfTenrai(item);
+    if (isAdultGenre(genres) !== adult) return [];
+    const timestamp = nextTenraiBroadcast(item.broadcast);
+    if ((!adult || period !== "todos") &&
+      (!timestamp || timestamp < range.start || timestamp > range.end)) return [];
+    return [{
+      id: String(item.mal_id), source: "tenrai", title: titleOfTenrai(item),
+      siteUrl: item.url ?? `https://myanimelist.net/anime/${item.mal_id}`,
+      timestamp: timestamp ?? undefined,
+      details: `${timestamp ? `Próxima exibição: ${formatDate(timestamp, true)}` : "Sem episódio agendado"} • ${genres.join(", ")}`,
+    }];
+  }).sort((a, b) => (a.timestamp ?? Infinity) - (b.timestamp ?? Infinity));
+}
+
+async function comicEntries(tab: "manga" | "manhwa", adult: boolean): Promise<CalendarEntry[]> {
+  try {
+    const media = await anilistPages<Media>(COMIC_QUERY, "media", {
+      country: tab === "manhwa" ? "KR" : "JP", adult,
+    });
+    if (media.length) return media.map((item) => mediaEntry(item, tab));
+  } catch {
+    // Preserve Tenrai fallback and its correct provider IDs for subscriptions.
+  }
+  const fallback = await fetchTenraiPublishingManga(tab, adult);
+  return fallback.filter((item) => isAdultGenre(genresOfTenrai(item)) === adult).map((item) => ({
+    id: String(item.mal_id), source: "tenrai", title: titleOfTenrai(item),
+    siteUrl: item.url ?? `https://myanimelist.net/manga/${item.mal_id}`,
+    details: `Em lançamento • ${genresOfTenrai(item).join(", ")}`,
+  }));
+}
+
+export async function loadCalendarEntries(adult: boolean, tab: CalendarTab, period: CalendarPeriod): Promise<CalendarEntry[]> {
+  let entries: CalendarEntry[];
+  if (tab === "anime") entries = await animeEntries(adult, period);
+  else if (tab === "vn") {
+    const vns = await fetchVNDBCalendar(adult, 2, 1);
+    entries = vns.map((vn) => ({
+      id: vn.vnId, source: "vndb", title: vn.mainTitle, siteUrl: vn.siteUrl,
+      details: `Lançamento: ${vn.released ?? "Data desconhecida"} • ${vn.developers[0] ?? "Desenvolvedor desconhecido"}`,
+    }));
+  } else entries = await comicEntries(tab, adult);
+  const seen = new Set<string>();
+  return entries.filter((item) => {
+    const key = `${item.source}:${item.id}:${item.timestamp ?? ""}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}

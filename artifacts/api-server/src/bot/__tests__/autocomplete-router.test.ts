@@ -30,7 +30,7 @@ function fixture(commandName = "manhwa") {
       type: 4, id: `interaction-${++serial}`, commandName,
       user: { id: userId }, guildId: "test", createdTimestamp: Date.now(),
       responded: false,
-      isModalSubmit: () => false, isButton: () => false,
+      isModalSubmit: () => false, isButton: () => false, isStringSelectMenu: () => false,
       isAutocomplete: () => true, isChatInputCommand: () => false,
       options: { getFocused: () => value },
       respond: vi.fn(async (_options: unknown[]) => { interaction.responded = true; }),

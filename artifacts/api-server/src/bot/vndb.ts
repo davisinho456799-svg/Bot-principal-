@@ -48,8 +48,8 @@ interface VNDBRaw {
   image: VNDBImage | null;
   developers: VNDBDeveloper[];
   tags: VNDBTag[];
-  length: VNLength;
-  languages?: VNDBLanguage[];
+  length: VNLength | number;
+  languages?: (VNDBLanguage | string)[];
 }
 
 interface VNDBSearchResponse {
@@ -92,7 +92,7 @@ const LENGTH_LABELS: Record<string, string> = {
 const FIELDS =
   "title,alttitle,titles.lang,titles.title,titles.official,description," +
   "rating,votecount,released,image.url,image.sexual,image.violence," +
-  "developers.name,tags.name,tags.spoiler,length,languages.lang";
+  "developers.name,tags.name,tags.spoiler,tags.rating,length,languages";
 
 // ─── Converter ────────────────────────────────────────────────────────────────
 
@@ -121,7 +121,7 @@ function toVNDBResult(raw: VNDBRaw): VNDBResult {
     .slice(0, 12);
 
   const developers = (raw.developers ?? []).map((d) => d.name);
-  const languages = (raw.languages ?? []).map((l) => l.lang.toUpperCase());
+  const languages = (raw.languages ?? []).map((l) => (typeof l === "string" ? l : l.lang).toUpperCase());
   const isAdult = raw.image ? raw.image.sexual >= 2 : false;
   const coverUrl = raw.image && raw.image.sexual < 2 ? raw.image.url : null;
 
@@ -138,7 +138,9 @@ function toVNDBResult(raw: VNDBRaw): VNDBResult {
     coverUrl,
     isAdult,
     tags,
-    length: raw.length ? (LENGTH_LABELS[raw.length] ?? null) : null,
+    length: typeof raw.length === "number"
+      ? (["Muito curto", "Curto", "Médio", "Longo", "Muito longo"][raw.length - 1] ?? null)
+      : raw.length ? (LENGTH_LABELS[raw.length] ?? null) : null,
     developers,
     languages,
     siteUrl: `https://vndb.org/${raw.id}`,
@@ -217,10 +219,13 @@ interface VNDBRawWithImage extends VNDBRaw {
 
 /**
  * Busca VNs com conteúdo adulto lançadas no período recente (passado e futuro).
- * Filtra por image.sexual >= 1 (sugestivo ou explícito) para garantir que só
- * apareçam títulos com conteúdo adulto.
+ * Usa a classificação das versões lançadas, não a classificação da capa.
  */
 export async function fetchVNDBAdultCalendar(monthsBack = 2, monthsAhead = 1): Promise<VNDBResult[]> {
+  return fetchVNDBCalendar(true, monthsBack, monthsAhead).catch(() => []);
+}
+
+export async function fetchVNDBCalendar(adult: boolean, monthsBack = 2, monthsAhead = 1): Promise<VNDBResult[]> {
   await throttle();
 
   const now = new Date();
@@ -232,7 +237,12 @@ export async function fetchVNDBAdultCalendar(monthsBack = 2, monthsAhead = 1): P
   const toStr   = `${to.getUTCFullYear()}-${pad(to.getUTCMonth() + 1)}-${pad(to.getUTCDate())}`;
 
   const body = {
-    filters: ["and", ["released", ">=", fromStr], ["released", "<=", toStr]],
+    filters: [
+      "and", ["released", ">=", fromStr], ["released", "<=", toStr],
+      // Exclude any VN with an erotic release from the normal calendar, even
+      // when it also has an all-ages edition or a safe cover image.
+      ["release", adult ? "=" : "!=", ["has_ero", "=", 1]],
+    ],
     fields: FIELDS,
     sort: "rating",
     reverse: true,
@@ -246,15 +256,15 @@ export async function fetchVNDBAdultCalendar(monthsBack = 2, monthsAhead = 1): P
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(10000),
     });
-    if (!res.ok) return [];
+    if (!res.ok) throw new Error(`VNDB calendar HTTP ${res.status}`);
 
     const json = (await res.json()) as { results: VNDBRawWithImage[]; more: boolean };
+    if (!Array.isArray(json.results)) throw new Error("VNDB calendar response invalid");
     return (json.results ?? [])
-      .filter((raw) => raw.image != null && raw.image.sexual >= 1)
       .map(toVNDBResult)
-      .slice(0, 10);
-  } catch {
-    return [];
+      .slice(0, 25);
+  } catch (error) {
+    throw error;
   }
 }
 
