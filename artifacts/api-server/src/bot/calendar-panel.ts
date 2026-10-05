@@ -111,15 +111,22 @@ export function buildCalendarResults(state: CalendarState, entries: CalendarEntr
   const scope = state.tab === "anime" ? PERIODS[state.period]
     : state.tab === "vn" ? "Últimos 2 meses e próximo mês" : "Séries em lançamento";
   const sources = [...new Set(entries.map((entry) =>
-    entry.source.startsWith("anilist") ? "AniList" : entry.source === "tenrai" ? "Tenrai" : "VNDB"))];
+    entry.source.startsWith("anilist") ? "AniList" : entry.source === "tenrai" ? "Tenrai"
+      : entry.source === "animeschedule" ? "AnimeSchedule.net via Asunatracks" : "VNDB"))];
+  const cachedAt = entries.find((entry) => entry.cachedAt !== undefined)?.cachedAt;
+  const cachedNotice = cachedAt === undefined ? "" :
+    `\nFonte temporariamente indisponível. Agenda em cache de ${new Date(cachedAt).toLocaleString("pt-BR", {
+      timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit",
+    })}.\n`;
   const fallbackNotice = state.tab === "anime" && sources.includes("Tenrai")
     ? "\nAgenda alternativa: apenas a próxima exibição semanal prevista, não a agenda completa de episódios.\n"
-    : "";
+    : sources.includes("AnimeSchedule.net via Asunatracks")
+      ? "\nAgenda alternativa: episódios datados; somente obras identificadas no MAL/Tenrai. A cobertura pode ser menor.\n" : "";
   const embed = new EmbedBuilder()
     .setTitle(`${state.adult ? "Calendário +18" : "Calendário"} — ${label}`)
     .setColor(state.adult ? 0xc0392b : 0x02a9ff)
     .setDescription(
-      `**${scope}**\n${fallbackNotice}\n` +
+      `**${scope}**\n${fallbackNotice}${cachedNotice}\n` +
       (slice.length ? slice.map((entry, index) => entryLine(entry, offset + index)).join("\n\n")
         : "Nenhum resultado encontrado nesta categoria para o período. Você pode consultar novamente pelo painel."),
     )
@@ -140,11 +147,13 @@ export function buildCalendarResults(state: CalendarState, entries: CalendarEntr
     ));
   }
   if (state.tab !== "vn" && slice.length) {
-    const options = new Map(slice.map((entry) => [
-      `${entry.source}:${entry.id}`,
-      { label: entry.title.slice(0, 100) || "Sem título", value: `${entry.source}:${entry.id}` },
-    ]));
-    components.push(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+    const options = new Map(slice.flatMap((entry) => {
+      const selected = entry.subscription ?? (entry.source === "animeschedule" ? null : entry);
+      if (!selected) return [];
+      const value = `${selected.source}:${selected.id}`;
+      return [[value, { label: entry.title.slice(0, 100) || "Sem título", value }] as const];
+    }));
+    if (options.size) components.push(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
       new StringSelectMenuBuilder().setCustomId(calendarCustomId({ ...state, page, action: "subscribe" }))
         .setPlaceholder("Assinar um título desta página").addOptions([...options.values()]),
     ));
@@ -228,7 +237,7 @@ export async function handleCalendarComponent(
   } catch (err) {
     logger.error({ err, customId: interaction.customId }, "Falha na interação do calendário");
     const content = state.tab === "anime" && state.period === "mes" && state.action === "open"
-      ? "Não foi possível carregar a agenda completa do mês agora. A fonte alternativa só informa a próxima exibição semanal, por isso não foi apresentada como uma agenda mensal. Tente novamente pelo painel; os botões continuam disponíveis."
+      ? "Não foi possível carregar a agenda mensal no AniList nem na fonte alternativa agora. Aguarde um pouco e tente novamente pelo painel; os botões continuam disponíveis."
       : "Não foi possível carregar esta opção agora. Tente novamente pelo painel; os botões continuam disponíveis.";
     if (interaction.deferred || interaction.replied) {
       if (state.action === "page") await interaction.followUp({ content, ephemeral: true }).catch(() => null);

@@ -218,6 +218,26 @@ describe("permanent calendar panels", () => {
     expect(embed.footer?.text).toContain("Tenrai");
     expect(embed.footer?.text).not.toContain("AniList");
   });
+  it("credits the dated alternative, explains coverage, and offers only compatible subscriptions", () => {
+    const result = buildCalendarResults({ ...state, period: "mes" }, [
+      { ...entries[0], source: "animeschedule", subscription: { source: "tenrai", id: "55" } },
+      { ...entries[1], source: "animeschedule" },
+    ]);
+    const embed = result.embeds[0].toJSON();
+    expect(embed.footer?.text).toContain("AnimeSchedule.net via Asunatracks");
+    expect(embed.description).toContain("cobertura pode ser menor");
+    const menu = result.components.at(-1)!.toJSON().components[0];
+    expect(menu.type).toBe(ComponentType.StringSelect);
+    if (menu.type === ComponentType.StringSelect) {
+      expect(menu.options.map((option) => option.value)).toEqual(["tenrai:55"]);
+    }
+  });
+  it("shows the original cache timestamp when a provider refresh fails", () => {
+    const result = buildCalendarResults(state, [{
+      ...entries[0], cachedAt: Date.parse("2026-10-05T12:00:00Z"),
+    }]);
+    expect(result.embeds[0].toJSON().description).toContain("Agenda em cache de 05/10, 09:00");
+  });
 
   it.each([false, true])("uses unique component IDs on every result page (adult=%s)", (adult) => {
     for (const tab of ["anime", "manhwa", "manga", "vn"] as const) {

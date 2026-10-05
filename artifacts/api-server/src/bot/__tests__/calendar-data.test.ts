@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { calendarRange, loadCalendarEntries } from "../calendar-data.js";
+import { calendarRange, clearCalendarCache, loadCalendarEntries } from "../calendar-data.js";
 const mocks = vi.hoisted(() => ({
-  anime: vi.fn(), comics: vi.fn(), vn: vi.fn(),
+  anime: vi.fn(), comics: vi.fn(), vn: vi.fn(), alternative: vi.fn(), warn: vi.fn(),
 }));
+vi.mock("../calendar-alternative.js", () => ({ fetchAlternativeCalendar: mocks.alternative }));
+vi.mock("../../lib/logger.js", () => ({ logger: { warn: mocks.warn } }));
 vi.mock("../vndb.js", () => ({ fetchVNDBCalendar: mocks.vn }));
 vi.mock("../tenrai-fallback.js", () => ({
   fetchTenraiSeasonAnime: mocks.anime, fetchTenraiPublishingManga: mocks.comics,
@@ -13,12 +15,14 @@ vi.mock("../tenrai-fallback.js", () => ({
 const fetchMock = vi.fn();
 beforeEach(() => {
   vi.clearAllMocks();
+  clearCalendarCache();
   vi.stubGlobal("fetch", fetchMock);
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-10-05T12:00:00Z"));
   mocks.anime.mockResolvedValue([]);
   mocks.comics.mockResolvedValue([]);
   mocks.vn.mockResolvedValue([]);
+  mocks.alternative.mockRejectedValue(new Error("Alternate source unavailable"));
 });
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
 function response(field: string, rows: unknown[], hasNextPage = false) {
@@ -63,19 +67,86 @@ describe("calendar data and relative dates", () => {
     fetchMock.mockImplementation(async (_url: string, init: { body: string }) => {
       const { variables, query } = JSON.parse(init.body);
       expect(query).toContain("pageInfo { hasNextPage }");
+      expect(query).toContain("perPage: 50");
       expect(variables.start).toBe(start - 1);
       expect(variables.end).toBe(calendarRange("mes").end + 1);
-      const offset = (variables.page - 1) * 25;
-      return response("airingSchedules", Array.from({ length: 25 }, (_, index) => ({
+      const offset = (variables.page - 1) * 50;
+      return response("airingSchedules", Array.from({ length: Math.min(50, 125 - offset) }, (_, index) => ({
         airingAt: start + (offset + index) * 4 * 3600,
         episode: offset + index + 1, media,
-      })), variables.page < 5);
+      })), variables.page < 3);
     });
     const rows = await loadCalendarEntries(false, "anime", "mes");
     expect(rows).toHaveLength(125);
-    expect(fetchMock).toHaveBeenCalledTimes(5);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(rows.at(-1)!.details).toContain("25/10");
     expect(mocks.anime).not.toHaveBeenCalled();
+    expect(mocks.alternative).not.toHaveBeenCalled();
+  });
+  it("opens the month using the dated alternative when AniList is rate limited", async () => {
+    fetchMock.mockResolvedValue({ ok: false, status: 429 });
+    const alternative = [{
+      id: "anime", source: "animeschedule", title: "Alternative",
+      siteUrl: "https://animeschedule.net/anime/anime",
+      timestamp: calendarRange("mes").end - 1000, details: "Ep 4 — 31/10, 20:00",
+      subscription: { source: "tenrai", id: "55" },
+    }];
+    mocks.alternative.mockResolvedValue(alternative);
+    const results = await Promise.all([
+      loadCalendarEntries(false, "anime", "mes"),
+      loadCalendarEntries(false, "anime", "mes"),
+      loadCalendarEntries(false, "anime", "mes"),
+    ]);
+    expect(results.every((rows) => rows[0].source === "animeschedule")).toBe(true);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(mocks.alternative).toHaveBeenCalledOnce();
+    await loadCalendarEntries(false, "anime", "mes");
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(mocks.alternative).toHaveBeenCalledOnce();
+  });
+  it("shares complete provider pages across simultaneous normal and adult consultations", async () => {
+    fetchMock.mockResolvedValue(response("airingSchedules", [
+      { media: { ...media, id: 1 }, episode: 1, airingAt: calendarRange("mes").start + 10 },
+      { media: { ...media, id: 2, isAdult: true }, episode: 1, airingAt: calendarRange("mes").start + 10 },
+    ]));
+    const [normal, adult] = await Promise.all([
+      loadCalendarEntries(false, "anime", "mes"),
+      loadCalendarEntries(true, "anime", "mes"),
+    ]);
+    expect(normal.map((entry) => entry.id)).toEqual(["1"]);
+    expect(adult.map((entry) => entry.id)).toEqual(["2"]);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+  it("serves the last complete calendar with its original cache time on a failed refresh", async () => {
+    fetchMock.mockResolvedValueOnce(response("airingSchedules", [
+      { media, episode: 1, airingAt: calendarRange("mes").start + 100 },
+    ])).mockRejectedValue(new Error("Provider offline"));
+    const original = await loadCalendarEntries(false, "anime", "mes");
+    const fetchedAt = Date.now();
+    vi.advanceTimersByTime(5 * 60_000 + 1);
+    const stale = await loadCalendarEntries(false, "anime", "mes");
+    expect(stale.map((entry) => entry.id)).toEqual(original.map((entry) => entry.id));
+    expect(stale[0].cachedAt).toBe(fetchedAt);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    await loadCalendarEntries(false, "anime", "mes");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+  it("honors Retry-After across calendar periods without hammering the provider", async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: false, status: 429, headers: { get: (key: string) => key === "retry-after" ? "120" : null },
+    }).mockResolvedValue(response("airingSchedules", []));
+    await expect(loadCalendarEntries(false, "anime", "mes")).rejects.toThrow("agenda mensal");
+    await loadCalendarEntries(false, "anime", "semana");
+    expect(fetchMock).toHaveBeenCalledOnce();
+    vi.advanceTimersByTime(120_001);
+    await loadCalendarEntries(false, "anime", "amanha");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+  it("keeps the original HTTP error as the monthly error's cause", async () => {
+    fetchMock.mockResolvedValue({ ok: false, status: 503 });
+    const error = await loadCalendarEntries(false, "anime", "mes").catch((reason) => reason);
+    expect(error.cause.message).toContain("HTTP 503");
+    expect(error.cause.page).toBe(1);
   });
   it("never exposes a partial AniList schedule when a later page fails", async () => {
     fetchMock.mockResolvedValueOnce(response("airingSchedules", [
@@ -119,6 +190,10 @@ describe("calendar data and relative dates", () => {
     fetchMock.mockRejectedValue(new Error("AniList HTTP 429"));
     await expect(loadCalendarEntries(adult, "anime", "mes")).rejects.toThrow("agenda mensal");
     expect(mocks.anime).not.toHaveBeenCalled();
+    expect(mocks.alternative).toHaveBeenCalledWith(adult, calendarRange("mes"));
+    expect(mocks.warn).toHaveBeenCalledWith(expect.objectContaining({
+      err: expect.any(Error), provider: "AniList",
+    }), expect.any(String));
   });
   it("preserves Tenrai IDs and excludes adult fallback comics in the normal calendar", async () => {
     fetchMock.mockRejectedValue(new Error("offline"));

@@ -4,14 +4,20 @@ import {
   genresOfTenrai, nextTenraiBroadcast, titleOfTenrai,
 } from "./tenrai-fallback.js";
 import type { CalendarPeriod, CalendarTab } from "./calendar-panel.js";
+import { CalendarCache } from "./calendar-cache.js";
+import { fetchAlternativeCalendar } from "./calendar-alternative.js";
+import { logger } from "../lib/logger.js";
 
 export interface CalendarEntry {
   id: string;
-  source: "anilist" | "anilist-anime" | "tenrai" | "vndb";
+  source: "anilist" | "anilist-anime" | "tenrai" | "vndb" | "animeschedule";
   title: string;
   siteUrl: string;
   details: string;
   timestamp?: number;
+  episode?: number;
+  subscription?: { source: "anilist-anime" | "tenrai"; id: string };
+  cachedAt?: number;
 }
 
 interface Media {
@@ -31,13 +37,31 @@ interface Airing {
 
 const MEDIA_FIELDS = "id title { romaji english } genres siteUrl isAdult";
 const AIRING_QUERY = `query CalendarAiring($page: Int, $start: Int, $end: Int) {
-  Page(page: $page, perPage: 25) {
+  Page(page: $page, perPage: 50) {
     pageInfo { hasNextPage }
     airingSchedules(airingAt_greater: $start, airingAt_lesser: $end, sort: TIME) {
       airingAt episode media { ${MEDIA_FIELDS} }
     }
   }
 }`;
+
+const entriesCache = new CalendarCache<CalendarEntry[]>();
+const airingCache = new CalendarCache<Airing[]>();
+let anilistCooldownUntil = 0;
+let anilistCooldownError: Error | undefined;
+
+export function clearCalendarCache() {
+  entriesCache.clear();
+  airingCache.clear();
+  anilistCooldownUntil = 0;
+  anilistCooldownError = undefined;
+}
+
+class AniListCalendarError extends Error {
+  constructor(message: string, readonly page: number, readonly httpStatus: number, readonly retryAfterMs = 30_000) {
+    super(message);
+  }
+}
 const ADULT_ANIME_QUERY = `query CalendarAdultAnime($page: Int) {
   Page(page: $page, perPage: 25) {
     media(type: ANIME, status: RELEASING, isAdult: true, sort: POPULARITY_DESC) {
@@ -77,13 +101,26 @@ async function anilistPages<T>(
   query: string, field: "media" | "airingSchedules", variables: Record<string, unknown>,
 ): Promise<T[]> {
   async function request(page: number) {
+    if (Date.now() < anilistCooldownUntil) throw anilistCooldownError;
     const response = await fetch("https://graphql.anilist.co", {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify({ query, variables: { ...variables, page } }),
       signal: AbortSignal.timeout(12_000),
     });
-    if (!response.ok) throw new Error(`AniList HTTP ${response.status}`);
+    if (!response.ok) {
+      const retryHeader = response.headers?.get("retry-after");
+      const reset = Number(response.headers?.get("x-ratelimit-reset")) * 1000;
+      const retryMs = retryHeader && /^\d+(?:\.\d+)?$/.test(retryHeader)
+        ? Number(retryHeader) * 1000 : retryHeader ? Date.parse(retryHeader) - Date.now() : reset - Date.now();
+      const error = new AniListCalendarError(`AniList HTTP ${response.status} (página ${page})`,
+        page, response.status, Math.min(300_000, Math.max(30_000, retryMs || 60_000)));
+      if (response.status === 429) {
+        anilistCooldownUntil = Date.now() + error.retryAfterMs;
+        anilistCooldownError = error;
+      }
+      throw error;
+    }
     const body = await response.json() as {
       data?: { Page?: Partial<Record<typeof field, T[]>> & {
         pageInfo?: { hasNextPage: boolean };
@@ -118,6 +155,7 @@ function mediaEntry(media: Media, tab: CalendarTab, airing?: { episode: number; 
     title: media.title.english || media.title.romaji || "Sem título",
     siteUrl: media.siteUrl,
     timestamp: airing?.airingAt ?? media.updatedAt,
+    episode: airing?.episode,
     details: [
       airing ? `Ep ${airing.episode} — ${formatDate(airing.airingAt, true)}`
         : tab === "anime" ? "Sem episódio agendado"
@@ -132,6 +170,7 @@ const isAdultGenre = (genres: string[]) =>
 
 async function animeEntries(adult: boolean, period: CalendarPeriod): Promise<CalendarEntry[]> {
   const range = calendarRange(period);
+  let primaryFailure: unknown;
   try {
     if (adult && period === "todos") {
       const media = await anilistPages<Media>(ADULT_ANIME_QUERY, "media", {});
@@ -141,21 +180,26 @@ async function animeEntries(adult: boolean, period: CalendarPeriod): Promise<Cal
         .sort((a, b) => (a.timestamp ?? Infinity) - (b.timestamp ?? Infinity));
     } else {
       // AniList's greater/lesser filters are exclusive; our range is inclusive.
-      const rows = await anilistPages<Airing>(AIRING_QUERY, "airingSchedules", {
-        start: range.start - 1, end: range.end + 1,
-      });
-      return rows.filter((item) => Boolean(item.media.isAdult) === adult)
+      const cached = await airingCache.get(`${range.start}:${range.end}`, () =>
+        anilistPages<Airing>(AIRING_QUERY, "airingSchedules", {
+          start: range.start - 1, end: range.end + 1,
+        }));
+      return cached.value.filter((item) => Boolean(item.media.isAdult) === adult)
         .map((item) => mediaEntry(item.media, "anime", item))
+        .map((item) => cached.stale ? { ...item, cachedAt: cached.fetchedAt } : item)
         .sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0));
     }
-  } catch {
-    // Use the existing independent Tenrai fallback if AniList is unavailable.
+  } catch (error) {
+    primaryFailure = error;
+    logger.warn({ err: error, provider: "AniList", period }, "Fonte do calendário indisponível");
   }
   if (period === "mes") {
-    // Tenrai only provides a weekly broadcast slot. Repeating it through the
-    // month would invent future episodes; showing only the next slot would
-    // incorrectly look like a complete monthly agenda.
-    throw new Error("A agenda mensal de episódios do AniList está indisponível");
+    try {
+      return await fetchAlternativeCalendar(adult, range);
+    } catch (error) {
+      logger.warn({ err: error, provider: "AnimeSchedule/Asunatracks", period }, "Fonte alternativa do calendário indisponível");
+      throw new Error("A agenda mensal de episódios está indisponível nas duas fontes", { cause: primaryFailure });
+    }
   }
   const fallback = await fetchTenraiSeasonAnime();
   return fallback.flatMap((item): CalendarEntry[] => {
@@ -190,7 +234,7 @@ async function comicEntries(tab: "manga" | "manhwa", adult: boolean): Promise<Ca
   }));
 }
 
-export async function loadCalendarEntries(adult: boolean, tab: CalendarTab, period: CalendarPeriod): Promise<CalendarEntry[]> {
+async function fetchCalendarEntries(adult: boolean, tab: CalendarTab, period: CalendarPeriod): Promise<CalendarEntry[]> {
   let entries: CalendarEntry[];
   if (tab === "anime") entries = await animeEntries(adult, period);
   else if (tab === "vn") {
@@ -202,9 +246,18 @@ export async function loadCalendarEntries(adult: boolean, tab: CalendarTab, peri
   } else entries = await comicEntries(tab, adult);
   const seen = new Set<string>();
   return entries.filter((item) => {
-    const key = `${item.source}:${item.id}:${item.timestamp ?? ""}`;
+    const key = `${item.source}:${item.id}:${item.timestamp ?? ""}:${item.episode ?? ""}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
+}
+
+export async function loadCalendarEntries(adult: boolean, tab: CalendarTab, period: CalendarPeriod): Promise<CalendarEntry[]> {
+  const range = calendarRange(period);
+  const cached = await entriesCache.get(`${adult}:${tab}:${period}:${range.start}:${range.end}`,
+    () => fetchCalendarEntries(adult, tab, period));
+  return cached.stale
+    ? cached.value.map((entry) => ({ ...entry, cachedAt: entry.cachedAt ?? cached.fetchedAt }))
+    : cached.value;
 }
