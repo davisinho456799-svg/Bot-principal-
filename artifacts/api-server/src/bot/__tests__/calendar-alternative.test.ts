@@ -1,10 +1,13 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
-import { fetchAlternativeCalendar } from "../calendar-alternative.js";
+import { clearAlternativeCalendarCache, fetchAlternativeCalendar } from "../calendar-alternative.js";
 
 const mocks = vi.hoisted(() => ({ metadata: vi.fn() }));
 vi.mock("../tenrai-fallback.js", () => ({
-  fetchTenraiSeasonAnime: mocks.metadata,
-  genresOfTenrai: (item: { genres: { name: string }[] }) => item.genres.map((genre) => genre.name),
+  genresOfTenrai: (item: { genres?: { name: string }[] }) => (item.genres ?? []).map((genre) => genre.name),
+}));
+vi.mock("../calendar-catalog.js", async (original) => ({
+  ...await original<typeof import("../calendar-catalog.js")>(),
+  fetchCalendarAnimeCatalog: mocks.metadata,
 }));
 const request = vi.fn();
 const range = { start: Date.parse("2026-10-05T03:00:00Z") / 1000, end: Date.parse("2026-11-01T03:00:00Z") / 1000 - 1 };
@@ -22,6 +25,7 @@ function response(url: string, rows: unknown[]) {
 }
 beforeEach(() => {
   vi.clearAllMocks();
+  clearAlternativeCalendarCache();
   vi.stubGlobal("fetch", request);
   mocks.metadata.mockResolvedValue([
     { mal_id: 10, title: "Normal Anime", genres: [{ name: "Action" }] },
@@ -90,8 +94,10 @@ describe("dated AnimeSchedule/Asunatracks alternative", () => {
     request.mockImplementation(async (url: string) =>
       new URL(url).searchParams.get("week") === "42" ? { ok: false, status: 503 } : response(url, [item]));
     await expect(fetchAlternativeCalendar(false, range)).rejects.toThrow("HTTP 503");
+    clearAlternativeCalendarCache();
     request.mockResolvedValue({ ok: true, json: async () => ({ configured: false, items: [] }) });
     await expect(fetchAlternativeCalendar(false, range)).rejects.toThrow("invalid");
+    clearAlternativeCalendarCache();
     request.mockImplementation(async (url: string) => {
       const result = response(url, [item]);
       return { ...result, json: async () => ({ ...await result.json(), stale: true }) };
@@ -106,5 +112,41 @@ describe("dated AnimeSchedule/Asunatracks alternative", () => {
     const params = new URL(request.mock.calls[0][0]).searchParams;
     expect(params.get("year")).toBe("2026");
     expect(params.get("week")).toBe("53");
+  });
+  it("uses official alternate names but never guesses a different season or ambiguous work", async () => {
+    mocks.metadata.mockResolvedValue([{
+      mal_id: 10, title: "Original Name", title_synonyms: ["Normal Anime"],
+      title_japanese: "通常のアニメ", titles: [{ title: "English Name" }],
+      genres: [{ name: "Action" }],
+    }]);
+    request.mockImplementation(async (url: string) => response(url, [{
+      ...item, title: "Normal Anime", external_ids: {},
+    }]));
+    expect((await fetchAlternativeCalendar(false, range))[0].subscription?.id).toBe("10");
+  });
+  it("shares weekly schedules between simultaneous normal and adult consultations", async () => {
+    request.mockImplementation(async (url: string) => response(url, [
+      item, { ...item, id: "adult", external_ids: { mal: 11 } },
+    ]));
+    const [normal, adult] = await Promise.all([
+      fetchAlternativeCalendar(false, range), fetchAlternativeCalendar(true, range),
+    ]);
+    expect(normal.every((entry) => entry.subscription?.id === "10")).toBe(true);
+    expect(adult.every((entry) => entry.subscription?.id === "11")).toBe(true);
+    expect(request).toHaveBeenCalledTimes(4);
+  });
+  it("excludes conflicting IDs and honors an explicit adult rating even without genres", async () => {
+    mocks.metadata.mockResolvedValue([
+      { mal_id: 10, title: "Normal Anime", genres: [{ name: "Action" }] },
+      { mal_id: 11, title: "Adult Anime", rating: "Rx - Hentai" },
+    ]);
+    request.mockImplementation(async (url: string) => response(url, [
+      item, { ...item, external_ids: { mal: 11 }, mal_id: 10 },
+      { ...item, id: "adult", external_ids: { mal: 11 } },
+    ]));
+    const normal = await fetchAlternativeCalendar(false, range);
+    const adult = await fetchAlternativeCalendar(true, range);
+    expect(normal.every((entry) => entry.subscription?.id === "10")).toBe(true);
+    expect(adult.every((entry) => entry.id === "adult")).toBe(true);
   });
 });
