@@ -14,7 +14,8 @@ import { eq, sql, and, desc, inArray, gte, isNotNull } from "drizzle-orm";
 import { logger } from "../lib/logger.js";
 import { getErogamescapeLastUpdated } from "./erogamescape.js";
 import { buildScanLinksExternal } from "./commands/search.js";
-import { getJikanMangaById, getJikanAnimeById, searchJikanAnimeAny } from "./jikan.js";
+import { getJikanMangaById, getJikanAnimeById, getJikanAnimeEpisodePage, searchJikanAnimeAny } from "./jikan.js";
+import { animeNotificationSource, fetchReleasedAnimeEpisodes } from "./anime-episode-monitor.js";
 import { searchManhwaAny, searchAnime } from "./anilist.js";
 import { searchComickAny, getComickBySlug } from "./comick.js";
 import { searchMangaDexAny } from "./mangadex.js";
@@ -582,48 +583,12 @@ async function fetchChapters(
     }
   }
 
-  // Anime: usa o número do próximo episódio a ir ao ar - 1 como proxy do último episódio lançado
-  if (source === "anilist-anime") {
-    try {
-      const ANIME_EP_QUERY = `
-        query GetAnimeEp($id: Int!) {
-          Media(id: $id, type: ANIME) {
-            episodes
-            nextAiringEpisode { episode }
-            status
-          }
-        }
-      `;
-      const res = await fetch(ANILIST_API, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({ query: ANIME_EP_QUERY, variables: { id: parseInt(manhwaId, 10) } }),
-        signal: AbortSignal.timeout(8000),
-      });
-      if (!res.ok) {
-        const kind = classifyHttpStatus(res.status);
-        recordSourceError(source, manhwaId, kind, res.status);
-        return fetchError(kind, res.status);
-      }
-      const json = (await res.json()) as {
-        data: { Media: { episodes: number | null; nextAiringEpisode: { episode: number } | null; status: string | null } };
-      };
-      const media = json.data?.Media;
-      if (!media) return fetchError("invalid_response");
-      if (media.nextAiringEpisode) return { value: media.nextAiringEpisode.episode - 1, isProxy: false };
-      if (media.episodes != null) return { value: media.episodes, isProxy: false };
-      return fetchError("no_data");
-    } catch (err) {
-      const kind = classifyException(err);
-      recordSourceError(source, manhwaId, kind);
-      return fetchError(kind);
-    }
-  }
-
-  if (source === "jikan-anime") {
-    const anime = await getJikanAnimeById(Number(manhwaId));
-    if (anime?.episodes == null) return fetchError("no_data");
-    return { value: anime.episodes, isProxy: false };
+  if (source === "anilist-anime" || source === "jikan-anime") {
+    const fetched = await fetchReleasedAnimeEpisodes(manhwaId, source, {
+      metadata: getJikanAnimeById, episodePage: getJikanAnimeEpisodePage,
+    });
+    if (isFetchError(fetched)) recordSourceError(source, manhwaId, fetched.kind, fetched.httpStatus);
+    return fetched;
   }
 
   if (source === "comick") {
@@ -909,11 +874,18 @@ export async function checkTrackedTitle(
 ): Promise<TitleCheckResult> {
   const startedAt = Date.now();
   const [tracked] = await db
-    .select({ lastChapters: capitulosRastreados.lastChapters })
+    .select({ lastChapters: capitulosRastreados.lastChapters, siteUrl: capitulosRastreados.siteUrl })
     .from(capitulosRastreados)
     .where(eq(capitulosRastreados.manhwaId, manhwaId));
   let fetched: FetchResult | null;
   let selectedSource: string | null;
+
+  if (source === "jikan" || source === "tenrai") {
+    const [subscription] = await db.select({ tipo: assinaturasTable.tipo, siteUrl: assinaturasTable.siteUrl })
+      .from(assinaturasTable).where(and(eq(assinaturasTable.manhwaId, manhwaId),
+        eq(assinaturasTable.source, source))).limit(1);
+    source = animeNotificationSource(source, subscription?.tipo, subscription?.siteUrl ?? tracked?.siteUrl);
+  }
 
   // Registros antigos do AniList devem ser verificados pelo Comick primeiro.
   // Mantemos o ID original apenas para comparar com a linha de base salva.
@@ -972,6 +944,7 @@ async function getTrackedManhwas() {
       title: assinaturasTable.title,
       coverUrl: assinaturasTable.coverUrl,
       siteUrl: assinaturasTable.siteUrl,
+      tipo: assinaturasTable.tipo,
     })
     .from(assinaturasTable);
 
@@ -983,7 +956,12 @@ async function getTrackedManhwas() {
     }
   }
 
-  return favorites;
+  const subscriptionKinds = new Map(subscribed.map(s => [`${s.source}:${s.manhwaId}`, s.tipo]));
+  return favorites.map(work => ({
+    ...work,
+    notificationSource: animeNotificationSource(work.source,
+      subscriptionKinds.get(`${work.source}:${work.manhwaId}`), work.siteUrl),
+  }));
 }
 
 function normalizeTitle(title: string): string {
@@ -1436,10 +1414,12 @@ async function sendNotification(
       const progressao = oldCount > 0
         ? `**${pad(oldCount)} → ${pad(newCount)}**`
         : `**${pad(newCount)}**`;
+      const anime = identity.label === "Anime";
       descBody =
-        `📖 **${identity.unit[0]?.toUpperCase()}${identity.unit.slice(1)} ${progressao}**` +
+        `${anime ? "📺" : "📖"} **${identity.unit[0]?.toUpperCase()}${identity.unit.slice(1)} ${progressao}**` +
         (diff > 1 ? `\n✨ **+${diff} novos**` : "") +
-        `\n\n🔎 **Encontrar onde ler:**\n${buildScanLinksExternal(title)}`;
+        (anime ? `\n\n📺 **Consultar o anime:**\n${siteUrl}` :
+          `\n\n🔎 **Encontrar onde ler:**\n${buildScanLinksExternal(title)}`);
     }
 
     const embed = createPanelWatchEmbed(identity.color)
@@ -1751,7 +1731,7 @@ async function runCheckLocked(
       // O ciclo automático usa o fluxo consolidado abaixo. O caminho legado
       // do Jikan só permanece disponível para o diagnóstico administrativo,
       // quando todas as fontes são solicitadas explicitamente.
-      if (m.source === "jikan" && options.verifyAllSources) {
+      if (m.notificationSource === "jikan" && options.verifyAllSources) {
         const mal = await getJikanMangaById(Number(m.manhwaId));
         if (!mal || mal.chapters == null) {
           logger.debug({ title: m.title, manhwaId: m.manhwaId }, "MAL/Jikan retornou null — pulando título");
@@ -2035,7 +2015,7 @@ async function runCheckLocked(
 
       const diagnosis = prefetchedDiagnosis ?? await fetchWithFallback(
         m.title,
-        m.source,
+        m.notificationSource,
         m.manhwaId,
         options.verifyAllSources ?? false,
       );

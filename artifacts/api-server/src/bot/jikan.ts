@@ -369,3 +369,10 @@ export async function getJikanAnimeById(malId: number): Promise<JikanAnimeResult
     return null;
   }
 }
+
+/** Shares the MAL/Tenrai client throttle and retry policy with catalog queries. */
+export async function getJikanAnimeEpisodePage(malId: number, page: number) {
+  return fetchJikanJson<import("./anime-episode-monitor").EpisodePage>(
+    `/anime/${malId}/episodes?page=${page}`,
+  );
+}
