@@ -136,7 +136,7 @@ globalThis.__dirname = __bannerPath.dirname(globalThis.__filename);
   await history.phase("validate.syntax", () => execFileAsync(process.execPath, ["--check", path.join(distDir, "index.mjs")]));
 
   // got-scraping/header-generator lê estes arquivos em runtime.
-  // Sem copiá-los, o Railway falha com ENOENT para headers-order.json.
+  // Sem copiá-los, o worker pode falhar com ENOENT para headers-order.json.
   const gotScrapingDir = path.dirname(globalThis.require.resolve("got-scraping"));
   const headerGeneratorEntry = globalThis.require.resolve("header-generator", {
     paths: [gotScrapingDir],
