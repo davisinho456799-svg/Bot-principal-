@@ -501,8 +501,8 @@ async function findRenderedChapters(
           media.getAttribute("class") || "",
           media.getAttribute("style") || "",
         ].join(" ");
-         const mediaValues = (media) => {
-           const values = [
+          const mediaValues = (media) => {
+            const currentValues = [
              media.currentSrc || "",
              media.getAttribute("src") || "",
              media.getAttribute("data-src") || "",
@@ -516,6 +516,21 @@ async function findRenderedChapters(
              media.getAttribute("data-thumbnail") || "",
              media.getAttribute("data-thumb") || "",
            ];
+            const values = platform === "toomics"
+              ? [
+                  media.getAttribute("data-original") || "",
+                  media.getAttribute("data-src") || "",
+                  media.getAttribute("data-lazy-src") || "",
+                  media.getAttribute("data-image") || "",
+                  media.getAttribute("src") || "",
+                  media.currentSrc || "",
+                  media.getAttribute("data-ep_thumb1") || "",
+                  media.getAttribute("data-ep_thumb2") || "",
+                  media.getAttribute("data-ep_thumb3") || "",
+                  media.getAttribute("data-thumbnail") || "",
+                  media.getAttribute("data-thumb") || "",
+                ]
+              : currentValues;
            const style = media.getAttribute("style") || "";
            for (const match of style.matchAll(/url\\((?:"|')?([^"')]+)(?:"|')?\\)/ig)) {
              if (match[1]) values.push(match[1]);
@@ -800,6 +815,41 @@ async function waitForPrimaryThumbnails(
   );
 }
 
+export async function promoteToomicsPrimaryThumbnails(
+  page: Page,
+  targets: CaptureThumbnailTarget[],
+): Promise<void> {
+  await page.evaluate(({ targets }) => {
+    const normalizeUrl = (value: string) => {
+      try {
+        return new URL(value, location.href).href;
+      } catch {
+        return "";
+      }
+    };
+    const lazyAttributes = ["data-original", "data-src", "data-lazy-src", "data-image"];
+
+    for (const target of targets) {
+      const card = document.querySelector(
+        `[data-monitor-capture-card="${target.captureId}"]`,
+      );
+      if (!(card instanceof HTMLElement)) continue;
+      const expectedUrl = normalizeUrl(target.thumbnailUrl);
+      if (!expectedUrl) continue;
+
+      const image = Array.from(card.querySelectorAll("img")).find((candidate) =>
+        lazyAttributes.some((attribute) =>
+          normalizeUrl(candidate.getAttribute(attribute) || "") === expectedUrl,
+        ),
+      );
+      if (!image) continue;
+
+      const currentUrl = normalizeUrl(image.currentSrc || image.src || "");
+      if (currentUrl !== expectedUrl) image.src = expectedUrl;
+    }
+  }, { targets });
+}
+
 export async function isolatePrimaryThumbnails(
   page: Page,
   targets: CaptureThumbnailTarget[],
@@ -1076,6 +1126,9 @@ async function captureGroup(
     captureId: chapter.captureId,
     thumbnailUrl: chapter.thumbnailUrl,
   }));
+  if (platform === "toomics") {
+    await promoteToomicsPrimaryThumbnails(page, captureTargets);
+  }
   if (pairTest && platform === "toptoon") {
     if (chapters.some(chapter => !chapter.extraThumbnailUrls)) {
       throw new Error("The selected test chapter does not provide both extra thumbnails");

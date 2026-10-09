@@ -31,10 +31,17 @@ function getAttribute(tag: string, names: string[]): string | null {
   return null;
 }
 
-function getThumbnail(markup: string, listingUrl: string): string | null {
+function getThumbnail(
+  markup: string,
+  listingUrl: string,
+  platform?: MonitorPlatform,
+): string | null {
   const image = markup.match(/<img\b[^>]*>/i)?.[0] ?? markup.match(/<source\b[^>]*>/i)?.[0];
   if (image) {
-    const src = getAttribute(image, ["src", "data-src", "data-original", "data-lazy-src", "data-image"]);
+    const attributes = platform === "toomics"
+      ? ["data-original", "data-src", "data-lazy-src", "data-image", "src"]
+      : ["src", "data-src", "data-original", "data-lazy-src", "data-image"];
+    const src = getAttribute(image, attributes);
     const srcset = getAttribute(image, ["srcset", "data-srcset"]);
     const candidate = src ?? srcset?.split(",")[0]?.trim().split(/\s+/)[0];
     if (candidate) return resolveUrl(candidate, listingUrl);
@@ -153,7 +160,7 @@ function parsePlatformCards(
     const markup = match[0];
     const href = getAttribute(markup, ["href", "data-href", "data-url"]);
     const number = extractChapterNumber(markup, href, true);
-    const thumbnail = getThumbnail(markup, listingUrl);
+    const thumbnail = getThumbnail(markup, listingUrl, rules.platform);
     const subtitle = markup.match(/<(?:p|span|div)\b[^>]*class=['"][^'"]*\b(?:ep_stitle|episode-subtitle|chapter-subtitle)\b[^'"]*['"][^>]*>([\s\S]*?)<\/(?:p|span|div)>/i)?.[1];
     if (number && thumbnail) candidates.push({
       number, thumbnailUrl: thumbnail, ...(subtitle?.trim() ? { subtitle: cleanText(subtitle) } : {}),
@@ -171,7 +178,7 @@ function parsePlatformCards(
     for (const match of html.matchAll(markerPattern)) {
       const markup = match[0];
       const number = extractChapterNumber(markup, getAttribute(markup, ["href", "data-href", "data-url"]), true);
-      const thumbnail = getThumbnail(markup, listingUrl);
+      const thumbnail = getThumbnail(markup, listingUrl, rules.platform);
       if (number && thumbnail) candidates.push({ number, thumbnailUrl: thumbnail });
     }
   }

@@ -6,6 +6,7 @@ import { applyCaptureSubtitles } from "./chapter-subtitle-capture";
 import { applyToptoonPairCapture } from "./toptoon-pair-capture";
 import {
   isolatePrimaryThumbnails,
+  promoteToomicsPrimaryThumbnails,
   type CaptureThumbnailTarget,
 } from "./browser-chapter-capture";
 
@@ -54,6 +55,38 @@ async function countSolidColorPixels(
 }
 
 describe("single-thumbnail chapter capture", () => {
+  it("promotes a Toomics data-original image over the currently rendered logo", async () => {
+    const page = await browser.newPage();
+    const logo = svgDataUrl("#d43b35");
+    const artwork = svgDataUrl("#3b73d4");
+    await page.setContent(`<article data-monitor-capture-card="toomics-14">
+      <img src="${logo}" data-original="${artwork}" width="96" height="72">
+    </article>`);
+    await page.waitForFunction(() => {
+      const image = document.querySelector("img");
+      return image instanceof HTMLImageElement && image.complete;
+    });
+
+    const targets: CaptureThumbnailTarget[] = [{
+      captureId: "toomics-14",
+      thumbnailUrl: artwork,
+    }];
+    await promoteToomicsPrimaryThumbnails(page, targets);
+    await page.waitForFunction((expected) => {
+      const image = document.querySelector("img");
+      return image instanceof HTMLImageElement &&
+        image.complete &&
+        image.naturalWidth > 0 &&
+        image.currentSrc === expected;
+    }, artwork);
+
+    expect(await page.locator("img").getAttribute("src")).toBe(artwork);
+    const screenshot = await page.locator("article").screenshot();
+    expect(await countSolidColorPixels(screenshot, [59, 115, 212])).toBeGreaterThan(100);
+    expect(await countSolidColorPixels(screenshot, [212, 59, 53])).toBe(0);
+    await page.close();
+  });
+
   it("replaces the primary image with exactly two selected extra images on a test card", async () => {
     const page = await browser.newPage();
     const primary = svgDataUrl("#3b73d4");
