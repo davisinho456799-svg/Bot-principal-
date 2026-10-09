@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { animeNotificationSource, fetchReleasedAnimeEpisodes, type EpisodePage } from "../anime-episode-monitor";
+import {
+  animeNotificationSource,
+  fetchReleasedAnimeEpisodes,
+  isAnimeFallbackSource,
+  type EpisodePage,
+} from "../anime-episode-monitor";
 
 const now = Date.parse("2026-10-07T12:00:00Z");
 const past = "2026-10-06T12:00:00Z";
@@ -37,6 +42,15 @@ describe("anime lookup category without changing stored identities", () => {
     expect(animeNotificationSource("jikan", "manga", "https://myanimelist.net/anime/21")).toBe("jikan");
     expect(animeNotificationSource("anilist-anime", "anime")).toBe("anilist-anime");
     expect(animeNotificationSource("anilist", "manhwa")).toBe("anilist");
+  });
+});
+
+describe("anime notification fallback source classification", () => {
+  it.each(["anilist-anime", "jikan-anime", "kitsu"])("uses anime fallback providers for %s", source => {
+    expect(isAnimeFallbackSource(source)).toBe(true);
+  });
+  it.each(["anilist", "mangadex", "tenrai"])("does not classify %s as anime-only", source => {
+    expect(isAnimeFallbackSource(source)).toBe(false);
   });
 });
 

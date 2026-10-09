@@ -11,6 +11,11 @@ export function animeNotificationSource(source: string, tipo?: string | null, si
   return tipo === "anime" || (tipo == null && animeUrl) ? "jikan-anime" : source;
 }
 
+/** Anime-only catalogs such as Kitsu use anime providers for notification fallback. */
+export function isAnimeFallbackSource(source: string): boolean {
+  return source === "anilist-anime" || source === "jikan-anime" || source === "kitsu";
+}
+
 export interface EpisodePage {
   data: { mal_id: number; aired: string | null }[];
   pagination: { last_visible_page: number; has_next_page: boolean };

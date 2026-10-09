@@ -15,6 +15,7 @@ import {
 } from "../autocomplete.js";
 import { logger } from "../../lib/logger.js";
 import { recordBotError } from "../error-log.js";
+import { parseSubscriptionChoice } from "../subscription-choice.js";
 
 export const data = new SlashCommandBuilder()
   .setName("assinar")
@@ -105,6 +106,7 @@ export async function autocomplete(interaction: AutocompleteInteraction): Promis
       tipo as "anime" | "manga" | "manhwa",
       titulo,
       focused,
+      tipo === "manga" ? "Manga" : "Manhwa",
     );
     return;
   }
@@ -112,7 +114,7 @@ export async function autocomplete(interaction: AutocompleteInteraction): Promis
   if (tipo === "anime") {
     await respondAutocompleteAnime(interaction, focused, null, true);
   } else {
-    await respondAutocomplete(interaction, focused, null, true);
+    await respondAutocomplete(interaction, focused, null, true, tipo === "manga" ? "Manga" : "Manhwa", true);
   }
 }
 
@@ -145,24 +147,20 @@ async function handleAdicionar(interaction: ChatInputCommandInteraction) {
 
   // O título é selecionado primeiro; a fonte traz o identificador exato
   // retornado pelo autocomplete dinâmico das fontes disponíveis.
-  if (
-    !titulo.trim() ||
-    !/^(anilist|anilist-anime|comick|mangadex|mangaupdates|jikan):[^\s]+$/.test(fonte)
-  ) {
+  const selection = parseSubscriptionChoice(tipo, fonte);
+  if (!titulo.trim() || !selection) {
     await interaction.editReply("❌ Selecione o título e depois uma fonte disponível na lista.");
     return;
   }
 
-  const [src, ...idParts] = fonte.split(":");
-  const id = idParts.join(":");
+  const { source: src, id } = selection;
 
   let result;
   try {
-    const isAnimeSource = tipo === "anime" && (src === "anilist-anime" || src === "jikan");
-    result = isAnimeSource
-      ? await getUnifiedAnimeById(src as "anilist-anime" | "jikan", id)
+    result = selection.kind === "anime"
+      ? await getUnifiedAnimeById(selection.source, id)
       : await getUnifiedById(
-          src as "anilist" | "mangadex" | "comick" | "mangaupdates" | "jikan" | "vndb" | "erogamescape",
+          selection.source,
           id
         );
   } catch (err) {

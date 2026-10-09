@@ -15,7 +15,7 @@ import { logger } from "../lib/logger.js";
 import { getErogamescapeLastUpdated } from "./erogamescape.js";
 import { buildScanLinksExternal } from "./commands/search.js";
 import { getJikanMangaById, getJikanAnimeById, getJikanAnimeEpisodePage, searchJikanAnimeAny } from "./jikan.js";
-import { animeNotificationSource, fetchReleasedAnimeEpisodes } from "./anime-episode-monitor.js";
+import { animeNotificationSource, fetchReleasedAnimeEpisodes, isAnimeFallbackSource } from "./anime-episode-monitor.js";
 import { searchManhwaAny, searchAnime } from "./anilist.js";
 import { searchComickAny, getComickBySlug } from "./comick.js";
 import { searchMangaDexAny } from "./mangadex.js";
@@ -1012,7 +1012,7 @@ async function findFallbackCandidates(
   includePrimary = false,
 ): Promise<FallbackCandidate[]> {
   const candidates: FallbackCandidate[] = [];
-  const isAnime = primarySource === "anilist-anime" || primarySource === "jikan-anime";
+  const isAnime = isAnimeFallbackSource(primarySource);
 
   if (isAnime) {
     const searches = await Promise.allSettled([searchAnime(title), searchJikanAnimeAny(title)]);
