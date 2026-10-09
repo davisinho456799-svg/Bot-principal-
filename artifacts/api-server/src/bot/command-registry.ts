@@ -25,7 +25,6 @@ import * as perfilCommand from "./commands/perfil.js";
 import * as similarCommand from "./commands/similar.js";
 import * as identificarCommand from "./commands/identificar.js";
 import * as temasCommand from "./commands/temas.js";
-import * as filmeCommand from "./commands/filme.js";
 import * as calendarioCommand from "./commands/calendario.js";
 import * as calendario18Command from "./commands/calendario18.js";
 import * as historicoCommand from "./commands/historico.js";
@@ -71,7 +70,6 @@ const commandModules: BotCommand[] = [
   noticiasCommand,
   identificarCommand,
   temasCommand,
-  filmeCommand,
   mangaCommand,
   calendarioCommand,
   calendario18Command,

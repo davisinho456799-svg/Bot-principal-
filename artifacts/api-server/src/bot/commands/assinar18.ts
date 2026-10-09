@@ -8,6 +8,7 @@ import { db, assinaturasTable, notificacaoCanaisTable } from "@workspace/db";
 import { eq, and, ilike } from "drizzle-orm";
 import { getUnifiedById, getUnifiedAnimeById } from "../unified.js";
 import { respondAutocomplete, respondAutocompleteAnime } from "../autocomplete.js";
+import { parseAdultSubscriptionChoice } from "../subscription-choice.js";
 
 export const data = new SlashCommandBuilder()
   .setName("assinar18")
@@ -87,7 +88,7 @@ export async function autocomplete(interaction: AutocompleteInteraction): Promis
   if (tipo === "anime") {
     await respondAutocompleteAnime(interaction, focused);
   } else {
-    await respondAutocomplete(interaction, focused);
+    await respondAutocomplete(interaction, focused, null, false, tipo === "manga" ? "Manga" : "Manhwa", true);
   }
 }
 
@@ -108,16 +109,15 @@ async function handleAdicionar(interaction: ChatInputCommandInteraction) {
   const titulo = interaction.options.getString("titulo", true);
   await interaction.deferReply({ ephemeral: true });
 
-  if (!/^(anilist|anilist-anime|comick|mangadex|mangaupdates|jikan|vndb|erogamescape):[^\s]+$/.test(titulo)) {
+  const selection = parseAdultSubscriptionChoice(tipo, titulo);
+  if (!selection) {
     await interaction.editReply("❌ Por favor, selecione um título da lista de sugestões ao digitar.");
     return;
   }
 
-  const [src, ...idParts] = titulo.split(":");
-  const id = idParts.join(":");
-  const result = src === "anilist-anime"
-    ? await getUnifiedAnimeById("anilist-anime", id)
-    : await getUnifiedById(src as "anilist" | "mangadex" | "comick" | "mangaupdates" | "jikan" | "vndb" | "erogamescape", id);
+  const result = selection.kind === "anime"
+    ? await getUnifiedAnimeById(selection.source, selection.id)
+    : await getUnifiedById(selection.source, selection.id);
 
   if (!result) {
     await interaction.editReply("❌ Não foi possível buscar as informações desse título. Tente novamente.");

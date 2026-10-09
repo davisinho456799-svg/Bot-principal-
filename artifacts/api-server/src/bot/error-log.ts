@@ -109,7 +109,7 @@ function redactContext(context: Record<string, unknown> | null): Record<string, 
 }
 
 /**
- * Persiste um erro no Neon sem deixar o registro de erro derrubar o bot.
+ * Persiste um erro no PostgreSQL sem deixar o registro de erro derrubar o bot.
  * A retenção é limitada para o histórico não crescer indefinidamente.
  */
 export async function recordBotError(input: BotErrorInput): Promise<number | null> {
