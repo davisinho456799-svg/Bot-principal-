@@ -21,6 +21,7 @@ import { getActiveNumberedMonitorWorks } from "./monitor-work-list.js";
 import { resolveMonitorWorkNumber } from "./monitor-work-numbering.js";
 import { runMonitorDiagnostic, formatMonitorDiagnostic } from "./monitor-diagnostic.js";
 import { MonitorUnavailableError } from "./monitor-execution.js";
+import { handleMonitorReportCommand } from "./monitor-report-service.js";
 
 export const monitorCommandDefinition = new SlashCommandBuilder()
     .setName("monitor")
@@ -155,6 +156,15 @@ export const monitorCommandDefinition = new SlashCommandBuilder()
     )
     .addSubcommand((command) =>
       command.setName("erros").setDescription("Mostra os erros atuais do monitor"),
+    )
+    .addSubcommand((command) =>
+      command.setName("resumo").setDescription("Consulta envios, checagens e falhas de imagem e embed nas últimas 24h"),
+    )
+    .addSubcommand((command) =>
+      command.setName("resumo_configurar").setDescription("Escolhe o canal ou pausa o resumo automático diário")
+        .addChannelOption(option => option.setName("canal").setDescription("Canal de texto para o resumo diário")
+          .addChannelTypes(ChannelType.GuildText))
+        .addBooleanOption(option => option.setName("ativo").setDescription("Ativar ou pausar somente o resumo diário")),
     )
     .toJSON();
 
@@ -356,6 +366,15 @@ async function handleHistory(interaction: ChatInputCommandInteraction) {
 
 export async function executeManhwaCommand(interaction: ChatInputCommandInteraction) {
   await interaction.deferReply({ ephemeral: true });
+  if (["resumo", "resumo_configurar"].includes(interaction.options.getSubcommand())) {
+    try {
+      await handleMonitorReportCommand(interaction, interaction.options.getSubcommand() === "resumo_configurar");
+    } catch (error) {
+      await replyError(interaction, error instanceof Error && !("code" in error)
+        ? error.message : "Não foi possível consultar o resumo. Confira o schema e as permissões; nenhum lançamento foi enviado.");
+    }
+    return;
+  }
   const subcommand = interaction.options.getSubcommand();
   if (subcommand === "adicionar") {
     await handleAdd(interaction);

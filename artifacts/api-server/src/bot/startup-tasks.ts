@@ -4,8 +4,10 @@ import { db } from "@workspace/db";
 import { logger } from "../lib/logger.js";
 import { startNotificacaoService, startWeeklyService } from "./notificacao-service.js";
 import { cleanupDuplicateAliases } from "./unified.js";
+import { startMonitorReportService } from "../services/monitor-report-service.js";
 
 export async function runBotStartupTasks(readyClient: Client<true>) {
+  startMonitorReportService(readyClient);
   try {
     await db.execute(
       sql`ALTER TABLE capitulos_rastreados ADD COLUMN IF NOT EXISTS last_notified_at TIMESTAMP`,

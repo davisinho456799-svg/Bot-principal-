@@ -200,3 +200,4 @@ export const descriptionMatches = pgTable(
 );
 
 export * from "./monitor";
+export * from "./monitorReports";

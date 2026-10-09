@@ -13,6 +13,7 @@ import { loadMonitorDependency } from "../lib/monitor-dependencies";
 import { measureImageMonitorRound, type ImageMonitorTiming } from "./monitor-timing";
 import { monitorExecution } from "./monitor-execution.js";
 import { translateChapterSubtitles } from "./chapter-subtitle-translation";
+import { recordBotError } from "../bot/error-log.js";
 import { buildSubtitleFallbackRow, buildSubtitleRowsLayout } from "./chapter-subtitle-render";
 import { renderToptoonPairCard } from "./toptoon-pair-render";
 import { selectPairTestImage, type TestImageSelection } from "./monitor-test-fallback";
@@ -1144,6 +1145,8 @@ async function runMonitorRound(timing: ImageMonitorTiming) {
       });
     } catch (error) {
       logger.warn({ err: error, workId: work.id }, "Work monitor failed");
+      void recordBotError({ source: "image_monitor", errorCode: "IMAGE_MONITOR_CHECK_FAILED",
+        error, context: { workId: work.id, channelId: config.discordChannelId } });
       workTiming.fail(error);
       await db.update(monitoredWorksTable).set({ lastCheckedAt: new Date(), lastStatus: "Check failed", updatedAt: new Date() }).where(eq(monitoredWorksTable.id, work.id));
     } finally {
