@@ -16,7 +16,12 @@ import {
   monitoredWorksTable,
 } from "@workspace/db/schema";
 import { logger } from "../lib/logger";
-import { runMonitor, runResendNotification, runTestNotification } from "./monitor-service.js";
+import {
+  buildMonitorLinkDeltaPendingStatus,
+  runMonitor,
+  runResendNotification,
+  runTestNotification,
+} from "./monitor-service.js";
 import { getActiveNumberedMonitorWorks } from "./monitor-work-list.js";
 import { resolveMonitorWorkNumber } from "./monitor-work-numbering.js";
 import { runMonitorDiagnostic, formatMonitorDiagnostic } from "./monitor-diagnostic.js";
@@ -392,7 +397,11 @@ async function handleEditLink(interaction: ChatInputCommandInteraction) {
 
   const [changed] = await db
     .update(monitoredWorksTable)
-    .set({ listingUrl, updatedAt: new Date() })
+    .set({
+      listingUrl,
+      lastStatus: buildMonitorLinkDeltaPendingStatus(selected.listingUrl),
+      updatedAt: new Date(),
+    })
     .where(and(eq(monitoredWorksTable.id, selected.id), eq(monitoredWorksTable.active, true)))
     .returning();
 
@@ -408,7 +417,7 @@ async function handleEditLink(interaction: ChatInputCommandInteraction) {
     content: [
       `✅ Link de **${changed.title}** atualizado.`,
       `Novo link: ${changed.listingUrl}`,
-      "O nome, a plataforma e o histórico de capítulos foram preservados.",
+      "Na próxima checagem, serão enviados apenas capítulos ainda não registrados no histórico; depois o monitor continua normalmente.",
     ].join("\n"),
     components: [],
   });

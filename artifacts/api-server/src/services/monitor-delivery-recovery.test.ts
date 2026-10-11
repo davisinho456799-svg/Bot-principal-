@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import sharp from "sharp";
 import { getTableName } from "drizzle-orm";
-import { runMonitor, runResendNotification } from "./monitor-service";
+import {
+  buildMonitorLinkDeltaPendingStatus,
+  MONITOR_LINK_DELTA_PENDING_STATUS,
+  runMonitor,
+  runResendNotification,
+} from "./monitor-service";
 import { buildChapterKey } from "./parsers/index";
 
 const state = vi.hoisted(() => ({
@@ -75,12 +80,12 @@ beforeEach(() => {
 });
 afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 
-async function installListing(numbers: string[]) {
+async function installListing(numbers: string[], releaseDate = new Date().toISOString().slice(0, 10)) {
   const image = await sharp({ create: { width: 800, height: 300, channels: 3, background: "#213547" } }).png().toBuffer();
   state.listing.mockImplementation(async () => ({
     candidates: numbers.map(number => ({ number, captureId: number,
       thumbnailUrl: `https://example.test/${number}.png`,
-      releaseDate: new Date().toISOString().slice(0, 10) })),
+      releaseDate })),
     captureGroups: vi.fn(async (ids: string[]) => {
       const groups = [];
       for (let i = 0; i < ids.length; i += 3) groups.push({ chapterNumbers: ids.slice(i, i + 3), image });
@@ -128,6 +133,126 @@ describe("durable monitor delivery progress", () => {
     expect(fetcher).not.toHaveBeenCalled();
     expect(state.records.detected_chapters).toHaveLength(3);
     expect(state.records.detected_chapters.every(row => !row.deliveryPending && row.publishedAt === null)).toBe(true);
+  });
+
+  it("sends only the one-time link difference, then resumes normal chapter checks", async () => {
+    const beforeEdit = new Date("2026-10-01T00:00:00.000Z");
+    state.records.monitored_works[0].createdAt = beforeEdit;
+    state.records.monitored_works[0].lastCheckedAt = beforeEdit;
+    state.records.monitored_works[0].lastStatus = MONITOR_LINK_DELTA_PENDING_STATUS;
+    state.records.detected_chapters = [{
+      id: 1, workId: 1, chapterKey: buildChapterKey("toptoon", "Work", "8382"),
+      chapterNumber: "8382", thumbnailUrl: "https://example.test/8382.png",
+      publishedAt: beforeEdit, deliveryPending: false,
+    }];
+
+    const oldReleaseDate = "2026-09-30";
+    await installListing(["8382", "105", "106"], oldReleaseDate);
+    const sent: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (_url, options) => {
+      const payload = JSON.parse((options.body as FormData).get("payload_json") as string);
+      sent.push(payload.content);
+      return new Response("", { status: 200 });
+    }));
+
+    await runMonitor();
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toContain("105");
+    expect(sent[0]).toContain("106");
+    expect(sent[0]).not.toContain("8382");
+    expect(state.records.detected_chapters.filter(row => row.publishedAt)).toHaveLength(3);
+    expect(state.records.monitored_works[0].lastStatus).toContain("2 new chapters published");
+
+    await installListing(["8382", "105", "106", "107"]);
+    await runMonitor();
+
+    expect(sent).toHaveLength(2);
+    expect(sent[1]).toContain("107");
+    expect(sent[1]).not.toContain("105");
+    expect(sent[1]).not.toContain("8382");
+    expect(state.records.monitored_works[0].lastStatus).toContain("1 new chapter published");
+  });
+
+  it("keeps the link-difference marker when a source check fails", async () => {
+    state.records.monitored_works[0].lastStatus = MONITOR_LINK_DELTA_PENDING_STATUS;
+    await installListing(["2"]);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("temporary", { status: 503 })));
+
+    await runMonitor();
+
+    expect(state.records.monitored_works[0].lastStatus).toBe(MONITOR_LINK_DELTA_PENDING_STATUS);
+  });
+
+  it("compares both listing URLs and releases only the un-published chapter difference", async () => {
+    const oldUrl = "https://toomics.com/por/webtoon/episode/toon/7189";
+    const currentUrl = "https://www.toomics.com/uplmscg/episode/toon/7189";
+    const beforeEdit = new Date("2026-10-01T00:00:00.000Z");
+    const oldNumbers = Array.from({ length: 104 }, (_, index) => String(index + 1));
+    const currentNumbers = Array.from({ length: 114 }, (_, index) => String(index + 1));
+    state.records.monitored_works[0].listingUrl = currentUrl;
+    state.records.monitored_works[0].lastStatus = buildMonitorLinkDeltaPendingStatus(oldUrl);
+    state.records.monitored_works[0].createdAt = beforeEdit;
+    state.records.monitored_works[0].lastCheckedAt = beforeEdit;
+    state.records.detected_chapters = [
+      {
+        id: 1, workId: 1, chapterKey: buildChapterKey("toptoon", "Work", "8382"),
+        chapterNumber: "8382", thumbnailUrl: "https://example.test/8382.png",
+        publishedAt: beforeEdit, deliveryPending: false,
+      },
+      ...currentNumbers.map((number, index) => ({
+        id: index + 2,
+        workId: 1,
+        chapterKey: buildChapterKey("toptoon", "Work", number),
+        chapterNumber: number,
+        thumbnailUrl: `https://example.test/${number}.png`,
+        publishedAt: index < 104 ? beforeEdit : null,
+        deliveryPending: false,
+      })),
+    ];
+
+    const image = await sharp({
+      create: { width: 800, height: 300, channels: 3, background: "#213547" },
+    }).png().toBuffer();
+    state.listing.mockImplementation(async (url: string) => {
+      const numbers = url === oldUrl ? oldNumbers : currentNumbers;
+      return {
+        candidates: numbers.map(number => ({
+          number,
+          captureId: number,
+          thumbnailUrl: `https://example.test/${number}.png`,
+        })),
+        captureGroups: vi.fn(async (ids: string[]) => {
+          const groups = [];
+          for (let index = 0; index < ids.length; index += 5) {
+            groups.push({ chapterNumbers: ids.slice(index, index + 5), image });
+          }
+          return groups;
+        }),
+        close: async () => {},
+      };
+    });
+
+    const sent: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (_url, options) => {
+      const payload = JSON.parse((options.body as FormData).get("payload_json") as string);
+      sent.push(payload.content);
+      return new Response("", { status: 200 });
+    }));
+
+    await runMonitor();
+
+    const deliveredNumbers = sent.flatMap((content) =>
+      [...content.matchAll(/capítulos ([\d, ]+)/g)]
+        .flatMap((match) => match[1].split(",").map((number) => Number(number.trim()))),
+    ).sort((left, right) => left - right);
+    expect(deliveredNumbers).toEqual(
+      Array.from({ length: 10 }, (_, index) => index + 105),
+    );
+    expect(state.records.detected_chapters
+      .filter(row => row.chapterNumber >= "105" && row.chapterNumber <= "114")
+      .every(row => row.publishedAt !== null)).toBe(true);
+    expect(state.records.monitored_works[0].lastStatus).toContain("10 new chapters published");
   });
 });
 

@@ -67,6 +67,11 @@ vi.mock("@workspace/db", () => {
 });
 vi.mock("../lib/logger", () => ({ logger: { warn: vi.fn(), error: vi.fn() } }));
 vi.mock("./monitor-service.js", () => ({
+  MONITOR_LINK_DELTA_PENDING_STATUS: "Link atualizado — diferença de capítulos pendente",
+  buildMonitorLinkDeltaPendingStatus: (previousUrl?: string) =>
+    previousUrl
+      ? `Link atualizado — diferença de capítulos pendente|previous=${encodeURIComponent(previousUrl)}`
+      : "Link atualizado — diferença de capítulos pendente",
   runMonitor: vi.fn(),
   runTestNotification: state.notification,
   runResendNotification: state.resend,
@@ -215,7 +220,11 @@ describe("safe monitor commands", () => {
     expect(state.rows.find((row) => row.id === 10)!.active).toBe(true);
     expect(state.rows.find((row) => row.id === 1)!.listingUrl).toBe("https://example.test/a");
     expect(state.updates).toHaveBeenCalledWith(
-      { listingUrl: "https://www.lezhin.com/new", updatedAt: expect.any(Date) },
+      {
+        listingUrl: "https://www.lezhin.com/new",
+        lastStatus: "Link atualizado — diferença de capítulos pendente|previous=https%3A%2F%2Fexample.test%2Fc",
+        updatedAt: expect.any(Date),
+      },
       { conditions: [{ field: "id", value: 10 }, { field: "active", value: true }] },
     );
   });

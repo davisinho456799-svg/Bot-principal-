@@ -65,6 +65,31 @@ type ExistingChapter = {
 type MonitorImageMode = "browser+banner" | "sharp+banner" | "primary+banner" | "none";
 
 const HISTORICAL_RELEASE_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1_000;
+export const MONITOR_LINK_DELTA_PENDING_STATUS = "Link atualizado — diferença de capítulos pendente";
+const MONITOR_LINK_DELTA_PREVIOUS_URL_MARKER = "|previous=";
+
+export function buildMonitorLinkDeltaPendingStatus(previousUrl?: string) {
+  return previousUrl
+    ? `${MONITOR_LINK_DELTA_PENDING_STATUS}${MONITOR_LINK_DELTA_PREVIOUS_URL_MARKER}${encodeURIComponent(previousUrl)}`
+    : MONITOR_LINK_DELTA_PENDING_STATUS;
+}
+
+function hasPendingLinkDelta(status: string | null | undefined) {
+  return status?.startsWith(MONITOR_LINK_DELTA_PENDING_STATUS) ?? false;
+}
+
+function getPendingLinkDeltaPreviousUrl(status: string | null | undefined) {
+  const markerIndex = status?.indexOf(MONITOR_LINK_DELTA_PREVIOUS_URL_MARKER) ?? -1;
+  if (markerIndex < 0 || !status) return null;
+  try {
+    const url = decodeURIComponent(
+      status.slice(markerIndex + MONITOR_LINK_DELTA_PREVIOUS_URL_MARKER.length),
+    );
+    return new URL(url).toString();
+  } catch {
+    return null;
+  }
+}
 
 type SharpFactory = typeof sharp;
 
@@ -815,9 +840,28 @@ async function runMonitorRound(timing: ImageMonitorTiming) {
   let postsSent = 0;
   for (const work of works) {
     const workTiming = timing.startWork(work.id, work.title);
+    const linkDeltaPending = hasPendingLinkDelta(work.lastStatus);
+    const previousLinkUrl = linkDeltaPending
+      ? getPendingLinkDeltaPreviousUrl(work.lastStatus)
+      : null;
     let listing: ListingSession | undefined;
+    let previousListing: ListingSession | undefined;
     try {
       listing = await fetchListing(work);
+      let previousLinkNumbers: Set<string> | undefined;
+      if (linkDeltaPending && previousLinkUrl) {
+        previousListing = await fetchListing({ ...work, listingUrl: previousLinkUrl });
+        if (previousListing.candidates.length === 0) {
+          throw new Error("The previous listing returned no usable chapters; link-difference check remains pending");
+        }
+        previousLinkNumbers = new Set(
+          previousListing.candidates.map((candidate) =>
+            chapterNumberIdentity(candidate.number),
+          ),
+        );
+        await previousListing.captureSession?.close();
+        previousListing = undefined;
+      }
       const { parser, candidates } = listing;
       const existing = await db
         .select({
@@ -860,13 +904,13 @@ async function runMonitorRound(timing: ImageMonitorTiming) {
         const number = numericChapterNumber(chapter.number);
         return highestExisting !== null && number !== null && number <= highestExisting;
       };
-      const historical = previouslyUnseen.filter((candidate) =>
+      const historical = linkDeltaPending ? [] : previouslyUnseen.filter((candidate) =>
         isHistoricalRelease(candidate, checkedAt) ||
         isReleasedBeforePreviousCheck(candidate, work.lastCheckedAt) ||
         isReleasedBeforeMonitorCreation(candidate, work.createdAt) ||
         isAtOrBelowKnownChapter(candidate),
       );
-      let fresh = previouslyUnseen.filter((candidate) =>
+      let fresh = linkDeltaPending ? previouslyUnseen : previouslyUnseen.filter((candidate) =>
         !isHistoricalRelease(candidate, checkedAt) &&
         !isReleasedBeforePreviousCheck(candidate, work.lastCheckedAt) &&
         !isReleasedBeforeMonitorCreation(candidate, work.createdAt) &&
@@ -881,6 +925,7 @@ async function runMonitorRound(timing: ImageMonitorTiming) {
         .filter((number): number is number => number !== null);
       const highestFresh = freshNumbers.length ? Math.max(...freshNumbers) : null;
       if (
+        !linkDeltaPending &&
         fresh.length >= 5 &&
         fresh.every((chapter) => !chapter.releaseDate) &&
         highestExisting !== null &&
@@ -908,7 +953,7 @@ async function runMonitorRound(timing: ImageMonitorTiming) {
           chapter,
         ]),
       );
-      const pending = existing
+      let pending = existing
           .filter((chapter) => {
             const number = numericChapterNumber(chapter.number);
             return chapter.publishedAt === null &&
@@ -924,6 +969,26 @@ async function runMonitorRound(timing: ImageMonitorTiming) {
               parser: `${parser} recovery`,
             },
           );
+      if (previousLinkNumbers) {
+        const existingNumbers = new Set(
+          existing.map((chapter) => chapterNumberIdentity(chapter.number)),
+        );
+        const publishedNumbers = new Set(
+          existing
+            .filter((chapter) => chapter.publishedAt !== null)
+            .map((chapter) => chapterNumberIdentity(chapter.number)),
+        );
+        const linkDifference = safeCandidates.filter((candidate) => {
+          const identity = chapterNumberIdentity(candidate.number);
+          return !previousLinkNumbers.has(identity) && !publishedNumbers.has(identity);
+        });
+        fresh = linkDifference.filter(
+          (candidate) => !existingNumbers.has(chapterNumberIdentity(candidate.number)),
+        );
+        pending = linkDifference.filter((candidate) =>
+          existingNumbers.has(chapterNumberIdentity(candidate.number)),
+        );
+      }
       const deliveryNumbers = new Set<string>();
       const toPublish = [...pending, ...fresh].filter(chapter => {
         const identity = chapterNumberIdentity(chapter.number);
@@ -954,11 +1019,13 @@ async function runMonitorRound(timing: ImageMonitorTiming) {
           await tx.update(monitoredWorksTable).set({
             chaptersSeen: existing.length + historical.length,
             lastCheckedAt: checkedAt,
-            lastStatus: historical.length
-              ? `${parser}: historical chapters ignored`
-              : safeCandidates.length < candidates.length
-                ? `${parser}: absurd chapter ignored`
-              : `${parser}: no new chapters`,
+            lastStatus: linkDeltaPending && safeCandidates.length === 0
+              ? buildMonitorLinkDeltaPendingStatus(previousLinkUrl ?? undefined)
+              : historical.length
+                ? `${parser}: historical chapters ignored`
+                : safeCandidates.length < candidates.length
+                  ? `${parser}: absurd chapter ignored`
+                : `${parser}: no new chapters`,
             updatedAt: checkedAt,
           }).where(eq(monitoredWorksTable.id, work.id));
         });
@@ -1148,7 +1215,13 @@ async function runMonitorRound(timing: ImageMonitorTiming) {
       void recordBotError({ source: "image_monitor", errorCode: "IMAGE_MONITOR_CHECK_FAILED",
         error, context: { workId: work.id, channelId: config.discordChannelId } });
       workTiming.fail(error);
-      await db.update(monitoredWorksTable).set({ lastCheckedAt: new Date(), lastStatus: "Check failed", updatedAt: new Date() }).where(eq(monitoredWorksTable.id, work.id));
+      await db.update(monitoredWorksTable).set({
+        lastCheckedAt: new Date(),
+        lastStatus: linkDeltaPending
+          ? buildMonitorLinkDeltaPendingStatus(previousLinkUrl ?? undefined)
+          : "Check failed",
+        updatedAt: new Date(),
+      }).where(eq(monitoredWorksTable.id, work.id));
     } finally {
       try {
         await listing?.captureSession?.close();
@@ -1156,6 +1229,12 @@ async function runMonitorRound(timing: ImageMonitorTiming) {
         workTiming.fail(error);
         throw error;
       } finally {
+        try {
+          await previousListing?.captureSession?.close();
+        } catch (error) {
+          workTiming.fail(error);
+          throw error;
+        }
         workTiming.finish();
       }
     }
