@@ -20,7 +20,7 @@ describe("platform chapter thumbnail parsing", () => {
     }]);
   });
 
-  it("uses Toomics visible episode numbers and preserves decimal afterwords without using the work ID", () => {
+  it("preserves decimal Toomics chapters from their route without using the work ID", () => {
     const html = `<a href="javascript:;" onclick="Base.popup('login', '/webtoon/episode/toon/6897', 'Y')">
       <div class="ep__episode">135</div>
       <img src="/images/toomics-logo.png" data-original="/uploads/chapter-135.jpg">

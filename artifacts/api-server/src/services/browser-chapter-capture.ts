@@ -376,9 +376,11 @@ export async function findRenderedChapters(
         };
 
         if (platform === "toomics") {
-          const episodeLabel = element.matches(".ep__episode")
-            ? element
-            : element.querySelector(".ep__episode");
+          const episodeLabels = element.matches(".ep__episode")
+            ? [element]
+            : Array.from(element.querySelectorAll(".ep__episode"));
+          if (episodeLabels.length > 1) return values;
+          const episodeLabel = episodeLabels[0];
           if (episodeLabel) {
             const label = episodeLabel.innerText || episodeLabel.textContent || "";
             const normalizedLabel = normalizeNumber(label);

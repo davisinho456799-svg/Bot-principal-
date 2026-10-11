@@ -56,7 +56,7 @@ async function countSolidColorPixels(
 }
 
 describe("single-thumbnail chapter capture", () => {
-  it("uses Toomics visible numbers and preserves decimal afterwords without the work ID", async () => {
+  it("preserves decimal Toomics chapters and their thumbnail without the work ID", async () => {
     const page = await browser.newPage();
     await page.setViewportSize({ width: 900, height: 800 });
     await page.setContent(`<ul style="margin:0;padding:0">
@@ -78,6 +78,7 @@ describe("single-thumbnail chapter capture", () => {
     expect(chapters.map((chapter) => chapter.number)).toContain("135");
     expect(chapters.map((chapter) => chapter.number)).toContain("135.5");
     expect(chapters.some((chapter) => chapter.number === "6897")).toBe(false);
+    expect(chapters.find((chapter) => chapter.number === "135.5")?.thumbnailUrl).toContain("afterword.jpg");
     await page.close();
   });
 
