@@ -10,6 +10,7 @@ import { loadMonitorDependency } from "../lib/monitor-dependencies";
 const PAGE_TIMEOUT_MS = 30_000;
 const MAX_CAPTURE_WIDTH = 2_400;
 const MAX_CAPTURE_HEIGHT = 4_800;
+const MAX_TOOMICS_CHAPTERS_PER_IMAGE = 5;
 // Keep the pixels of the real platform card. Padding here would make the
 // Discord attachment look like a reconstructed strip instead of the source UI.
 const CARD_PADDING = 0;
@@ -49,7 +50,7 @@ export type BrowserListingSession = {
   close(): Promise<void>;
 };
 
-type BrowserChapterSnapshot = BrowserChapter & {
+export type BrowserChapterSnapshot = BrowserChapter & {
   box: ChapterBox;
 };
 
@@ -131,12 +132,12 @@ async function waitForRenderedPage(page: Page): Promise<void> {
     .catch(() => undefined);
 }
 
-async function prepareCapturePage(page: Page): Promise<void> {
+async function prepareCapturePage(page: Page, platform: MonitorPlatform): Promise<void> {
   await page.route("**/*", async (route) => {
     const resourceType = route.request().resourceType();
     const url = route.request().url().toLocaleLowerCase();
     if (
-      resourceType === "font" ||
+      (resourceType === "font" && platform !== "toomics") ||
       resourceType === "media" ||
       resourceType === "websocket" ||
       /doubleclick|googlesyndication|google-analytics|facebook\\.net|hotjar/.test(url)
@@ -632,7 +633,12 @@ export async function findRenderedChapters(
         return {
           number: record.number,
           thumbnailUrl: record.thumbnailUrl,
-          subtitle: record.element.querySelector(".ep_stitle,.episode-subtitle,.chapter-subtitle,[data-chapter-subtitle]")?.textContent?.trim() || undefined,
+          subtitle: record.element.querySelector(
+            platform === "toomics"
+              ? ".ep_stitle,.episode-subtitle,.chapter-subtitle,[data-chapter-subtitle],.ep__title"
+              : ".ep_stitle,.episode-subtitle,.chapter-subtitle,[data-chapter-subtitle]",
+          )?.textContent?.trim() || undefined,
+          subtitleLanguage: platform === "toomics" ? "ko" : undefined,
           releaseDate: releaseDateFrom(
             record.element.innerText || record.element.textContent || "",
           ),
@@ -694,8 +700,9 @@ function fitsTogether(chapters: BrowserChapterSnapshot[]): boolean {
   return box.width <= MAX_CAPTURE_WIDTH && box.height <= MAX_CAPTURE_HEIGHT;
 }
 
-function makeGreedyGroups(
+export function makeGreedyGroups(
   candidates: BrowserChapterSnapshot[],
+  maxChaptersPerGroup = Number.POSITIVE_INFINITY,
 ): BrowserChapterSnapshot[][] {
   const groups: BrowserChapterSnapshot[][] = [];
   let current: BrowserChapterSnapshot[] = [];
@@ -707,7 +714,10 @@ function makeGreedyGroups(
       candidate.captureOrder ===
         current[current.length - 1]!.captureOrder + 1;
 
-    if (current.length && (!adjacent || !fitsTogether(next))) {
+    if (
+      current.length &&
+      (!adjacent || current.length >= maxChaptersPerGroup || !fitsTogether(next))
+    ) {
       groups.push(current);
       current = [];
     }
@@ -1317,7 +1327,7 @@ export async function openBrowserListing(
     nextPage.on("crash", () => {
       pageCrashed = true;
     });
-    await prepareCapturePage(nextPage);
+    await prepareCapturePage(nextPage, platform);
     await nextPage.setExtraHTTPHeaders({
       "Cache-Control": "no-cache, no-store",
       Pragma: "no-cache",
@@ -1402,7 +1412,10 @@ export async function openBrowserListing(
         const selected = enriched
           .filter((chapter) => chapterIds.includes(chapter.captureId))
           .sort((left, right) => left.captureOrder - right.captureOrder);
-        const groups = makeGreedyGroups(selected);
+        const groups = makeGreedyGroups(
+          selected,
+          platform === "toomics" ? MAX_TOOMICS_CHAPTERS_PER_IMAGE : undefined,
+        );
         const captured: CapturedChapterGroup[] = [];
 
         for (const group of groups) {

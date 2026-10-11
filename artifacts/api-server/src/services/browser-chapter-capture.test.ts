@@ -7,7 +7,9 @@ import { applyToptoonPairCapture } from "./toptoon-pair-capture";
 import {
   findRenderedChapters,
   isolatePrimaryThumbnails,
+  makeGreedyGroups,
   promoteToomicsPrimaryThumbnails,
+  type BrowserChapterSnapshot,
   type CaptureThumbnailTarget,
 } from "./browser-chapter-capture";
 
@@ -64,12 +66,14 @@ describe("single-thumbnail chapter capture", () => {
         <a href="javascript:;" onclick="Base.popup('login', '/webtoon/episode/toon/6897', 'Y')" style="display:block;width:320px;height:140px">
           <img src="https://thumb.toomics.com/chapter-135.jpg" width="280" height="100">
           <div class="ep__episode">135</div>
+          <div class="ep__title">마지막 장면</div>
         </a>
       </li>
       <li class="eps__li" style="list-style:none;width:320px;height:140px">
         <a href="javascript:;" onclick="Base.popup('login', '/webtoon/detail/code/234492/ep/135.5/toon/6897', 'Y')" style="display:block;width:320px;height:140px">
           <img src="https://thumb.toomics.com/afterword.jpg" width="280" height="100">
           <div class="ep__episode">후기</div>
+          <div class="ep__title">끝나지 않은 이야기</div>
         </a>
       </li>
     </ul>`);
@@ -79,7 +83,24 @@ describe("single-thumbnail chapter capture", () => {
     expect(chapters.map((chapter) => chapter.number)).toContain("135.5");
     expect(chapters.some((chapter) => chapter.number === "6897")).toBe(false);
     expect(chapters.find((chapter) => chapter.number === "135.5")?.thumbnailUrl).toContain("afterword.jpg");
+    expect(chapters.find((chapter) => chapter.number === "135.5")?.subtitle).toBe("끝나지 않은 이야기");
+    expect(chapters.find((chapter) => chapter.number === "135.5")?.subtitleLanguage).toBe("ko");
     await page.close();
+  });
+
+  it("splits ten Toomics chapter cards into two images of five", () => {
+    const chapters = Array.from({ length: 10 }, (_, index) => ({
+      number: String(index + 101),
+      key: `chapter-${index + 101}`,
+      parser: "Playwright browser",
+      captureId: `toomics-${index + 101}`,
+      captureOrder: index,
+      thumbnailUrl: `https://thumb.toomics.com/${index + 101}.jpg`,
+      box: { x: 0, y: index * 100, width: 640, height: 90 },
+    })) as BrowserChapterSnapshot[];
+
+    expect(makeGreedyGroups(chapters, 5).map(group => group.length)).toEqual([5, 5]);
+    expect(makeGreedyGroups(chapters).map(group => group.length)).toEqual([10]);
   });
 
   it("promotes a Toomics data-original image over the currently rendered logo", async () => {
@@ -166,6 +187,30 @@ describe("single-thumbnail chapter capture", () => {
     await applyCaptureSubtitles(page, [{ captureId: "chapter-36" }]);
     expect(await page.locator(".ep_stitle").isVisible()).toBe(false);
     expect(await page.locator(".ep_title").textContent()).toBe("Episode 36");
+    await page.close();
+  });
+
+  it("replaces a Toomics chapter title with Portuguese when translation is available", async () => {
+    const page = await browser.newPage();
+    await page.setContent(`<article data-monitor-capture-card="toomics-135">
+      <div class="ep__episode">135</div><div class="ep__title">마지막 장면</div>
+      <span class="ep__date">2026.10.08</span></article>`);
+    await applyCaptureSubtitles(page, [{
+      captureId: "toomics-135", subtitlePt: "A última cena",
+    }]);
+    expect(await page.locator(".ep__title").textContent()).toBe("A última cena");
+    expect(await page.locator(".ep__title").getAttribute("lang")).toBe("pt-BR");
+    expect(await page.locator(".ep__date").textContent()).toBe("2026.10.08");
+    await page.close();
+  });
+
+  it("preserves the original Toomics title when translation is unavailable", async () => {
+    const page = await browser.newPage();
+    await page.setContent(`<article data-monitor-capture-card="toomics-135">
+      <div class="ep__title">마지막 장면</div></article>`);
+    await applyCaptureSubtitles(page, [{ captureId: "toomics-135" }]);
+    expect(await page.locator(".ep__title").isVisible()).toBe(true);
+    expect(await page.locator(".ep__title").textContent()).toBe("마지막 장면");
     await page.close();
   });
 

@@ -16,8 +16,9 @@ export async function applyCaptureSubtitles(page: Page, subtitles: CaptureSubtit
         if (subtitle) subtitle.style.setProperty("display", "none", "important");
         continue;
       }
+      subtitle ??= card.querySelector<HTMLElement>(".ep__title");
       if (!subtitle) {
-        const title = card.querySelector<HTMLElement>(".ep_title,.episode-title,.chapter-title,.tit_area");
+        const title = card.querySelector<HTMLElement>(".ep__title,.ep_title,.episode-title,.chapter-title,.tit_area");
         if (!title) throw new Error("Chapter title anchor not found for translated subtitle");
         subtitle = document.createElement("p");
         title.insertAdjacentElement("afterend", subtitle);
