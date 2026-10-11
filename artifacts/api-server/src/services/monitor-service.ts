@@ -1,4 +1,5 @@
 import { and, eq, or } from "drizzle-orm";
+import { createHash } from "node:crypto";
 import type sharp from "sharp";
 import { db } from "@workspace/db";
 import {
@@ -14,7 +15,7 @@ import { measureImageMonitorRound, type ImageMonitorTiming } from "./monitor-tim
 import { monitorExecution } from "./monitor-execution.js";
 import { translateChapterSubtitles } from "./chapter-subtitle-translation";
 import { recordBotError } from "../bot/error-log.js";
-import { buildSubtitleFallbackRow, buildSubtitleRowsLayout } from "./chapter-subtitle-render";
+import { buildSubtitleFallbackRow, buildSubtitleRowsLayout, chapterSubtitleForDisplay } from "./chapter-subtitle-render";
 import { renderToptoonPairCard } from "./toptoon-pair-render";
 import { selectPairTestImage, type TestImageSelection } from "./monitor-test-fallback";
 import { fetchThumbnailBytes } from "./monitor-thumbnail-download";
@@ -28,6 +29,7 @@ import {
   type ParserContext,
 } from "./parsers/index";
 import {
+  capturedGroupWithinLimit,
   openBrowserListing,
   type BrowserChapter,
   type BrowserListingSession,
@@ -46,9 +48,14 @@ type ChapterCandidate = ParsedChapter & {
   captureId?: string;
 };
 
-function captureSubtitles(chapters: ChapterCandidate[]) {
-  return chapters.filter(chapter => chapter.captureId && chapter.subtitle).map(chapter => ({
+function captureSubtitles(chapters: ChapterCandidate[], platform: MonitorPlatform) {
+  return chapters.filter(chapter =>
+    chapter.captureId && (platform === "toomics" || chapter.subtitle)
+  ).map(chapter => ({
     captureId: chapter.captureId!,
+    chapterNumber: platform === "toomics" ? chapter.number : undefined,
+    subtitleEn: chapter.subtitleEn,
+    subtitleKo: chapter.subtitleKo,
     subtitlePt: chapter.subtitlePt,
   }));
 }
@@ -304,6 +311,62 @@ async function fetchListing(
   };
 }
 
+const TOOMICS_LOGO_PLACEHOLDER_SHA256 = "6e60bf68bbb9fa0eba2b72aa5cd659b4e88f182b32799e2b363cf1a1f560874b";
+const TOOMICS_LOGO_PLACEHOLDER_AVERAGE_HASH =
+  "0000000000000000000000000011110000111100000000000000000000000000";
+const TOOMICS_LOGO_HASH_MAX_DISTANCE = 2;
+const TOOMICS_LOGO_ASPECT_RATIO = 438 / 342;
+
+function isToomicsThumbnailUrl(url: string): boolean {
+  try {
+    const hostname = new URL(url).hostname.toLowerCase();
+    return hostname === "toomics.com" || hostname.endsWith(".toomics.com");
+  } catch {
+    return false;
+  }
+}
+
+async function isToomicsLogoPlaceholder(
+  url: string,
+  bytes: Buffer,
+  sharp: SharpFactory,
+): Promise<boolean> {
+  if (!isToomicsThumbnailUrl(url)) return false;
+  if (createHash("sha256").update(bytes).digest("hex") === TOOMICS_LOGO_PLACEHOLDER_SHA256) {
+    return true;
+  }
+
+  const metadata = await sharp(bytes, { limitInputPixels: 24_000_000 }).metadata();
+  if (!metadata.width || !metadata.height) return false;
+  const aspectRatio = metadata.width / metadata.height;
+  if (Math.abs(aspectRatio - TOOMICS_LOGO_ASPECT_RATIO) > 0.08) return false;
+
+  const { data } = await sharp(bytes, { limitInputPixels: 24_000_000 })
+    .resize(8, 8, { fit: "fill" })
+    .greyscale()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  if (data.length !== TOOMICS_LOGO_PLACEHOLDER_AVERAGE_HASH.length) return false;
+  const average = data.reduce((sum, value) => sum + value, 0) / data.length;
+  const averageHash = Array.from(data, value => value >= average ? "1" : "0").join("");
+  const distance = Array.from(averageHash, (bit, index) =>
+    bit === TOOMICS_LOGO_PLACEHOLDER_AVERAGE_HASH[index] ? 0 : 1,
+  ).reduce((sum, difference) => sum + difference, 0);
+  return distance <= TOOMICS_LOGO_HASH_MAX_DISTANCE;
+}
+
+async function isToomicsLogoPlaceholderUrl(url: string): Promise<boolean> {
+  if (!isToomicsThumbnailUrl(url)) return false;
+  try {
+    const sharp = await getOptionalSharp();
+    if (!sharp) return false;
+    const bytes = await fetchThumbnailBytes(url, { timeoutMs: 3_000, maxBytes: 2 * 1024 * 1024 });
+    return Boolean(bytes && await isToomicsLogoPlaceholder(url, bytes, sharp));
+  } catch {
+    return false;
+  }
+}
+
 async function downloadThumbnail(url: string, timeoutMs?: number): Promise<Buffer | null> {
   try {
     if (/fullversion|full[-_ ]?version|download[-_ ]?app|app[-_ ]?version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)|(?:^|[/._-])(?:banner|bnr|lock|locked|no[-_ ]?image|placeholder)(?:[/._-]|$)/i.test(url)) {
@@ -313,6 +376,10 @@ async function downloadThumbnail(url: string, timeoutMs?: number): Promise<Buffe
     if (!sharp) return null;
     const bytes = await fetchThumbnailBytes(url, { timeoutMs });
     if (!bytes) return null;
+    if (await isToomicsLogoPlaceholder(url, bytes, sharp)) {
+      logger.warn({ host: new URL(url).hostname }, "Miniatura do Toomics rejeitada: imagem contém apenas o logo");
+      return null;
+    }
     const metadata = await sharp(bytes, { limitInputPixels: 24_000_000 }).metadata();
     if (!metadata.width || !metadata.height) return null;
     if (metadata.width / metadata.height > 4.2) return null;
@@ -336,6 +403,7 @@ async function buildStrip(
   chapters: ChapterCandidate[],
   requireThumbnail = false,
   includeBanner = true,
+  rejectedThumbnailUrls: ReadonlySet<string> = new Set(),
 ): Promise<Buffer | null> {
   const sharp = await getOptionalSharp();
   if (!sharp) return null;
@@ -346,12 +414,14 @@ async function buildStrip(
   const height = layout.height;
   const images = await Promise.all(chapters.map(async (chapter) => ({
     chapter,
-    data: await downloadThumbnail(chapter.thumbnailUrl, requireThumbnail ? 10_000 : undefined),
+    data: rejectedThumbnailUrls.has(chapter.thumbnailUrl)
+      ? null
+      : await downloadThumbnail(chapter.thumbnailUrl, requireThumbnail ? 10_000 : undefined),
   })));
-  if (requireThumbnail && images.every(image => !image.data)) return null;
+  if (images.every(image => !image.data)) return null;
   const imageRows = images.map(({ chapter, data }, index) => {
     const y = layout.rows[index].y;
-    if (chapter.subtitlePt) return buildSubtitleFallbackRow(chapter, y, layout.rows[index].height, Boolean(data));
+    if (chapterSubtitleForDisplay(chapter)) return buildSubtitleFallbackRow(chapter, y, layout.rows[index].height, Boolean(data));
     return `<rect x="24" y="${y}" width="872" height="140" rx="14" fill="#f5f0e8" stroke="#ded5c8"/><text x="52" y="${y + 78}" fill="#132b3f" font-family="Arial,sans-serif" font-size="25" font-weight="700">${escapeXml(chapter.number)}</text>${data ? "" : `<text x="185" y="${y + 78}" fill="#7a746c" font-family="Arial,sans-serif" font-size="18">Thumbnail unavailable</text>`}`;
   }).join("");
   const baseSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="100%" height="100%" fill="#fffaf3"/>${includeBanner ? buildReleaseBannerMarkup(title, chapters.length) : ""}${imageRows}</svg>`;
@@ -359,12 +429,12 @@ async function buildStrip(
   const composites = await Promise.all(images.map(async ({ data, chapter }, index) => {
     if (!data) return null;
     const thumbnail = await sharp(data)
-      .resize(chapter.subtitlePt ? 240 : 690, 120, { fit: "cover", position: "centre" })
+      .resize(chapterSubtitleForDisplay(chapter) ? 240 : 690, 120, { fit: "cover", position: "centre" })
       .png()
       .toBuffer();
     return {
       input: thumbnail,
-      left: chapter.subtitlePt ? 40 : 185,
+      left: chapterSubtitleForDisplay(chapter) ? 40 : 185,
       top: layout.rows[index].y + 10,
     };
   }));
@@ -506,9 +576,29 @@ export async function postStrip(
   // Never send a raw browser capture: that was the source of inconsistent
   // notifications where only some images showed "NEW CHAPTERS".
   let browserImage: Buffer | null = null;
+  const rejectedToomicsThumbnailUrls = new Set<string>();
   if (capturedImage) {
     try {
-      browserImage = await addReleaseBanner(capturedImage, title, chapters.length);
+      const toomicsThumbnailUrls = [...new Set(
+        chapters.map(chapter => chapter.thumbnailUrl).filter(isToomicsThumbnailUrl),
+      )];
+      const placeholderMatches = await Promise.all(
+        toomicsThumbnailUrls.map(async url => [url, await isToomicsLogoPlaceholderUrl(url)] as const),
+      );
+      for (const [url, isPlaceholder] of placeholderMatches) {
+        if (isPlaceholder) rejectedToomicsThumbnailUrls.add(url);
+      }
+      const rejectedChapterNumbers = chapters
+        .filter(chapter => rejectedToomicsThumbnailUrls.has(chapter.thumbnailUrl))
+        .map(chapter => chapter.number);
+      if (rejectedChapterNumbers.length) {
+        logger.warn(
+          { title, chapterNumbers: rejectedChapterNumbers },
+          "Captura do navegador descartada: miniatura do Toomics contém apenas o logo",
+        );
+      } else {
+        browserImage = await addReleaseBanner(capturedImage, title, chapters.length);
+      }
     } catch (error) {
       logger.warn({ err: error, title }, "Falha ao adicionar banner à captura; tentando fallback");
     }
@@ -549,7 +639,7 @@ export async function postStrip(
     primaryFallback = selected.selection === "primary";
   } else if (!png) {
     try {
-      png = await buildStrip(title, chapters);
+      png = await buildStrip(title, chapters, false, true, rejectedToomicsThumbnailUrls);
     } catch (error) {
       // Normal notifications may still deliver their textual release notice.
       logger.warn({ err: error, title }, "Falha ao gerar imagem do monitor; enviando aviso sem anexo");
@@ -687,7 +777,7 @@ export async function runResendNotification(
       await reportProgress(progress, "Tentando capturar novamente o card renderizado.");
       try {
         const groups = await listing.captureSession.captureGroups(
-          [chapter.captureId], captureSubtitles([chapter]), useToptoonPairs,
+          [chapter.captureId], captureSubtitles([chapter], work.platform as MonitorPlatform), useToptoonPairs,
         );
         const group = groups.find((candidate) =>
           candidate.chapterNumbers.some((number) => chapterNumberIdentity(number) === wanted),
@@ -779,7 +869,9 @@ export async function runTestNotification(
     if (listing.captureSession && chapter.captureId && (!topToonPairTest || chapter.extraThumbnailUrls)) {
       await reportProgress(progress, "Tentando capturar o card real renderizado pelo site.");
       try {
-        const [group] = await listing.captureSession.captureGroups([chapter.captureId], captureSubtitles([chapter]), topToonPairTest);
+        const [group] = await listing.captureSession.captureGroups(
+          [chapter.captureId], captureSubtitles([chapter], work.platform as MonitorPlatform), topToonPairTest,
+        );
         if (await isUsableBrowserCapture(group?.image)) {
           capturedImage = group?.image;
           await reportProgress(progress, "Captura direta do card concluída.");
@@ -1064,7 +1156,7 @@ async function runMonitorRound(timing: ImageMonitorTiming) {
         try {
           capturedGroups = await listing.captureSession.captureGroups(
             toPublish.map((chapter) => chapter.captureId).filter(Boolean) as string[],
-            captureSubtitles(toPublish),
+            captureSubtitles(toPublish, work.platform as MonitorPlatform),
             work.platform === "toptoon",
           );
         } catch (error) {
@@ -1076,6 +1168,13 @@ async function runMonitorRound(timing: ImageMonitorTiming) {
       }
       const validCapturedGroups: CapturedChapterGroup[] = [];
       for (const group of capturedGroups) {
+        if (!capturedGroupWithinLimit(work.platform as MonitorPlatform, group.chapterNumbers.length)) {
+          logger.warn(
+            { workId: work.id, chapterNumbers: group.chapterNumbers },
+            "Captura agrupada excedeu o limite de capítulos por imagem; usando lotes de fallback",
+          );
+          continue;
+        }
         if (await isUsableBrowserCapture(group.image)) {
           validCapturedGroups.push(group);
         } else {

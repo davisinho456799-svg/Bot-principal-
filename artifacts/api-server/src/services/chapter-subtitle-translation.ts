@@ -103,6 +103,7 @@ export async function translateChapterSubtitles(
   // Sequential requests respect the free service budget. Only outgoing chapters
   // reach this function, never the initial baseline or the whole saved history.
   for (const chapter of chapters) {
+    if (chapter.subtitleEn || chapter.subtitleKo) continue;
     if (chapter.subtitle) chapter.subtitlePt = await translate(chapter.subtitle, chapter.subtitleLanguage);
   }
 }

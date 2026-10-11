@@ -10,12 +10,16 @@ import { loadMonitorDependency } from "../lib/monitor-dependencies";
 const PAGE_TIMEOUT_MS = 30_000;
 const MAX_CAPTURE_WIDTH = 2_400;
 const MAX_CAPTURE_HEIGHT = 4_800;
-const MAX_TOOMICS_CHAPTERS_PER_IMAGE = 5;
+export const MAX_TOOMICS_CHAPTERS_PER_IMAGE = 5;
 // Keep the pixels of the real platform card. Padding here would make the
 // Discord attachment look like a reconstructed strip instead of the source UI.
 const CARD_PADDING = 0;
 const CARD_MEDIA_WAIT_MS = 30_000;
 const CARD_MEDIA_POLL_MS = 150;
+
+export function capturedGroupWithinLimit(platform: MonitorPlatform, chapterCount: number): boolean {
+  return platform !== "toomics" || chapterCount <= MAX_TOOMICS_CHAPTERS_PER_IMAGE;
+}
 
 type ChapterBox = {
   x: number;
@@ -147,6 +151,30 @@ async function prepareCapturePage(page: Page, platform: MonitorPlatform): Promis
     }
     await route.continue();
   });
+}
+
+async function loadToomicsKoreanFont(page: Page): Promise<boolean> {
+  try {
+    await page.addStyleTag({
+      url: "https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap",
+    });
+    await page.addStyleTag({
+      content: `
+        .ep__episode, .ep__title, .ep_stitle, .episode-subtitle, .chapter-subtitle {
+          font-family: "Noto Sans KR", sans-serif !important;
+        }
+      `,
+    });
+    return await page.evaluate(async () => {
+      const loaded = await Promise.race([
+        document.fonts.load('500 16px "Noto Sans KR"', "한국어"),
+        new Promise<FontFace[]>((resolve) => setTimeout(() => resolve([]), 6_000)),
+      ]);
+      return loaded.length > 0 && document.fonts.check('500 16px "Noto Sans KR"', "한국어");
+    });
+  } catch {
+    return false;
+  }
 }
 
 async function resetBrowserAfterCrash(): Promise<void> {
@@ -630,15 +658,35 @@ export async function findRenderedChapters(
       return records.map((record, index) => {
         const captureId = "monitor-card-" + index;
         record.element.setAttribute(CARD_ATTRIBUTE, captureId);
+        const titleText = (selector) => {
+          const node = record.element.querySelector(selector);
+          if (!node) return "";
+          return node.getAttribute("data-subtitle-en") ||
+            node.getAttribute("data-title-en") ||
+            node.getAttribute("data-ep-title-en") ||
+            node.textContent?.trim() || "";
+        };
+        const genericTitle = titleText(
+          platform === "toomics"
+            ? ".ep_stitle,.episode-subtitle,.chapter-subtitle,[data-chapter-subtitle],.ep__title"
+            : ".ep_stitle,.episode-subtitle,.chapter-subtitle,[data-chapter-subtitle]",
+        );
+        const pageLanguage = (document.documentElement.lang || (platform === "toomics" ? "ko" : "")).toLowerCase();
+        const subtitleEn = platform === "toomics"
+          ? titleText('[data-subtitle-en],[data-title-en],[data-ep-title-en],[lang|="en"],[data-lang="en"],.ep__title--en,.ep_stitle--en') ||
+            (/^en(?:-|$)/.test(pageLanguage) ? genericTitle : "")
+          : "";
+        const subtitleKo = platform === "toomics"
+          ? titleText('[data-subtitle-ko],[data-title-ko],[data-ep-title-ko],[lang|="ko"],[data-lang="ko"],.ep__title--ko,.ep_stitle--ko') ||
+            (/^ko(?:-|$)/.test(pageLanguage) ? genericTitle : "")
+          : "";
         return {
           number: record.number,
           thumbnailUrl: record.thumbnailUrl,
-          subtitle: record.element.querySelector(
-            platform === "toomics"
-              ? ".ep_stitle,.episode-subtitle,.chapter-subtitle,[data-chapter-subtitle],.ep__title"
-              : ".ep_stitle,.episode-subtitle,.chapter-subtitle,[data-chapter-subtitle]",
-          )?.textContent?.trim() || undefined,
-          subtitleLanguage: platform === "toomics" ? "ko" : undefined,
+          subtitle: subtitleEn || subtitleKo || genericTitle || undefined,
+          subtitleLanguage: subtitleEn ? "en" : subtitleKo ? "ko" : undefined,
+          ...(subtitleEn ? { subtitleEn } : {}),
+          ...(subtitleKo ? { subtitleKo } : {}),
           releaseDate: releaseDateFrom(
             record.element.innerText || record.element.textContent || "",
           ),
@@ -1369,6 +1417,7 @@ export async function openBrowserListing(
       });
       await waitForRenderedPage(page);
     }
+    const koreanFontLoaded = platform !== "toomics" || await loadToomicsKoreanFont(page);
     const diagnostics = await page.evaluate(() => {
       const bodyText = (document.body?.innerText || "").replace(/\s+/g, " ").trim();
       const lowerText = bodyText.toLocaleLowerCase();
@@ -1400,6 +1449,7 @@ export async function openBrowserListing(
       };
     });
     diagnostics.authentication = authentication;
+    if (!koreanFontLoaded) diagnostics.signals.push("korean-font-unavailable");
     const candidates = await findRenderedChapters(page, platform);
     const enriched = enrichChapterSubtitles(await page.content(), listingUrl, platform, candidates);
 

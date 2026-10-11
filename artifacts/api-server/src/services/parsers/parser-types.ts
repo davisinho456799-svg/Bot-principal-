@@ -12,6 +12,8 @@ export type ParsedChapter = {
   extraThumbnailUrls?: [string, string];
   subtitle?: string;
   subtitleLanguage?: string;
+  subtitleEn?: string;
+  subtitleKo?: string;
   subtitlePt?: string;
   /**
    * Date shown by the source card, when the platform exposes one.

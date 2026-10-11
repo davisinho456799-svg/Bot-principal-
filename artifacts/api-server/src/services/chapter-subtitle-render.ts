@@ -3,6 +3,10 @@ import type { ParsedChapter } from "./parsers/parser-types";
 const escapeXml = (value: string) => value.replace(/[<>&"']/g, c =>
   ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;", "'": "&apos;" })[c]!);
 
+export function chapterSubtitleForDisplay(chapter: ParsedChapter): string | undefined {
+  return chapter.subtitleEn ?? chapter.subtitleKo ?? chapter.subtitlePt;
+}
+
 export function subtitleLines(text: string, limit = 46): string[] {
   const lines: string[] = [];
   let line = "";
@@ -22,7 +26,8 @@ export function subtitleLines(text: string, limit = 46): string[] {
 export function buildSubtitleRowsLayout(chapters: ParsedChapter[], headerHeight: number, rowHeight: number) {
   let y = headerHeight;
   const rows = chapters.map(chapter => {
-    const lines = chapter.subtitlePt ? subtitleLines(chapter.subtitlePt).length : 0;
+    const displayedSubtitle = chapterSubtitleForDisplay(chapter);
+    const lines = displayedSubtitle ? subtitleLines(displayedSubtitle).length : 0;
     const height = Math.max(rowHeight, (chapter.releaseDate ? 124 : 100) + lines * 26);
     const row = { y, height };
     y += height;
@@ -32,7 +37,8 @@ export function buildSubtitleRowsLayout(chapters: ParsedChapter[], headerHeight:
 }
 
 export function buildSubtitleFallbackRow(chapter: ParsedChapter, y: number, height: number, hasThumbnail: boolean) {
-  const lines = subtitleLines(chapter.subtitlePt ?? "");
+  const displayedSubtitle = chapterSubtitleForDisplay(chapter);
+  const lines = subtitleLines(displayedSubtitle ?? "");
   return `<rect x="24" y="${y}" width="872" height="${height - 24}" rx="14" fill="#f5f0e8" stroke="#ded5c8"/>
     ${hasThumbnail ? "" : `<text x="52" y="${y + 70}" fill="#7a746c" font-family="Arial,sans-serif" font-size="18">Imagem indisponível</text>`}
     <text x="308" y="${y + 42}" fill="#132b3f" font-family="Arial,sans-serif" font-size="25" font-weight="700">${escapeXml(chapter.number)}</text>

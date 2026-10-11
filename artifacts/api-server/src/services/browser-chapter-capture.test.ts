@@ -5,6 +5,7 @@ import sharp from "sharp";
 import { applyCaptureSubtitles } from "./chapter-subtitle-capture";
 import { applyToptoonPairCapture } from "./toptoon-pair-capture";
 import {
+  capturedGroupWithinLimit,
   findRenderedChapters,
   isolatePrimaryThumbnails,
   makeGreedyGroups,
@@ -73,18 +74,22 @@ describe("single-thumbnail chapter capture", () => {
         <a href="javascript:;" onclick="Base.popup('login', '/webtoon/detail/code/234492/ep/135.5/toon/6897', 'Y')" style="display:block;width:320px;height:140px">
           <img src="https://thumb.toomics.com/afterword.jpg" width="280" height="100">
           <div class="ep__episode">후기</div>
-          <div class="ep__title">끝나지 않은 이야기</div>
+          <div class="ep__title" lang="ko">끝나지 않은 이야기</div>
+          <div class="ep__title" lang="en">An Unfinished Story</div>
         </a>
       </li>
-    </ul>`);
+    </ul>`, { waitUntil: "domcontentloaded" });
+    await page.evaluate(() => { document.documentElement.lang = "ko"; });
 
     const chapters = await findRenderedChapters(page, "toomics");
     expect(chapters.map((chapter) => chapter.number)).toContain("135");
     expect(chapters.map((chapter) => chapter.number)).toContain("135.5");
     expect(chapters.some((chapter) => chapter.number === "6897")).toBe(false);
     expect(chapters.find((chapter) => chapter.number === "135.5")?.thumbnailUrl).toContain("afterword.jpg");
-    expect(chapters.find((chapter) => chapter.number === "135.5")?.subtitle).toBe("끝나지 않은 이야기");
-    expect(chapters.find((chapter) => chapter.number === "135.5")?.subtitleLanguage).toBe("ko");
+    expect(chapters.find((chapter) => chapter.number === "135.5")?.subtitle).toBe("An Unfinished Story");
+    expect(chapters.find((chapter) => chapter.number === "135.5")?.subtitleLanguage).toBe("en");
+    expect(chapters.find((chapter) => chapter.number === "135.5")?.subtitleEn).toBe("An Unfinished Story");
+    expect(chapters.find((chapter) => chapter.number === "135.5")?.subtitleKo).toBe("끝나지 않은 이야기");
     await page.close();
   });
 
@@ -101,6 +106,26 @@ describe("single-thumbnail chapter capture", () => {
 
     expect(makeGreedyGroups(chapters, 5).map(group => group.length)).toEqual([5, 5]);
     expect(makeGreedyGroups(chapters).map(group => group.length)).toEqual([10]);
+    expect(capturedGroupWithinLimit("toomics", 5)).toBe(true);
+    expect(capturedGroupWithinLimit("toomics", 13)).toBe(false);
+    expect(capturedGroupWithinLimit("toptoon", 13)).toBe(true);
+  });
+
+  it("preserves the original Toomics title and writes the decimal episode number without translation", async () => {
+    const page = await browser.newPage();
+    await page.setContent(`<article data-monitor-capture-card="toomics-135-5">
+      <div class="ep__episode">후기</div>
+      <div class="ep__title">끝나지 않은 이야기</div>
+    </article>`);
+
+    await applyCaptureSubtitles(page, [{
+      captureId: "toomics-135-5",
+      chapterNumber: "135.5",
+    }]);
+
+    expect(await page.locator(".ep__episode").textContent()).toBe("135.5");
+    expect(await page.locator(".ep__title").textContent()).toBe("끝나지 않은 이야기");
+    await page.close();
   });
 
   it("promotes a Toomics data-original image over the currently rendered logo", async () => {
@@ -190,16 +215,19 @@ describe("single-thumbnail chapter capture", () => {
     await page.close();
   });
 
-  it("replaces a Toomics chapter title with Portuguese when translation is available", async () => {
+  it("prefers the English title over Korean and Portuguese fallbacks", async () => {
     const page = await browser.newPage();
     await page.setContent(`<article data-monitor-capture-card="toomics-135">
-      <div class="ep__episode">135</div><div class="ep__title">마지막 장면</div>
+      <div class="ep__episode">135</div>
+      <div class="ep__title" lang="ko">마지막 장면</div>
+      <div class="ep__title" lang="en">The Last Scene</div>
       <span class="ep__date">2026.10.08</span></article>`);
     await applyCaptureSubtitles(page, [{
-      captureId: "toomics-135", subtitlePt: "A última cena",
+      captureId: "toomics-135", subtitleEn: "The Last Scene",
+      subtitleKo: "마지막 장면", subtitlePt: "A última cena",
     }]);
-    expect(await page.locator(".ep__title").textContent()).toBe("A última cena");
-    expect(await page.locator(".ep__title").getAttribute("lang")).toBe("pt-BR");
+    expect(await page.locator(".ep__title[lang='en']").textContent()).toBe("The Last Scene");
+    expect(await page.locator(".ep__title[lang='en']").getAttribute("lang")).toBe("en");
     expect(await page.locator(".ep__date").textContent()).toBe("2026.10.08");
     await page.close();
   });
