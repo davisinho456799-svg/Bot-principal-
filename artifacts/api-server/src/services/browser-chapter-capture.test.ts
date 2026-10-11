@@ -5,6 +5,7 @@ import sharp from "sharp";
 import { applyCaptureSubtitles } from "./chapter-subtitle-capture";
 import { applyToptoonPairCapture } from "./toptoon-pair-capture";
 import {
+  findRenderedChapters,
   isolatePrimaryThumbnails,
   promoteToomicsPrimaryThumbnails,
   type CaptureThumbnailTarget,
@@ -55,6 +56,31 @@ async function countSolidColorPixels(
 }
 
 describe("single-thumbnail chapter capture", () => {
+  it("uses Toomics visible numbers and preserves decimal afterwords without the work ID", async () => {
+    const page = await browser.newPage();
+    await page.setViewportSize({ width: 900, height: 800 });
+    await page.setContent(`<ul style="margin:0;padding:0">
+      <li class="eps__li" style="list-style:none;width:320px;height:140px">
+        <a href="javascript:;" onclick="Base.popup('login', '/webtoon/episode/toon/6897', 'Y')" style="display:block;width:320px;height:140px">
+          <img src="https://thumb.toomics.com/chapter-135.jpg" width="280" height="100">
+          <div class="ep__episode">135</div>
+        </a>
+      </li>
+      <li class="eps__li" style="list-style:none;width:320px;height:140px">
+        <a href="javascript:;" onclick="Base.popup('login', '/webtoon/detail/code/234492/ep/135.5/toon/6897', 'Y')" style="display:block;width:320px;height:140px">
+          <img src="https://thumb.toomics.com/afterword.jpg" width="280" height="100">
+          <div class="ep__episode">후기</div>
+        </a>
+      </li>
+    </ul>`);
+
+    const chapters = await findRenderedChapters(page, "toomics");
+    expect(chapters.map((chapter) => chapter.number)).toContain("135");
+    expect(chapters.map((chapter) => chapter.number)).toContain("135.5");
+    expect(chapters.some((chapter) => chapter.number === "6897")).toBe(false);
+    await page.close();
+  });
+
   it("promotes a Toomics data-original image over the currently rendered logo", async () => {
     const page = await browser.newPage();
     const logo = svgDataUrl("#d43b35");

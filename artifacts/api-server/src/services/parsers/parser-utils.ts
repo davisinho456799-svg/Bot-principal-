@@ -150,6 +150,20 @@ type PlatformMarkupRules = {
   chapterAttributes: string[];
 };
 
+function getToomicsDisplayedEpisodeNumber(
+  markup: string,
+  platform: MonitorPlatform,
+): string | null | undefined {
+  if (platform !== "toomics") return undefined;
+  const label = markup.match(
+    /<(?:div|span)\b[^>]*class=['"][^'"]*\bep__episode\b[^'"]*['"][^>]*>([\s\S]*?)<\/(?:div|span)>/i,
+  )?.[1];
+  if (label === undefined) return undefined;
+  const number = cleanText(label);
+  if (/^\d+(?:\.\d+)?$/.test(number)) return number;
+  return markup.match(/\/ep\/(\d+(?:\.\d+)?)(?:\/|[?#\s"']|$)/i)?.[1] ?? null;
+}
+
 function parsePlatformCards(
   html: string,
   listingUrl: string,
@@ -158,8 +172,10 @@ function parsePlatformCards(
   const candidates: ParsedChapter[] = [];
   for (const match of html.matchAll(rules.cardPattern)) {
     const markup = match[0];
+    const displayedNumber = getToomicsDisplayedEpisodeNumber(markup, rules.platform);
+    if (displayedNumber === null) continue;
     const href = getAttribute(markup, ["href", "data-href", "data-url"]);
-    const number = extractChapterNumber(markup, href, true);
+    const number = displayedNumber ?? extractChapterNumber(markup, href, true);
     const thumbnail = getThumbnail(markup, listingUrl, rules.platform);
     const subtitle = markup.match(/<(?:p|span|div)\b[^>]*class=['"][^'"]*\b(?:ep_stitle|episode-subtitle|chapter-subtitle)\b[^'"]*['"][^>]*>([\s\S]*?)<\/(?:p|span|div)>/i)?.[1];
     if (number && thumbnail) candidates.push({
@@ -177,7 +193,9 @@ function parsePlatformCards(
     );
     for (const match of html.matchAll(markerPattern)) {
       const markup = match[0];
-      const number = extractChapterNumber(markup, getAttribute(markup, ["href", "data-href", "data-url"]), true);
+      const displayedNumber = getToomicsDisplayedEpisodeNumber(markup, rules.platform);
+      if (displayedNumber === null) continue;
+      const number = displayedNumber ?? extractChapterNumber(markup, getAttribute(markup, ["href", "data-href", "data-url"]), true);
       const thumbnail = getThumbnail(markup, listingUrl, rules.platform);
       if (number && thumbnail) candidates.push({ number, thumbnailUrl: thumbnail });
     }

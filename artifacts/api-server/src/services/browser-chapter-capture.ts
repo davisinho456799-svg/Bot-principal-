@@ -261,7 +261,7 @@ async function loginToomics(page: Page): Promise<string> {
  * card/link, not an arbitrary image. Toptoon banners such as "FULLVERSION
  * APP" therefore never become candidates because they have no chapter marker.
  */
-async function findRenderedChapters(
+export async function findRenderedChapters(
   page: Page,
   platform: MonitorPlatform,
 ): Promise<BrowserChapterSnapshot[]> {
@@ -374,6 +374,33 @@ async function findRenderedChapters(
             values.push(normalized);
           }
         };
+
+        if (platform === "toomics") {
+          const episodeLabel = element.matches(".ep__episode")
+            ? element
+            : element.querySelector(".ep__episode");
+          if (episodeLabel) {
+            const label = episodeLabel.innerText || episodeLabel.textContent || "";
+            const normalizedLabel = normalizeNumber(label);
+            if (numberPattern.test(normalizedLabel)) {
+              add(normalizedLabel);
+              return values;
+            }
+            for (const attribute of Array.from(element.attributes)) {
+              const routeNumber = attribute.value.match(
+                new RegExp(
+                  "/ep/(" + digit + "{1,5}(?:" + slash + "." + digit + "+)?)(?:/|[?#]|$)",
+                  "i",
+                ),
+              );
+              if (routeNumber) {
+                add(routeNumber[1]);
+                break;
+              }
+            }
+            return values;
+          }
+        }
 
         for (const attribute of platformAttributes) {
           const value = element.getAttribute(attribute);

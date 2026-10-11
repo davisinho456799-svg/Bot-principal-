@@ -19,4 +19,29 @@ describe("platform chapter thumbnail parsing", () => {
       thumbnailUrl: "https://global.toomics.com/uploads/chapter-14.jpg",
     }]);
   });
+
+  it("uses Toomics visible episode numbers and preserves decimal afterwords without using the work ID", () => {
+    const html = `<a href="javascript:;" onclick="Base.popup('login', '/webtoon/episode/toon/6897', 'Y')">
+      <div class="ep__episode">135</div>
+      <img src="/images/toomics-logo.png" data-original="/uploads/chapter-135.jpg">
+    </a>
+    <a href="javascript:;" onclick="Base.popup('login', '/webtoon/detail/code/234492/ep/135.5/toon/6897', 'Y')">
+      <div class="ep__episode">후기</div>
+      <img src="/images/toomics-logo.png" data-original="/uploads/afterword.jpg">
+    </a>`;
+
+    expect(
+      parsePlatformChapterHtml(
+        html,
+        "https://www.toomics.com/uplmscg/episode/toon/6897",
+        "toomics",
+      ),
+    ).toEqual([{
+      number: "135",
+      thumbnailUrl: "https://www.toomics.com/uploads/chapter-135.jpg",
+    }, {
+      number: "135.5",
+      thumbnailUrl: "https://www.toomics.com/uploads/afterword.jpg",
+    }]);
+  });
 });
