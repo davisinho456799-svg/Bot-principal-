@@ -78,7 +78,12 @@ vi.mock("./monitor-diagnostic.js", () => ({
 
 import { executeManhwaCommand, monitorCommandDefinition } from "./discord-command-service.js";
 
-function interaction(subcommand: string, number: number | null = null, pairTest = false) {
+function interaction(
+  subcommand: string,
+  number: number | null = null,
+  pairTest = false,
+  stringOverrides: Record<string, string> = {},
+) {
   let confirmationIds: string[] = [];
   const message = {
     awaitMessageComponent: vi.fn(async (options) => {
@@ -110,7 +115,13 @@ function interaction(subcommand: string, number: number | null = null, pairTest 
       getSubcommand: () => subcommand,
       getInteger: () => number,
       getBoolean: () => pairTest,
-      getString: (key: string) => ({ link: "https://www.lezhin.com/new", nome: "D", plataforma: "lezhin", capitulo: "12.5" })[key],
+      getString: (key: string) => ({
+        link: "https://www.lezhin.com/new",
+        nome: "D",
+        plataforma: "lezhin",
+        capitulo: "12.5",
+        ...stringOverrides,
+      })[key],
     },
   };
   return { fake, command: fake as unknown as ChatInputCommandInteraction };
@@ -192,6 +203,44 @@ describe("safe monitor commands", () => {
     );
   });
 
+  it("edits only the selected work link after confirmation and preserves its history", async () => {
+    state.onPrompt = () => { state.rows.find((row) => row.id === 1)!.active = false; };
+    const { fake, command } = interaction("editar_link", 2);
+    await executeManhwaCommand(command);
+
+    expect(fake.editReply.mock.calls[0][0].content).toContain("Alterar o link de **C** (nº 2)");
+    expect(fake.editReply.mock.calls[0][0].content).toContain("O nome, a plataforma e o histórico de capítulos serão preservados");
+    expect(state.rows.find((row) => row.id === 10)!.listingUrl).toBe("https://www.lezhin.com/new");
+    expect(state.rows.find((row) => row.id === 10)!.title).toBe("C");
+    expect(state.rows.find((row) => row.id === 10)!.active).toBe(true);
+    expect(state.rows.find((row) => row.id === 1)!.listingUrl).toBe("https://example.test/a");
+    expect(state.updates).toHaveBeenCalledWith(
+      { listingUrl: "https://www.lezhin.com/new", updatedAt: expect.any(Date) },
+      { conditions: [{ field: "id", value: 10 }, { field: "active", value: true }] },
+    );
+  });
+
+  it("does not edit a link when the user cancels", async () => {
+    state.action = "cancel";
+    await executeManhwaCommand(interaction("editar_link", 2).command);
+    expect(state.updates).not.toHaveBeenCalled();
+    expect(state.rows.find((row) => row.id === 10)!.listingUrl).toBe("https://example.test/c");
+  });
+
+  it("rejects an invalid or already-used link without prompting", async () => {
+    const invalid = interaction("editar_link", 2, false, { link: "ftp://www.lezhin.com/new" });
+    await executeManhwaCommand(invalid.command);
+    expect(invalid.fake.editReply.mock.calls.at(-1)![0].content).toContain("http:// ou https://");
+    expect(invalid.fake.editReply.mock.calls.at(-1)![0].components).toEqual([]);
+
+    state.rows[1].listingUrl = "https://www.lezhin.com/new";
+    const duplicate = interaction("editar_link", 2);
+    await executeManhwaCommand(duplicate.command);
+    expect(duplicate.fake.editReply.mock.calls.at(-1)![0].content).toContain("já está cadastrado");
+    expect(duplicate.fake.editReply.mock.calls.at(-1)![0].components).toEqual([]);
+    expect(state.updates).not.toHaveBeenCalled();
+  });
+
   it("does not rename when the user cancels", async () => {
     state.action = "cancel";
     await executeManhwaCommand(interaction("renomear", 2).command);
@@ -248,7 +297,7 @@ describe("safe monitor commands", () => {
     expect(final).toContain("Falha final.");
   });
 
-  it.each(["teste", "remover", "renomear", "reenviar"])("rejects an old internal ID for %s without falling back", async (command) => {
+  it.each(["teste", "remover", "renomear", "editar_link", "reenviar"])("rejects an old internal ID for %s without falling back", async (command) => {
     await executeManhwaCommand(interaction(command, 10).command);
     expect(state.notification).not.toHaveBeenCalled();
     expect(state.resend).not.toHaveBeenCalled();
@@ -301,7 +350,7 @@ describe("safe monitor commands", () => {
   });
 
   it("retains integer option names for compatibility but requires positive numbers", () => {
-    for (const name of ["remover", "teste", "renomear", "reenviar"]) {
+    for (const name of ["remover", "teste", "renomear", "editar_link", "reenviar"]) {
       const command = monitorCommandDefinition.options!.find((option) => option.name === name);
       expect(command?.options?.[0]).toMatchObject({ type: 4, min_value: 1 });
     }

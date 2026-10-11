@@ -80,6 +80,26 @@ export const monitorCommandDefinition = new SlashCommandBuilder()
     )
     .addSubcommand((command) =>
       command
+        .setName("editar_link")
+        .setDescription("Altera o link de uma obra monitorada")
+        .addIntegerOption((option) =>
+          option
+            .setName("obra")
+            .setDescription("Número atual exibido por /monitor listar; exige confirmação")
+            .setMinValue(1)
+            .setRequired(true),
+        )
+        .addStringOption((option) =>
+          option
+            .setName("link")
+            .setDescription("Novo link público da obra ou da lista de capítulos")
+            .setMinLength(1)
+            .setMaxLength(2000)
+            .setRequired(true),
+        ),
+    )
+    .addSubcommand((command) =>
+      command
         .setName("historico")
         .setDescription("Lista os últimos capítulos enviados ao Discord"),
     )
@@ -287,6 +307,113 @@ async function handleList(interaction: ChatInputCommandInteraction) {
   });
 }
 
+async function handleEditLink(interaction: ChatInputCommandInteraction) {
+  const workNumber = interaction.options.getInteger("obra", true);
+  const selected = resolveMonitorWorkNumber(await getActiveNumberedMonitorWorks(), workNumber);
+  if (!selected) {
+    await replyError(interaction, `Não encontrei a obra nº ${workNumber}. Use /monitor listar para conferir a numeração atual.`);
+    return;
+  }
+
+  let listingUrl: string;
+  try {
+    listingUrl = normalizeUrl(interaction.options.getString("link", true).trim());
+  } catch (error) {
+    await replyError(interaction, error instanceof Error ? error.message : "Link inválido.");
+    return;
+  }
+
+  const linkPlatform = detectPlatform(listingUrl);
+  if (linkPlatform && linkPlatform !== selected.platform) {
+    await replyError(
+      interaction,
+      `Esse link parece ser de ${linkPlatform}, mas **${selected.title}** está configurada como ${selected.platform}. Este comando altera apenas o link.`,
+    );
+    return;
+  }
+  if (listingUrl === selected.listingUrl) {
+    await interaction.editReply({ content: `ℹ️ **${selected.title}** já usa esse link.` });
+    return;
+  }
+
+  const [duplicate] = await db
+    .select()
+    .from(monitoredWorksTable)
+    .where(eq(monitoredWorksTable.listingUrl, listingUrl))
+    .limit(1);
+  if (duplicate && duplicate.id !== selected.id) {
+    await replyError(
+      interaction,
+      `Esse link já está cadastrado para **${duplicate.title}** (${duplicate.active ? "ativo" : "pausado"}).`,
+    );
+    return;
+  }
+
+  const confirmId = `monitor-edit-link:${interaction.id}:${selected.id}`;
+  const cancelId = `monitor-cancel:${interaction.id}`;
+  const message = await interaction.editReply({
+    content: [
+      `Alterar o link de **${selected.title}** (nº ${selected.displayNumber})?`,
+      `Atual: ${selected.listingUrl}`,
+      `Novo: ${listingUrl}`,
+      "Confira o título; a numeração pode ter mudado. O nome, a plataforma e o histórico de capítulos serão preservados.",
+    ].join("\n"),
+    components: [
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder().setCustomId(confirmId).setLabel("Confirmar alteração").setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId(cancelId).setLabel("Cancelar").setStyle(ButtonStyle.Secondary),
+      ),
+    ],
+  });
+
+  let button;
+  try {
+    button = await message.awaitMessageComponent({
+      componentType: ComponentType.Button,
+      time: 60_000,
+      filter: (candidate) =>
+        candidate.user.id === interaction.user.id &&
+        [confirmId, cancelId].includes(candidate.customId),
+    });
+  } catch (error) {
+    logger.warn({ err: error, workId: selected.id }, "Confirmação de alteração do link não concluída");
+    await interaction.editReply({
+      content: "Confirmação não concluída. Nenhuma obra foi alterada. Use /monitor listar antes de tentar novamente.",
+      components: [],
+    });
+    return;
+  }
+
+  await button.deferUpdate();
+  if (button.customId === cancelId) {
+    await interaction.editReply({ content: "Operação cancelada. Nenhuma obra foi alterada.", components: [] });
+    return;
+  }
+
+  const [changed] = await db
+    .update(monitoredWorksTable)
+    .set({ listingUrl, updatedAt: new Date() })
+    .where(and(eq(monitoredWorksTable.id, selected.id), eq(monitoredWorksTable.active, true)))
+    .returning();
+
+  if (!changed) {
+    await interaction.editReply({
+      content: "Essa obra já foi removida ou pausada. Nenhuma outra obra foi alterada. Consulte /monitor listar.",
+      components: [],
+    });
+    return;
+  }
+
+  await interaction.editReply({
+    content: [
+      `✅ Link de **${changed.title}** atualizado.`,
+      `Novo link: ${changed.listingUrl}`,
+      "O nome, a plataforma e o histórico de capítulos foram preservados.",
+    ].join("\n"),
+    components: [],
+  });
+}
+
 async function handleSetChannel(interaction: ChatInputCommandInteraction) {
   const channel = interaction.options.getChannel("canal", true);
   if (
@@ -382,6 +509,10 @@ export async function executeManhwaCommand(interaction: ChatInputCommandInteract
   }
   if (subcommand === "listar") {
     await handleList(interaction);
+    return;
+  }
+  if (subcommand === "editar_link") {
+    await handleEditLink(interaction);
     return;
   }
   if (subcommand === "historico") {
