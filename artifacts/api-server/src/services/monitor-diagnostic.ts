@@ -17,7 +17,23 @@ export type WorkDiagnostic = {
   status: "completed" | "empty" | "failed" | "interrupted";
   durationMs: number; lookupMs: number; captureMs: number; cleanupMs: number;
   chaptersFound: number; imageCaptured: boolean;
+  issue?: { stage: "listing" | "capture" | "cleanup"; reason: string };
 };
+
+function safeDiagnosticError(error: unknown): string {
+  const raw = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  const safe = raw
+    .replace(/\bpostgres(?:ql)?:\/\/[^\s"'<>]+/gi, "[database-url]")
+    .replace(/\bhttps?:\/\/[^\s"'<>]+/gi, "[url]")
+    .replace(/\b(?:bearer|bot)\s+[A-Za-z0-9._-]{8,}/gi, "[redacted-credential]")
+    .replace(/\b(authorization|access[-_ ]?token|refresh[-_ ]?token|token|api[-_ ]?(?:key|token)|password|secret|cookie)\s*[:=]\s*[^\s&,;]+/gi, "$1=[redacted]")
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/\s+/g, " ")
+    .replace(/@(everyone|here)\b/gi, "@\u200b$1")
+    .trim()
+    .slice(0, 180);
+  return safe || "Falha sem detalhe.";
+}
 
 /** Read-only sampling: one browser card per work; no notification or DB writes. */
 export async function runMonitorDiagnostic(workId?: number) {
@@ -48,7 +64,7 @@ export async function runMonitorDiagnostic(workId?: number) {
         chaptersFound: 0, imageCaptured: false,
       };
       let phaseStarted = performance.now();
-      let phase: "lookupMs" | "captureMs" = "lookupMs";
+      let phase: "listing" | "capture" = "listing";
       try {
         session = await openBrowserListing(work.listingUrl, work.platform as MonitorPlatform, true, signal);
         signal.throwIfAborted();
@@ -56,23 +72,33 @@ export async function runMonitorDiagnostic(workId?: number) {
         row.chaptersFound = session.candidates.length;
         const sample = session.candidates[0];
         if (sample) {
-          phase = "captureMs";
+          phase = "capture";
           phaseStarted = performance.now();
           const captured = await session.captureGroups([sample.captureId]);
           signal.throwIfAborted();
           row.captureMs = Math.round(performance.now() - phaseStarted);
           row.imageCaptured = captured.some(group => group.image.length > 0);
-          if (!row.imageCaptured) row.status = "failed";
+          if (!row.imageCaptured) {
+            row.status = "failed";
+            row.issue = { stage: "capture", reason: "A captura não retornou uma imagem." };
+          }
         } else {
           row.status = "empty";
+          row.issue = { stage: "listing", reason: "A listagem não encontrou capítulos utilizáveis." };
         }
-      } catch {
-        row[phase] = Math.round(performance.now() - phaseStarted);
+      } catch (error) {
+        row[phase === "listing" ? "lookupMs" : "captureMs"] = Math.round(performance.now() - phaseStarted);
         row.status = signal.aborted ? "interrupted" : "failed";
+        if (!signal.aborted) row.issue = { stage: phase, reason: safeDiagnosticError(error) };
       } finally {
         const cleanupStarted = performance.now();
         try { await session?.close(); }
-        catch { if (!signal.aborted) row.status = "failed"; }
+        catch (error) {
+          if (!signal.aborted) {
+            row.status = "failed";
+            row.issue ??= { stage: "cleanup", reason: safeDiagnosticError(error) };
+          }
+        }
         row.cleanupMs = Math.round(performance.now() - cleanupStarted);
         row.durationMs = Math.round(performance.now() - workStarted);
         results.push(row);
@@ -93,10 +119,11 @@ export async function runMonitorDiagnostic(workId?: number) {
 export function formatMonitorDiagnostic(report: Awaited<ReturnType<typeof runMonitorDiagnostic>>) {
   const seconds = (ms: number) => `${(ms / 1000).toFixed(2)} s`;
   const status = { completed: "ok", empty: "sem capítulos", failed: "falha", interrupted: "interrompida" };
+  const stage = { listing: "listagem", capture: "captura", cleanup: "fechamento" };
   return [
     "**Diagnóstico — da obra mais lenta para a mais rápida**",
     "Consulta pelo navegador + captura de 1 card por obra. Sem envio ao canal, fallback HTML ou alteração do banco/agendamento.",
-    ...report.results.map(w => `Nº ${w.number} — ${w.title.replace(/[\r\n]/g, " ")}: **${seconds(w.durationMs)}** (${status[w.status]})\n  Consulta: ${seconds(w.lookupMs)} · captura: ${seconds(w.captureMs)} · fechamento: ${seconds(w.cleanupMs)} · capítulos: ${w.chaptersFound}`),
+    ...report.results.map(w => `Nº ${w.number} — ${w.title.replace(/[\r\n]/g, " ")}: **${seconds(w.durationMs)}** (${status[w.status]})\n  Consulta: ${seconds(w.lookupMs)} · captura: ${seconds(w.captureMs)} · fechamento: ${seconds(w.cleanupMs)} · capítulos: ${w.chaptersFound}${w.issue ? `\n  Etapa: ${stage[w.issue.stage]} · motivo: ${w.issue.reason}` : ""}`),
     `Total: ${seconds(report.durationMs)} · não verificadas: ${report.worksSkipped}`,
     report.status === "interrupted" ? "Diagnóstico interrompido pelo limite de tempo ou para dar prioridade à verificação normal." : "",
   ].filter(Boolean).join("\n");

@@ -90,13 +90,41 @@ describe("read-only diagnostics", () => {
   });
 
   it("continues after a failed work without publishing or exposing raw errors", async () => {
-    state.open.mockRejectedValueOnce(new Error("private-url-and-password"));
+    state.open.mockRejectedValueOnce(new Error("navigation failed: access_token=private-url-and-password; url=https://example.test/list"));
     const result = await runMonitorDiagnostic();
     expect(result.status).toBe("partial");
-    expect(result.results.filter(r => r.status === "failed")).toHaveLength(1);
+    const failed = result.results.filter(r => r.status === "failed");
+    expect(failed).toHaveLength(1);
+    expect(failed[0]?.issue).toMatchObject({ stage: "listing" });
     expect(state.close).toHaveBeenCalledTimes(1);
     expect(JSON.stringify(result)).not.toContain("private-url");
+    expect(JSON.stringify(result)).not.toContain("example.test");
     expect(state.writes).not.toHaveBeenCalled();
+  });
+
+  it("reports capture-stage failures with a sanitized reason", async () => {
+    state.open.mockResolvedValueOnce({
+      candidates: [{ captureId: "card", number: "12" }],
+      captureGroups: async () => { throw new Error("capture timed out at https://example.test/card?token=secret-value"); },
+      close: state.close,
+    });
+    const result = await runMonitorDiagnostic();
+    expect(result.results[0]).toMatchObject({
+      status: "failed",
+      chaptersFound: 1,
+      issue: { stage: "capture" },
+    });
+    expect(JSON.stringify(result)).not.toContain("secret-value");
+    expect(JSON.stringify(result)).not.toContain("example.test");
+  });
+
+  it("reports empty listings separately from browser failures", async () => {
+    state.open.mockResolvedValueOnce({ candidates: [], close: state.close });
+    const result = await runMonitorDiagnostic(1);
+    expect(result.results[0]).toMatchObject({
+      status: "empty",
+      issue: { stage: "listing", reason: "A listagem não encontrou capítulos utilizáveis." },
+    });
   });
 
   it("handles empty works and limits a selected diagnostic to its immutable ID", async () => {
@@ -125,9 +153,10 @@ describe("read-only diagnostics", () => {
 
   it("renders comparison details and does not claim these are notification timings", () => {
     const text = formatMonitorDiagnostic({ roundId: "test", durationMs: 1300, status: "completed", worksSkipped: 0,
-      results: [{ workId: 1, number: 1, title: "Obra", status: "completed", durationMs: 1200, lookupMs: 1000, captureMs: 150, cleanupMs: 50, chaptersFound: 4, imageCaptured: true }] });
+      results: [{ workId: 1, number: 1, title: "Obra", status: "failed", durationMs: 1200, lookupMs: 1000, captureMs: 150, cleanupMs: 50, chaptersFound: 4, imageCaptured: false, issue: { stage: "capture", reason: "tempo esgotado" } }] });
     expect(text).toContain("1.20 s");
     expect(text).toContain("Sem envio");
     expect(text).toContain("captura de 1 card");
+    expect(text).toContain("Etapa: captura · motivo: tempo esgotado");
   });
 });
