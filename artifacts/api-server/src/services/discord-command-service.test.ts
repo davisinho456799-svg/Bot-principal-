@@ -10,6 +10,7 @@ const state = vi.hoisted(() => ({
   notification: vi.fn(),
   diagnostic: vi.fn(),
   resend: vi.fn(),
+  resendGroup: vi.fn(),
   acknowledge: vi.fn(),
   nextId: 11,
 }));
@@ -75,6 +76,7 @@ vi.mock("./monitor-service.js", () => ({
   runMonitor: vi.fn(),
   runTestNotification: state.notification,
   runResendNotification: state.resend,
+  runResendGroupNotification: state.resendGroup,
 }));
 vi.mock("./monitor-diagnostic.js", () => ({
   runMonitorDiagnostic: state.diagnostic,
@@ -125,6 +127,8 @@ function interaction(
         nome: "D",
         plataforma: "lezhin",
         capitulo: "12.5",
+      capitulos: "28, 29, 30, 31, 32",
+      mensagem_id: "",
         ...stringOverrides,
       })[key],
     },
@@ -145,6 +149,9 @@ beforeEach(() => {
   state.acknowledge.mockResolvedValue(undefined);
   state.notification.mockResolvedValue({ title: "C", chapter: "1", parser: "test", captureMode: "test" });
   state.resend.mockResolvedValue({ title: "C", chapter: "12.5", parser: "test", imageMode: "none" });
+  state.resendGroup.mockResolvedValue({
+    title: "C", chapters: ["28", "29", "30", "31", "32"], parser: "test", imageMode: "browser+banner", edited: true,
+  });
   state.diagnostic.mockResolvedValue({ results: [], worksSkipped: 0 });
 });
 
@@ -192,6 +199,30 @@ describe("safe monitor commands", () => {
   it("resends using the immutable ID of the current display number", async () => {
     await executeManhwaCommand(interaction("reenviar", 2).command);
     expect(state.resend).toHaveBeenCalledWith(10, "12.5", expect.any(Function));
+  });
+
+  it("parses a unique numeric chapter group and rejects malformed or duplicate values", async () => {
+    const { parseResendGroupChapters } = await import("./discord-command-service.js");
+    expect(parseResendGroupChapters("028, 29 30,31,32")).toEqual(["28", "29", "30", "31", "32"]);
+    expect(() => parseResendGroupChapters("28,28")).toThrow(/repetidos/);
+    expect(() => parseResendGroupChapters("28-32")).toThrow(/números de capítulo/);
+    expect(() => parseResendGroupChapters("28")).toThrow(/2 a 10/);
+  });
+
+  it("supports grouped monitor resend and replacement of the specified bot message", async () => {
+    expect(monitorCommandDefinition.options?.some(option => option.name === "reenviar_grupo")).toBe(true);
+    const { fake, command } = interaction("reenviar_grupo", 2, false, {
+      capitulos: "28, 29, 30, 31, 32",
+      mensagem_id: "1559578352908501130",
+    });
+    await executeManhwaCommand(command);
+    expect(state.resendGroup).toHaveBeenCalledWith(
+      10,
+      ["28", "29", "30", "31", "32"],
+      expect.any(Function),
+      "1559578352908501130",
+    );
+    expect(fake.editReply.mock.calls.at(-1)?.[0].content).toContain("Mensagem atualizada");
   });
 
   it("renames only the confirmed work when numbers shift", async () => {

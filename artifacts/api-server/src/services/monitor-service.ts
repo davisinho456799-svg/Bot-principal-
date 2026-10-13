@@ -568,6 +568,7 @@ export async function postStrip(
   capturedImage?: Buffer,
   pairTest = false,
   progress?: MonitorProgressReporter,
+  editMessageId?: string,
 ): Promise<MonitorImageMode> {
   const token = process.env.DISCORD_BOT_TOKEN;
   if (!token) throw new Error("DISCORD_BOT_TOKEN is not configured");
@@ -657,24 +658,54 @@ export async function postStrip(
   const chapterSummary = chapters.length === 1
     ? `1 capítulo novo · capítulo ${chapters[0].number}`
     : `${chapters.length} capítulos novos · capítulos ${chapters.map((chapter) => chapter.number).join(", ")}`;
+  const messageContent = `${isTest ? "🧪 **TESTE** · " : ""}**${title}** · ${chapterSummary}${total > 1 ? ` · parte ${part}/${total}` : ""}`;
   if (!png) {
     logger.warn(
       { title, chapterNumbers: chapters.map((chapter) => chapter.number) },
       "Nenhuma imagem do monitor foi obtida; enviando notificação sem anexo",
     );
   }
+  if (editMessageId && !png) {
+    throw new Error("Não consegui gerar uma imagem; a mensagem atual foi mantida sem alterações.");
+  }
+  const filename = `chapter-release-${isTest ? "test-" : ""}${Date.now()}-${part}.png`;
   form.append("payload_json", JSON.stringify({
-    content: `${isTest ? "🧪 **TESTE** · " : ""}**${title}** · ${chapterSummary}${total > 1 ? ` · parte ${part}/${total}` : ""}${automaticFallbackNote}${primaryFallback ? " · imagem principal usada como reserva" : ""}${png ? "" : pairTest ? " · aviso em texto: imagens indisponíveis" : " · imagem indisponível no modo leve"}`,
+    content: `${messageContent}${automaticFallbackNote}${primaryFallback ? " · imagem principal usada como reserva" : ""}${png ? "" : pairTest ? " · aviso em texto: imagens indisponíveis" : " · imagem indisponível no modo leve"}`,
+    ...(editMessageId ? {
+      embeds: [],
+      attachments: [{
+        id: "0",
+        filename,
+        description: `${title} · ${chapterSummary}`,
+      }],
+    } : {}),
     allowed_mentions: { parse: [] },
   }));
   if (png) {
     const pngArrayBuffer = new ArrayBuffer(png.byteLength);
     new Uint8Array(pngArrayBuffer).set(png);
     const pngBlob = new Blob([pngArrayBuffer], { type: "image/png" });
-    form.append("files[0]", pngBlob, `chapter-release-${isTest ? "test-" : ""}${Date.now()}-${part}.png`);
+    form.append("files[0]", pngBlob, filename);
   }
-  const response = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
-    method: "POST",
+  const messageUrl = `https://discord.com/api/v10/channels/${channelId}/messages${editMessageId ? `/${editMessageId}` : ""}`;
+  if (editMessageId) {
+    if (!/^\d{17,20}$/.test(editMessageId)) throw new Error("O ID da mensagem Discord é inválido.");
+    const existingResponse = await fetch(messageUrl, {
+      headers: { Authorization: `Bot ${token}` },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!existingResponse.ok) throw new Error(`Não consegui validar a mensagem que será substituída (HTTP ${existingResponse.status}).`);
+    const existing = await existingResponse.json();
+    if (
+      !existing.author?.bot ||
+      existing.channel_id !== channelId ||
+      existing.content !== messageContent
+    ) {
+      throw new Error("A mensagem não pertence ao bot ou não corresponde exatamente à obra e aos capítulos selecionados.");
+    }
+  }
+  const response = await fetch(messageUrl, {
+    method: editMessageId ? "PATCH" : "POST",
     headers: { Authorization: `Bot ${token}` },
     body: form,
     signal: AbortSignal.timeout(30_000),
@@ -814,6 +845,102 @@ export async function runResendNotification(
   } finally {
     await listing?.captureSession?.close().catch((error) => {
       logger.warn({ err: error, workId: work.id }, "Falha ao fechar captura após reenvio");
+    });
+  }
+}
+
+export async function runResendGroupNotification(
+  workId: number,
+  requestedChapters: string[],
+  progress?: MonitorProgressReporter,
+  editMessageId?: string,
+): Promise<{ title: string; chapters: string[]; imageMode: MonitorImageMode; parser: string; edited: boolean }> {
+  const identities = requestedChapters.map(chapterNumberIdentity);
+  if (
+    requestedChapters.length < 2 ||
+    requestedChapters.length > 10 ||
+    identities.some(identity => !identity) ||
+    new Set(identities).size !== identities.length
+  ) {
+    throw new Error("Informe de 2 a 10 capítulos válidos, sem repetição.");
+  }
+  if (editMessageId && !/^\d{17,20}$/.test(editMessageId)) {
+    throw new Error("O ID da mensagem Discord é inválido.");
+  }
+
+  const [config] = await db.select().from(monitorConfigTable).limit(1);
+  if (!config?.discordChannelId) throw new Error("Nenhum canal do Discord foi configurado para o monitor.");
+  const [work] = await db.select().from(monitoredWorksTable)
+    .where(and(eq(monitoredWorksTable.id, workId), eq(monitoredWorksTable.active, true)))
+    .limit(1);
+  if (!work) throw new Error("A obra não está ativa; confira /monitor listar.");
+
+  let listing: ListingSession | undefined;
+  try {
+    await reportProgress(progress, `Procurando os capítulos ${requestedChapters.join(", ")} de ${work.title}.`);
+    listing = await fetchListing(work, progress);
+    const stored = await db.select({
+      chapterNumber: detectedChaptersTable.chapterNumber,
+      thumbnailUrl: detectedChaptersTable.thumbnailUrl,
+      chapterKey: detectedChaptersTable.chapterKey,
+    }).from(detectedChaptersTable).where(eq(detectedChaptersTable.workId, work.id));
+    const chapters = identities.map((identity, index) => {
+      const live = listing!.candidates.find(candidate => chapterNumberIdentity(candidate.number) === identity);
+      if (live) return live;
+      const saved = stored.find(candidate => chapterNumberIdentity(candidate.chapterNumber) === identity);
+      if (saved) {
+        return {
+          number: saved.chapterNumber,
+          thumbnailUrl: saved.thumbnailUrl,
+          key: saved.chapterKey,
+          parser: "histórico salvo",
+        };
+      }
+      throw new Error(`Não encontrei o capítulo ${requestedChapters[index]} na lista nem no histórico salvo de **${work.title}**.`);
+    });
+    await translateChapterSubtitles(chapters);
+    const useToptoonPairs = work.platform === "toptoon";
+    let capturedImage: Buffer | undefined;
+    if (listing.captureSession && chapters.every(chapter => chapter.captureId)) {
+      await reportProgress(progress, "Capturando o grupo pelo monitor para preservar o cartão original da plataforma.");
+      try {
+        const groups = await listing.captureSession.captureGroups(
+          chapters.map(chapter => chapter.captureId!),
+          captureSubtitles(chapters, work.platform as MonitorPlatform),
+          useToptoonPairs,
+        );
+        const selected = new Set(identities);
+        const exactGroup = groups.find(group =>
+          group.chapterNumbers.length === chapters.length &&
+          group.chapterNumbers.every(number => selected.has(chapterNumberIdentity(number))),
+        );
+        if (exactGroup && await isUsableBrowserCapture(exactGroup.image)) capturedImage = exactGroup.image;
+      } catch (error) {
+        logger.warn({ err: error, workId: work.id }, "Captura do grupo para reenvio falhou; usando o fallback do monitor");
+      }
+    }
+    const imageMode = await postStrip(
+      config.discordChannelId,
+      work.title,
+      chapters,
+      1,
+      1,
+      false,
+      capturedImage,
+      useToptoonPairs,
+      progress,
+      editMessageId,
+    );
+    return {
+      title: work.title,
+      chapters: chapters.map(chapter => chapter.number),
+      imageMode,
+      parser: listing.parser,
+      edited: Boolean(editMessageId),
+    };
+  } finally {
+    await listing?.captureSession?.close().catch(error => {
+      logger.warn({ err: error, workId }, "Falha ao fechar captura após reenvio agrupado");
     });
   }
 }

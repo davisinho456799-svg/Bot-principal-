@@ -20,6 +20,7 @@ import {
   buildMonitorLinkDeltaPendingStatus,
   runMonitor,
   runResendNotification,
+  runResendGroupNotification,
   runTestNotification,
 } from "./monitor-service.js";
 import { getActiveNumberedMonitorWorks } from "./monitor-work-list.js";
@@ -128,6 +129,34 @@ export const monitorCommandDefinition = new SlashCommandBuilder()
     )
     .addSubcommand((command) =>
       command
+        .setName("reenviar_grupo")
+        .setDescription("Reenvia 2 a 10 capítulos no cartão normal do monitor")
+        .addIntegerOption((option) =>
+          option
+            .setName("obra")
+            .setDescription("Número atual da obra exibido pelo /monitor listar")
+            .setMinValue(1)
+            .setRequired(true),
+        )
+        .addStringOption((option) =>
+          option
+            .setName("capitulos")
+            .setDescription("Números separados por vírgula, por exemplo 28, 29, 30")
+            .setMinLength(3)
+            .setMaxLength(200)
+            .setRequired(true),
+        )
+        .addStringOption((option) =>
+          option
+            .setName("mensagem_id")
+            .setDescription("ID da mensagem do bot a substituir; vazio envia um novo aviso")
+            .setMinLength(17)
+            .setMaxLength(20)
+            .setRequired(false),
+        ),
+    )
+    .addSubcommand((command) =>
+      command
         .setName("canal")
         .setDescription("Escolhe o canal que receberá as notificações")
         .addChannelOption((option) =>
@@ -194,6 +223,22 @@ export const monitorCommandDefinition = new SlashCommandBuilder()
     .toJSON();
 
 type Platform = "lezhin" | "toomics" | "toptoon";
+
+export function parseResendGroupChapters(value: string): string[] {
+  const chapters = value.split(/[,\s]+/).filter(Boolean);
+  if (
+    chapters.length < 2 ||
+    chapters.length > 10 ||
+    chapters.some(chapter => !/^\d+(?:\.\d+)?$/.test(chapter))
+  ) {
+    throw new Error("Informe de 2 a 10 números de capítulo separados por vírgula.");
+  }
+  const normalized = chapters.map(chapter => chapter.replace(/^0+(?=\d)/, ""));
+  if (new Set(normalized).size !== normalized.length) {
+    throw new Error("A lista contém capítulos repetidos.");
+  }
+  return normalized;
+}
 
 function detectPlatform(link: string): Platform | null {
   const hostname = new URL(link).hostname.toLowerCase();
@@ -563,6 +608,48 @@ export async function executeManhwaCommand(interaction: ChatInputCommandInteract
         interaction,
         error instanceof Error ? error.message : "Não foi possível reenviar o capítulo.",
       );
+    }
+    return;
+  }
+  if (subcommand === "reenviar_grupo") {
+    const workNumber = interaction.options.getInteger("obra", true);
+    const work = resolveMonitorWorkNumber(await getActiveNumberedMonitorWorks(), workNumber);
+    if (!work) {
+      await replyError(interaction, `Não encontrei a obra nº ${workNumber}. Use /monitor listar para conferir a numeração atual.`);
+      return;
+    }
+    let chapters: string[];
+    try {
+      chapters = parseResendGroupChapters(interaction.options.getString("capitulos", true));
+    } catch (error) {
+      await replyError(interaction, error instanceof Error ? error.message : "Lista de capítulos inválida.");
+      return;
+    }
+    const messageId = interaction.options.getString("mensagem_id")?.trim() || undefined;
+    if (messageId && !/^\d{17,20}$/.test(messageId)) {
+      await replyError(interaction, "O ID da mensagem Discord deve ter de 17 a 20 dígitos.");
+      return;
+    }
+    const progress: string[] = [];
+    const updateProgress = async (message: string) => {
+      progress.push(message);
+      await interaction.editReply({
+        content: ["🔁 **Reenvio agrupado**", ...progress.map((step, index) => `${index + 1}. ${step}`)].join("\n"),
+      });
+    };
+    try {
+      const result = await runResendGroupNotification(work.id, chapters, updateProgress, messageId);
+      await interaction.editReply({
+        content: [
+          `✅ **${result.edited ? "Mensagem atualizada" : "Aviso agrupado enviado"}**`,
+          `Obra: **${result.title}**`,
+          `Capítulos: **${result.chapters.join(", ")}**`,
+          `Imagem: **${result.imageMode === "none" ? "indisponível" : result.imageMode}**`,
+          `Origem: **${result.parser}**`,
+        ].join("\n"),
+      });
+    } catch (error) {
+      await replyError(interaction, error instanceof Error ? error.message : "Não foi possível reenviar o grupo.");
     }
     return;
   }

@@ -5,6 +5,7 @@ import {
   buildMonitorLinkDeltaPendingStatus,
   MONITOR_LINK_DELTA_PENDING_STATUS,
   runMonitor,
+  runResendGroupNotification,
   runResendNotification,
 } from "./monitor-service";
 import { buildChapterKey } from "./parsers/index";
@@ -15,7 +16,10 @@ const state = vi.hoisted(() => ({
   records: {} as Record<string, Array<Record<string, any>>>,
 }));
 vi.mock("@workspace/db", () => ({ db: state.db }));
-vi.mock("./browser-chapter-capture", () => ({ openBrowserListing: state.listing }));
+vi.mock("./browser-chapter-capture", () => ({
+  openBrowserListing: state.listing,
+  capturedGroupWithinLimit: () => true,
+}));
 vi.mock("./chapter-subtitle-translation", () => ({ translateChapterSubtitles: vi.fn(async () => {}) }));
 vi.mock("../lib/logger", () => ({ logger: { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() } }));
 vi.mock("drizzle-orm", async original => ({
@@ -317,5 +321,87 @@ describe("manual resends preserve Toptoon pairs and independent fallback", () =>
     expect(result.imageMode).toBe("browser+banner");
     expect(imageSession.captureGroups).toHaveBeenCalledWith(["2"], expect.any(Array), platform === "toptoon");
     expect(state.records).toEqual(before);
+  });
+
+  it("edits only the matching bot message with one captured group and leaves delivery history unchanged", async () => {
+    state.records.detected_chapters.push({
+      id: 2,
+      workId: 1,
+      chapterKey: buildChapterKey("toptoon", "Work", "2"),
+      chapterNumber: "2",
+      thumbnailUrl: "https://example.test/2.png",
+      publishedAt: new Date(),
+      deliveryPending: false,
+    });
+    await installListing(["1", "2"]);
+    const imageSession = await state.listing();
+    state.listing.mockResolvedValue(imageSession);
+    const before = structuredClone(state.records);
+    const requests: Array<{ url: string; method: string }> = [];
+    let editPayload: any;
+    vi.stubGlobal("fetch", vi.fn(async (url, options = {}) => {
+      const method = options.method ?? "GET";
+      requests.push({ url: String(url), method });
+      if (method === "GET") {
+        return new Response(JSON.stringify({
+          author: { bot: true },
+          channel_id: "fake-channel",
+          content: "**Work** · 2 capítulos novos · capítulos 1, 2",
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      editPayload = JSON.parse((options.body as FormData).get("payload_json") as string);
+      return new Response("", { status: 200 });
+    }));
+
+    const result = await runResendGroupNotification(
+      1,
+      ["1", "2"],
+      undefined,
+      "1559578352908501130",
+    );
+
+    expect(result).toMatchObject({ title: "Work", chapters: ["1", "2"], edited: true, imageMode: "browser+banner" });
+    expect(imageSession.captureGroups).toHaveBeenCalledWith(["1", "2"], expect.any(Array), true);
+    expect(requests.map(request => request.method)).toEqual(["GET", "PATCH"]);
+    expect(editPayload.embeds).toEqual([]);
+    expect(editPayload.attachments).toHaveLength(1);
+    expect(state.records).toEqual(before);
+  });
+
+  it("refuses to replace a bot message whose caption names a different chapter group", async () => {
+    state.records.detected_chapters.push({
+      id: 2,
+      workId: 1,
+      chapterKey: buildChapterKey("toptoon", "Work", "2"),
+      chapterNumber: "2",
+      thumbnailUrl: "https://example.test/2.png",
+      publishedAt: new Date(),
+      deliveryPending: false,
+    });
+    await installListing(["1", "2"]);
+    const imageSession = await state.listing();
+    state.listing.mockResolvedValue(imageSession);
+    const requests: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async url => {
+      requests.push(String(url));
+      return new Response(JSON.stringify({
+        author: { bot: true },
+        channel_id: "fake-channel",
+        content: "**Work** · 2 capítulos novos · capítulos 1, 3",
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }));
+
+    await expect(runResendGroupNotification(
+      1,
+      ["1", "2"],
+      undefined,
+      "1559578352908501130",
+    )).rejects.toThrow(/não corresponde exatamente/);
+    expect(requests).toHaveLength(1);
+  });
+
+  it("rejects duplicate chapters before loading or sending", async () => {
+    await expect(runResendGroupNotification(1, ["2", "02"])).rejects.toThrow(/repetição/);
+    expect(state.listing).not.toHaveBeenCalled();
   });
 });
