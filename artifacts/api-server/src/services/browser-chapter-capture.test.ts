@@ -9,7 +9,7 @@ import {
   findRenderedChapters,
   isolatePrimaryThumbnails,
   makeGreedyGroups,
-  promoteToomicsPrimaryThumbnails,
+  promotePrimaryThumbnails,
   type BrowserChapterSnapshot,
   type CaptureThumbnailTarget,
 } from "./browser-chapter-capture";
@@ -150,7 +150,7 @@ describe("single-thumbnail chapter capture", () => {
     await page.close();
   });
 
-  it("promotes a Toomics data-original image over the currently rendered logo", async () => {
+  it("promotes a selected data-original thumbnail over the currently rendered logo", async () => {
     const page = await browser.newPage();
     const logo = svgDataUrl("#d43b35");
     const artwork = svgDataUrl("#3b73d4");
@@ -166,7 +166,7 @@ describe("single-thumbnail chapter capture", () => {
       captureId: "toomics-14",
       thumbnailUrl: artwork,
     }];
-    await promoteToomicsPrimaryThumbnails(page, targets);
+    await promotePrimaryThumbnails(page, targets);
     await page.waitForFunction((expected) => {
       const image = document.querySelector("img");
       return image instanceof HTMLImageElement &&
@@ -179,6 +179,34 @@ describe("single-thumbnail chapter capture", () => {
     const screenshot = await page.locator("article").screenshot();
     expect(await countSolidColorPixels(screenshot, [59, 115, 212])).toBeGreaterThan(100);
     expect(await countSolidColorPixels(screenshot, [212, 59, 53])).toBe(0);
+    await page.close();
+  });
+
+  it("promotes the selected primary thumbnail for non-Toomics works", async () => {
+    const page = await browser.newPage();
+    const placeholder = svgDataUrl("#d43b35");
+    const artwork = svgDataUrl("#3b73d4");
+    await page.setContent(`<article data-monitor-capture-card="chapter-14">
+      <img src="${placeholder}" data-src="${artwork}" width="96" height="72">
+    </article>`);
+    await page.waitForFunction(() => {
+      const image = document.querySelector("img");
+      return image instanceof HTMLImageElement && image.complete;
+    });
+
+    await promotePrimaryThumbnails(page, [{
+      captureId: "chapter-14",
+      thumbnailUrl: artwork,
+    }]);
+    await page.waitForFunction((expected) => {
+      const image = document.querySelector("img");
+      return image instanceof HTMLImageElement &&
+        image.complete &&
+        image.naturalWidth > 0 &&
+        image.currentSrc === expected;
+    }, artwork);
+
+    expect(await page.locator("img").getAttribute("src")).toBe(artwork);
     await page.close();
   });
 

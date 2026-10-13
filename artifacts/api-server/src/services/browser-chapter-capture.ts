@@ -922,7 +922,7 @@ async function waitForPrimaryThumbnails(
   );
 }
 
-export async function promoteToomicsPrimaryThumbnails(
+export async function promotePrimaryThumbnails(
   page: Page,
   targets: CaptureThumbnailTarget[],
 ): Promise<void> {
@@ -934,7 +934,18 @@ export async function promoteToomicsPrimaryThumbnails(
         return "";
       }
     };
-    const lazyAttributes = ["data-original", "data-src", "data-lazy-src", "data-image"];
+    const sourceAttributes = [
+      "src",
+      "data-original",
+      "data-src",
+      "data-lazy-src",
+      "data-image",
+      "data-thumbnail",
+      "data-thumb",
+    ];
+    const srcsetAttributes = ["srcset", "data-srcset"];
+    const srcsetUrls = (value: string) =>
+      value.split(",").map((entry) => entry.trim().split(/\s+/)[0] || "");
 
     for (const target of targets) {
       const card = document.querySelector(
@@ -945,14 +956,22 @@ export async function promoteToomicsPrimaryThumbnails(
       if (!expectedUrl) continue;
 
       const image = Array.from(card.querySelectorAll("img")).find((candidate) =>
-        lazyAttributes.some((attribute) =>
+        sourceAttributes.some((attribute) =>
           normalizeUrl(candidate.getAttribute(attribute) || "") === expectedUrl,
+        ) || srcsetAttributes.some((attribute) =>
+          srcsetUrls(candidate.getAttribute(attribute) || "")
+            .some((url) => normalizeUrl(url) === expectedUrl),
         ),
       );
       if (!image) continue;
 
       const currentUrl = normalizeUrl(image.currentSrc || image.src || "");
-      if (currentUrl !== expectedUrl) image.src = expectedUrl;
+      if (currentUrl !== expectedUrl || (image.complete && image.naturalWidth === 0)) {
+        image.loading = "eager";
+        image.removeAttribute("srcset");
+        image.removeAttribute("sizes");
+        image.src = expectedUrl;
+      }
     }
   }, { targets });
 }
@@ -1233,8 +1252,8 @@ async function captureGroup(
     captureId: chapter.captureId,
     thumbnailUrl: chapter.thumbnailUrl,
   }));
-  if (platform === "toomics") {
-    await promoteToomicsPrimaryThumbnails(page, captureTargets);
+  if (!(pairTest && platform === "toptoon")) {
+    await promotePrimaryThumbnails(page, captureTargets);
   }
   if (pairTest && platform === "toptoon") {
     if (chapters.some(chapter => !chapter.extraThumbnailUrls)) {
