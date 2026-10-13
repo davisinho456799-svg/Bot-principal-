@@ -433,6 +433,26 @@ export async function findRenderedChapters(
           }
         }
 
+        if (platform === "toptoon") {
+          const labelSelector = ".ep_title, .ep__episode, .episode-number, .episode-num, .chapter-number";
+          const labels = element.matches(labelSelector)
+            ? [element]
+            : Array.from(element.querySelectorAll(labelSelector));
+          for (const label of labels) {
+            if (!visible(label)) continue;
+            const labelText = (label.innerText || label.textContent || "").replace(whitespacePattern, " ").trim();
+            const visibleNumbers = [];
+            let match;
+            while ((match = chapterPatternFixed.exec(labelText))) visibleNumbers.push(normalizeNumber(match[1]));
+            chapterPatternFixed.lastIndex = 0;
+            while ((match = koreanChapterPatternFixed.exec(labelText))) visibleNumbers.push(normalizeNumber(match[1]));
+            koreanChapterPatternFixed.lastIndex = 0;
+            const koreanEpisode = labelText.match(new RegExp("(?:제" + whitespace + "*)?(" + digit + "{1,5}(?:[.,]" + digit + "+)?)" + whitespace + "*화", "i"));
+            if (!visibleNumbers.length && koreanEpisode) visibleNumbers.push(normalizeNumber(koreanEpisode[1]));
+            if (visibleNumbers.length) return [visibleNumbers[0]];
+          }
+        }
+
         for (const attribute of platformAttributes) {
           const value = element.getAttribute(attribute);
           if (value) {

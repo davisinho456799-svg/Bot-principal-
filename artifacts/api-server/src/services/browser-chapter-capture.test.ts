@@ -93,6 +93,28 @@ describe("single-thumbnail chapter capture", () => {
     await page.close();
   });
 
+  it("prefers the visible Toptoon chapter label over an internal episode ID", async () => {
+    const page = await browser.newPage();
+    await page.setViewportSize({ width: 900, height: 800 });
+    const thumbnail = svgDataUrl("#3b73d4");
+    await page.setContent(`<ul style="margin:0;padding:0">
+      <li style="list-style:none;width:320px;height:140px">
+        <a href="/comic/ep/57" data-episode="57" style="display:block;width:320px;height:140px">
+          <div class="flex-item thumb"><img src="${thumbnail}" width="96" height="72"></div>
+          <div class="thumb_text"><p class="ep_title">23화</p><p class="ep_stitle">Sample subtitle</p><p>26.08.12</p></div>
+        </a>
+      </li>
+    </ul>`, { waitUntil: "domcontentloaded" });
+    await page.waitForFunction(() => {
+      const image = document.querySelector("img");
+      return image instanceof HTMLImageElement && image.complete && image.naturalWidth > 0;
+    });
+
+    const chapters = await findRenderedChapters(page, "toptoon");
+    expect(chapters.map(chapter => chapter.number)).toEqual(["23"]);
+    await page.close();
+  });
+
   it("splits ten Toomics chapter cards into two images of five", () => {
     const chapters = Array.from({ length: 10 }, (_, index) => ({
       number: String(index + 101),
