@@ -61,6 +61,30 @@ describe("read-only diagnostics", () => {
     expect(state.open).toHaveBeenCalledTimes(1);
   });
 
+  it("enforces the time limit at work boundaries if the timeout signal has not fired", async () => {
+    let now = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    vi.spyOn(AbortSignal, "timeout").mockReturnValue(new AbortController().signal);
+    state.works = [1, 2, 3].map(id => ({
+      id, displayNumber: id, title: `Obra ${id}`, platform: "lezhin",
+      listingUrl: "https://example.test", lastCheckedAt: new Date(),
+    }));
+    state.open.mockImplementation(async () => {
+      now += 4 * 60_000;
+      return {
+        candidates: [{ captureId: "card" }],
+        captureGroups: async () => [{ image: Buffer.from("image") }],
+        close: state.close,
+      };
+    });
+
+    const report = await runMonitorDiagnostic();
+
+    expect(state.open).toHaveBeenCalledTimes(2);
+    expect(report).toMatchObject({ status: "interrupted", worksSkipped: 1 });
+    expect(report.results.at(-1)).toMatchObject({ status: "interrupted" });
+  });
+
   it("records cleanup failures without abandoning the other works", async () => {
     state.close.mockRejectedValueOnce(new Error("close failed"));
     const report = await runMonitorDiagnostic();
@@ -77,6 +101,24 @@ describe("read-only diagnostics", () => {
     expect(state.close).toHaveBeenCalledTimes(2);
     expect(state.writes).not.toHaveBeenCalled();
     expect(JSON.stringify(state.works)).toBe(before);
+  });
+
+  it("uses the automatic paired capture path for Toptoon works", async () => {
+    state.works = [{
+      id: 1, displayNumber: 1, title: "Obra Toptoon", platform: "toptoon",
+      listingUrl: "https://example.test/toptoon", lastCheckedAt: new Date(),
+    }];
+    const captureGroups = vi.fn(async () => [{ image: Buffer.from("image") }]);
+    state.open.mockResolvedValue({
+      candidates: [{ captureId: "card", number: "12", extraThumbnailUrls: ["extra-2", "extra-3"] }],
+      captureGroups,
+      close: state.close,
+    });
+
+    const report = await runMonitorDiagnostic();
+
+    expect(captureGroups).toHaveBeenCalledWith(["card"], [], true);
+    expect(report.results[0]).toMatchObject({ status: "completed", imageCaptured: true });
   });
 
   it("refuses to start near the automatic deadline or with unchecked works", async () => {
@@ -156,7 +198,7 @@ describe("read-only diagnostics", () => {
       results: [{ workId: 1, number: 1, title: "Obra", status: "failed", durationMs: 1200, lookupMs: 1000, captureMs: 150, cleanupMs: 50, chaptersFound: 4, imageCaptured: false, issue: { stage: "capture", reason: "tempo esgotado" } }] });
     expect(text).toContain("1.20 s");
     expect(text).toContain("Sem envio");
-    expect(text).toContain("captura de 1 card");
+    expect(text).toContain("captura do formato usado pelo monitor");
     expect(text).toContain("Etapa: captura · motivo: tempo esgotado");
   });
 });

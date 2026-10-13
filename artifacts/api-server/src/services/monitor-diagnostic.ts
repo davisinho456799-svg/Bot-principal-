@@ -52,10 +52,16 @@ export async function runMonitorDiagnostic(workId?: number) {
       throw new MonitorUnavailableError("A rodada automática está próxima ou pendente. Execute o diagnóstico depois dela para preservar seu horário.");
     }
     const signal = AbortSignal.any([prioritySignal, AbortSignal.timeout(MAX_DIAGNOSTIC_MS)]);
+    const deadline = performance.now() + MAX_DIAGNOSTIC_MS;
+    const isInterrupted = () => signal.aborted || performance.now() >= deadline;
+    const ensureWithinDeadline = () => {
+      signal.throwIfAborted();
+      if (performance.now() >= deadline) throw new Error("Monitor diagnostic time limit reached");
+    };
     const results: WorkDiagnostic[] = [];
     logger.info({ event: "image_monitor_diagnostic_started", roundId, works: selected.length }, "Diagnóstico de imagens iniciado (somente leitura)");
     for (const work of selected) {
-      if (signal.aborted) break;
+      if (isInterrupted()) break;
       const workStarted = performance.now();
       let session: BrowserListingSession | undefined;
       const row: WorkDiagnostic = {
@@ -67,15 +73,19 @@ export async function runMonitorDiagnostic(workId?: number) {
       let phase: "listing" | "capture" = "listing";
       try {
         session = await openBrowserListing(work.listingUrl, work.platform as MonitorPlatform, true, signal);
-        signal.throwIfAborted();
+        ensureWithinDeadline();
         row.lookupMs = Math.round(performance.now() - phaseStarted);
         row.chaptersFound = session.candidates.length;
         const sample = session.candidates[0];
         if (sample) {
           phase = "capture";
           phaseStarted = performance.now();
-          const captured = await session.captureGroups([sample.captureId]);
-          signal.throwIfAborted();
+          const captured = await session.captureGroups(
+            [sample.captureId],
+            [],
+            work.platform === "toptoon",
+          );
+          ensureWithinDeadline();
           row.captureMs = Math.round(performance.now() - phaseStarted);
           row.imageCaptured = captured.some(group => group.image.length > 0);
           if (!row.imageCaptured) {
@@ -88,8 +98,8 @@ export async function runMonitorDiagnostic(workId?: number) {
         }
       } catch (error) {
         row[phase === "listing" ? "lookupMs" : "captureMs"] = Math.round(performance.now() - phaseStarted);
-        row.status = signal.aborted ? "interrupted" : "failed";
-        if (!signal.aborted) row.issue = { stage: phase, reason: safeDiagnosticError(error) };
+        row.status = isInterrupted() ? "interrupted" : "failed";
+        if (!isInterrupted()) row.issue = { stage: phase, reason: safeDiagnosticError(error) };
       } finally {
         const cleanupStarted = performance.now();
         try { await session?.close(); }
@@ -106,7 +116,7 @@ export async function runMonitorDiagnostic(workId?: number) {
       }
     }
     const report = {
-      roundId, status: signal.aborted ? "interrupted" : results.some(r => r.status === "failed") ? "partial" : "completed",
+      roundId, status: isInterrupted() ? "interrupted" : results.some(r => r.status === "failed") ? "partial" : "completed",
       durationMs: Math.round(performance.now() - started),
       worksSkipped: selected.length - results.length,
       results: results.sort((a, b) => b.durationMs - a.durationMs),
@@ -122,7 +132,7 @@ export function formatMonitorDiagnostic(report: Awaited<ReturnType<typeof runMon
   const stage = { listing: "listagem", capture: "captura", cleanup: "fechamento" };
   return [
     "**Diagnóstico — da obra mais lenta para a mais rápida**",
-    "Consulta pelo navegador + captura de 1 card por obra. Sem envio ao canal, fallback HTML ou alteração do banco/agendamento.",
+    "Consulta pelo navegador + captura do formato usado pelo monitor (Toptoon: imagens 2 e 3; demais: miniatura principal). Sem envio ao canal, fallback HTML ou alteração do banco/agendamento.",
     ...report.results.map(w => `Nº ${w.number} — ${w.title.replace(/[\r\n]/g, " ")}: **${seconds(w.durationMs)}** (${status[w.status]})\n  Consulta: ${seconds(w.lookupMs)} · captura: ${seconds(w.captureMs)} · fechamento: ${seconds(w.cleanupMs)} · capítulos: ${w.chaptersFound}${w.issue ? `\n  Etapa: ${stage[w.issue.stage]} · motivo: ${w.issue.reason}` : ""}`),
     `Total: ${seconds(report.durationMs)} · não verificadas: ${report.worksSkipped}`,
     report.status === "interrupted" ? "Diagnóstico interrompido pelo limite de tempo ou para dar prioridade à verificação normal." : "",
