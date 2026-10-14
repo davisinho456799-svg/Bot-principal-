@@ -229,14 +229,42 @@ export function registerInteractionRouter(client: Client) {
             lastAutocompleteResponse.delete(autocompleteKey);
           }
         }, AUTOCOMPLETE_RESPONSE_INTERVAL_MS);
-        return originalRespond(options);
+        const choiceCount = Array.isArray(options) ? options.length : null;
+        try {
+          const response = await originalRespond(options);
+          logger.info(
+            { command: interaction.commandName, choiceCount },
+            "Autocomplete resposta enviada",
+          );
+          return response;
+        } catch (err) {
+          logger.warn(
+            { err, command: interaction.commandName, choiceCount },
+            "Autocomplete resposta rejeitada pelo Discord",
+          );
+          throw err;
+        }
       };
 
       try {
+        let subscriptionType: string | null | undefined;
+        let subcommand: string | null | undefined;
+        if (interaction.commandName === "assinar18") {
+          try {
+            subscriptionType = interaction.options.getString("tipo");
+            subcommand = interaction.options.getSubcommand(false);
+          } catch {
+            subscriptionType = null;
+            subcommand = null;
+          }
+        }
         logger.info(
           {
             command: interaction.commandName,
             dispatchDelayMs: Math.max(0, receivedAt - interaction.createdTimestamp),
+            ...(interaction.commandName === "assinar18"
+              ? { subscriptionType: subscriptionType ?? null, subcommand: subcommand ?? null }
+              : {}),
           },
           "Autocomplete recebido",
         );
