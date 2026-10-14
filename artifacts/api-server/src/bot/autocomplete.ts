@@ -477,7 +477,41 @@ export async function respondAutocompleteAnime(
   }
 }
 
-// ── Autocomplete para VN (SFW) ────────────────────────────────────────────────
+/**
+    * Resolve typed text only when it exactly matches an option produced by the
+    * same autocomplete sources and ordering used by /assinar18.
+    */
+    export async function resolveAdultSubscriptionChoice(
+    tipo: "anime" | "manga" | "manhwa",
+    query: string,
+    ): Promise<string | null> {
+    const normalizedQuery = normalizeTitleForLookup(query);
+    if (!normalizedQuery) return null;
+
+    let choices: Suggestion[] = [];
+    const captureInteraction = {
+      respond: async (options: Suggestion[]) => { choices = options; },
+    } as unknown as AutocompleteInteraction;
+
+    if (tipo === "anime") {
+      await respondAutocompleteAnime(captureInteraction, query);
+    } else {
+      await respondAutocomplete(
+        captureInteraction,
+        query,
+        null,
+        false,
+        tipo === "manga" ? "Manga" : "Manhwa",
+        true,
+      );
+    }
+
+    return choices.find((choice) =>
+      normalizeTitleForLookup(choice.name) === normalizedQuery,
+    )?.value ?? null;
+    }
+
+    // ── Autocomplete para VN (SFW) ────────────────────────────────────────────────
 export async function respondAutocompleteVN(
   interaction: AutocompleteInteraction,
   focusedValue: string

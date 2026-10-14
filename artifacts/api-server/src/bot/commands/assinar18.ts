@@ -7,7 +7,11 @@ import {
 import { db, assinaturasTable, notificacaoCanaisTable } from "@workspace/db";
 import { eq, and, ilike } from "drizzle-orm";
 import { getUnifiedById, getUnifiedAnimeById } from "../unified.js";
-import { respondAutocomplete, respondAutocompleteAnime } from "../autocomplete.js";
+import {
+  resolveAdultSubscriptionChoice,
+  respondAutocomplete,
+  respondAutocompleteAnime,
+} from "../autocomplete.js";
 import { parseAdultSubscriptionChoice } from "../subscription-choice.js";
 
 export const data = new SlashCommandBuilder()
@@ -109,13 +113,20 @@ async function handleAdicionar(interaction: ChatInputCommandInteraction) {
   const titulo = interaction.options.getString("titulo", true);
   await interaction.deferReply({ ephemeral: true });
 
-  const selection = parseAdultSubscriptionChoice(tipo, titulo);
-  if (!selection) {
-    await interaction.editReply("❌ Por favor, selecione um título da lista de sugestões ao digitar.");
-    return;
-  }
+  let selection = parseAdultSubscriptionChoice(tipo, titulo);
+    if (!selection) {
+      const resolvedChoice = await resolveAdultSubscriptionChoice(tipo, titulo);
+      if (resolvedChoice) selection = parseAdultSubscriptionChoice(tipo, resolvedChoice);
+    }
+    if (!selection) {
+      const message = tipo === "anime"
+        ? "❌ Não encontrei uma correspondência exata para esse título. Confira o nome ou use as sugestões no Discord Web/computador."
+        : "❌ Não encontrei uma correspondência exata para esse título. Confira o nome e tente novamente.";
+      await interaction.editReply(message);
+      return;
+    }
 
-  const result = selection.kind === "anime"
+      const result = selection.kind === "anime"
     ? await getUnifiedAnimeById(selection.source, selection.id)
     : await getUnifiedById(selection.source, selection.id);
 
