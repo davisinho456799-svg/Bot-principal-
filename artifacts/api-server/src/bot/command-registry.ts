@@ -33,6 +33,7 @@ import * as assinarCommand from "./commands/assinar.js";
 import * as assinar18Command from "./commands/assinar18.js";
 import * as adminCommand from "./commands/admin.js";
 import * as limparCommand from "./commands/limpar.js";
+import * as embedCommand from "./commands/embed.js";
 import {
   executeManhwaCommand,
   monitorCommandDefinition,
@@ -84,6 +85,7 @@ const commandModules: BotCommand[] = [
   assinar18Command,
   adminCommand,
   limparCommand,
+  embedCommand,
   { data: monitorCommandDefinition, execute: executeManhwaCommand },
 ];
 
