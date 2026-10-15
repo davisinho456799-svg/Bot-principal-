@@ -481,37 +481,65 @@ export async function respondAutocompleteAnime(
     * Resolve typed text only when it exactly matches an option produced by the
     * same autocomplete sources and ordering used by /assinar18.
     */
-    export async function resolveAdultSubscriptionChoice(
-    tipo: "anime" | "manga" | "manhwa",
-    query: string,
-    ): Promise<string | null> {
-    const normalizedQuery = normalizeTitleForLookup(query);
-    if (!normalizedQuery) return null;
+    export async function getAdultSubscriptionCandidates(
+  tipo: "anime" | "manga" | "manhwa",
+  query: string,
+): Promise<Suggestion[]> {
+  const normalizedQuery = normalizeTitleForLookup(query);
+  if (!normalizedQuery) return [];
 
-    let choices: Suggestion[] = [];
-    const captureInteraction = {
-      respond: async (options: Suggestion[]) => { choices = options; },
-    } as unknown as AutocompleteInteraction;
+  let choices: Suggestion[] = [];
+  const captureInteraction = {
+    respond: async (options: Suggestion[]) => { choices = options; },
+  } as unknown as AutocompleteInteraction;
 
-    if (tipo === "anime") {
-      await respondAutocompleteAnime(captureInteraction, query);
-    } else {
-      await respondAutocomplete(
-        captureInteraction,
-        query,
-        null,
-        false,
-        tipo === "manga" ? "Manga" : "Manhwa",
-        true,
-      );
-    }
+  if (tipo === "anime") {
+    await respondAutocompleteAnime(captureInteraction, query);
+  } else {
+    await respondAutocomplete(
+      captureInteraction,
+      query,
+      null,
+      false,
+      tipo === "manga" ? "Manga" : "Manhwa",
+      true,
+    );
+  }
 
-    return choices.find((choice) =>
-      normalizeTitleForLookup(choice.name) === normalizedQuery,
-    )?.value ?? null;
-    }
+  const seen = new Set<string>();
+  const ranked = choices
+    .map((choice, index) => {
+      const title = normalizeTitleForLookup(choice.name);
+      const position = title.indexOf(normalizedQuery);
+      return { choice, index, score: position === 0 ? 1000 : position > 0 ? 800 - position : 0 };
+    })
+    .filter(({ choice, score }) => {
+      const key = normalizeTitleForLookup(choice.name);
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return score > 0;
+    })
+    .sort((left, right) => right.score - left.score || left.index - right.index);
 
-    // ── Autocomplete para VN (SFW) ────────────────────────────────────────────────
+  // Search APIs already return relevant results; prioritize direct title overlap,
+  // otherwise show only the provider's first five ranked results.
+  const candidates = ranked.length ? ranked.map(({ choice }) => choice) : choices.slice(0, 5);
+  return candidates.slice(0, 25);
+}
+
+export async function resolveAdultSubscriptionChoice(
+  tipo: "anime" | "manga" | "manhwa",
+  query: string,
+): Promise<string | null> {
+  const normalizedQuery = normalizeTitleForLookup(query);
+  if (!normalizedQuery) return null;
+  const choices = await getAdultSubscriptionCandidates(tipo, query);
+  return choices.find((choice) =>
+    normalizeTitleForLookup(choice.name) === normalizedQuery,
+  )?.value ?? null;
+}
+
+// ── Autocomplete para VN (SFW) ────────────────────────────────────────────────
 export async function respondAutocompleteVN(
   interaction: AutocompleteInteraction,
   focusedValue: string

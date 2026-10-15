@@ -1,6 +1,10 @@
 import {
   ChatInputCommandInteraction,
   AutocompleteInteraction,
+  StringSelectMenuBuilder,
+  StringSelectMenuInteraction,
+  ActionRowBuilder,
+  ComponentType,
   SlashCommandBuilder,
   EmbedBuilder,
 } from "discord.js";
@@ -8,6 +12,7 @@ import { db, assinaturasTable, notificacaoCanaisTable } from "@workspace/db";
 import { eq, and, ilike } from "drizzle-orm";
 import { getUnifiedById, getUnifiedAnimeById } from "../unified.js";
 import {
+  getAdultSubscriptionCandidates,
   resolveAdultSubscriptionChoice,
   respondAutocomplete,
   respondAutocompleteAnime,
@@ -104,7 +109,8 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
 }
 
 async function handleAdicionar(interaction: ChatInputCommandInteraction) {
-  if (!interaction.guildId) {
+  const guildId = interaction.guildId;
+  if (!guildId) {
     await interaction.reply({ content: "❌ Este comando só pode ser usado em servidores.", ephemeral: true });
     return;
   }
@@ -114,30 +120,118 @@ async function handleAdicionar(interaction: ChatInputCommandInteraction) {
   await interaction.deferReply({ ephemeral: true });
 
   let selection = parseAdultSubscriptionChoice(tipo, titulo);
-    if (!selection) {
-      const resolvedChoice = await resolveAdultSubscriptionChoice(tipo, titulo);
-      if (resolvedChoice) selection = parseAdultSubscriptionChoice(tipo, resolvedChoice);
-    }
-    if (!selection) {
-      const message = tipo === "anime"
-        ? "❌ Não encontrei uma correspondência exata para esse título. Confira o nome ou use as sugestões no Discord Web/computador."
-        : "❌ Não encontrei uma correspondência exata para esse título. Confira o nome e tente novamente.";
-      await interaction.editReply(message);
+  if (!selection) {
+    const resolvedChoice = await resolveAdultSubscriptionChoice(tipo, titulo);
+    if (resolvedChoice) selection = parseAdultSubscriptionChoice(tipo, resolvedChoice);
+  }
+  if (!selection) {
+    const candidates = await getAdultSubscriptionCandidates(tipo, titulo);
+    if (candidates.length) {
+      const candidateValues = new Set(candidates.map((candidate) => candidate.value));
+      const menu = new StringSelectMenuBuilder()
+        .setCustomId(`assinar18_candidate_${interaction.id}`)
+        .setPlaceholder("Escolha o título mais parecido")
+        .setMinValues(1)
+        .setMaxValues(1)
+        .addOptions(candidates.map((candidate) => ({
+          label: candidate.name.slice(0, 100),
+          value: candidate.value,
+          description: `Fonte: ${getSubscriptionSourceLabel(tipo, candidate.value)}`.slice(0, 100),
+        })));
+      await interaction.editReply({
+        content: "Não encontrei o título exato. Escolha uma opção provável abaixo; nenhuma assinatura será criada até você selecionar.",
+        components: [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu)],
+      });
+      const collector = interaction.channel?.createMessageComponentCollector({
+        componentType: ComponentType.StringSelect,
+        filter: (component) =>
+          component.customId === `assinar18_candidate_${interaction.id}` &&
+          component.user.id === interaction.user.id,
+        time: 30_000,
+        max: 1,
+      });
+
+      collector?.on("collect", async (selectInteraction: StringSelectMenuInteraction) => {
+        await selectInteraction.deferUpdate();
+        const selectedValue = selectInteraction.values[0];
+        const selection = selectedValue && candidateValues.has(selectedValue)
+          ? parseAdultSubscriptionChoice(tipo, selectedValue)
+          : null;
+        if (!selection) {
+          await interaction.editReply({
+            content: "A opção selecionada não é válida. Execute `/assinar18 adicionar` novamente.",
+            components: [],
+          });
+          return;
+        }
+        await completeAdultSubscription(
+          tipo,
+          selection,
+          interaction.user.id,
+          guildId,
+          (payload) => interaction.editReply(
+            typeof payload === "string" ? { content: payload, components: [] } : { ...payload, components: [] },
+          ),
+        );
+      });
+      collector?.on("end", async (_collected, reason) => {
+        if (reason === "time") {
+          await interaction.editReply({
+            content: "⌛ A lista de opções expirou. Execute `/assinar18 adicionar` novamente.",
+            components: [],
+          }).catch(() => undefined);
+        }
+      });
       return;
     }
 
-      const result = selection.kind === "anime"
+    await interaction.editReply("❌ Não encontrei títulos parecidos. Confira o nome e tente novamente.");
+    return;
+  }
+
+  await completeAdultSubscription(
+    tipo,
+    selection,
+    interaction.user.id,
+    guildId,
+    (payload) => interaction.editReply(payload),
+  );
+}
+
+function getSubscriptionSourceLabel(tipo: "anime" | "manga" | "manhwa", value: string): string {
+  const selection = parseAdultSubscriptionChoice(tipo, value);
+  const labels: Record<string, string> = {
+    "anilist-anime": "AniList",
+    jikan: "MyAnimeList",
+    tenrai: "Tenrai",
+    kitsu: "Kitsu",
+    anilist: "AniList",
+    comick: "Comick",
+    mangadex: "MangaDex",
+    mangaupdates: "MangaUpdates",
+  };
+  return selection ? labels[selection.source] ?? "Catálogo" : "Catálogo";
+}
+
+type AdultSubscriptionReply = string | { embeds: EmbedBuilder[] };
+
+async function completeAdultSubscription(
+  tipo: "anime" | "manga" | "manhwa",
+  selection: NonNullable<ReturnType<typeof parseAdultSubscriptionChoice>>,
+  userId: string,
+  guildId: string,
+  editReply: (payload: AdultSubscriptionReply) => Promise<unknown>,
+): Promise<void> {
+  const result = selection.kind === "anime"
     ? await getUnifiedAnimeById(selection.source, selection.id)
     : await getUnifiedById(selection.source, selection.id);
 
   if (!result) {
-    await interaction.editReply("❌ Não foi possível buscar as informações desse título. Tente novamente.");
+    await editReply("❌ Não foi possível buscar as informações desse título. Tente novamente.");
     return;
   }
 
   const { id: manhwaId, source, mainTitle: title, coverUrl, siteUrl } = result;
-  const userId  = interaction.user.id;
-  const guildId = interaction.guildId;
 
   const existing = await db
     .select({ id: assinaturasTable.id })
@@ -149,7 +243,7 @@ async function handleAdicionar(interaction: ChatInputCommandInteraction) {
     ));
 
   if (existing.length) {
-    await interaction.editReply(`⚠️ Você já está assinando **${title}** neste servidor!`);
+    await editReply(`⚠️ Você já está assinando **${title}** neste servidor!`);
     return;
   }
 
@@ -195,7 +289,7 @@ async function handleAdicionar(interaction: ChatInputCommandInteraction) {
     .setFooter({ text: "⚠️ Conteúdo adulto (+18) • Notificações automáticas" });
 
   if (coverUrl) embed.setThumbnail(coverUrl);
-  await interaction.editReply({ embeds: [embed] });
+  await editReply({ embeds: [embed] });
 }
 
 async function handleRemover(interaction: ChatInputCommandInteraction) {
