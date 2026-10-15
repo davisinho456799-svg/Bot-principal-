@@ -1161,6 +1161,9 @@ export async function isolatePrimaryThumbnails(
             `url(${JSON.stringify(expectedUrl)})`,
             "important",
           );
+          node.style.setProperty("background-size", "contain", "important");
+          node.style.setProperty("background-position", "center", "important");
+          node.style.setProperty("background-repeat", "no-repeat", "important");
         } else {
           node.style.setProperty("background-image", "none", "important");
           hideEmptyContainers(node, card, primary.node);

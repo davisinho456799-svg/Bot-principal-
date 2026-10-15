@@ -429,7 +429,10 @@ async function buildStrip(
   const composites = await Promise.all(images.map(async ({ data, chapter }, index) => {
     if (!data) return null;
     const thumbnail = await sharp(data)
-      .resize(chapterSubtitleForDisplay(chapter) ? 240 : 690, 120, { fit: "cover", position: "centre" })
+      .resize(chapterSubtitleForDisplay(chapter) ? 240 : 690, 120, {
+        fit: "contain",
+        background: { r: 245, g: 240, b: 232, alpha: 1 },
+      })
       .png()
       .toBuffer();
     return {

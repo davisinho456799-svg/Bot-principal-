@@ -59,6 +59,31 @@ async function countSolidColorPixels(
 }
 
 describe("single-thumbnail chapter capture", () => {
+  it("keeps the complete primary artwork visible when the source card uses cover cropping", async () => {
+    const page = await browser.newPage();
+    const portrait = `data:image/svg+xml,${encodeURIComponent(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="120"><rect width="40" height="60" fill="#d43b35"/><rect y="60" width="40" height="60" fill="#37a36b"/></svg>',
+    )}`;
+    await page.setContent(`<article data-monitor-capture-card="portrait"
+      style="width:140px;height:100px">
+      <img src="${portrait}" style="width:120px;height:90px;object-fit:cover">
+    </article>`);
+    await page.waitForFunction(() => {
+      const image = document.querySelector("img");
+      return image instanceof HTMLImageElement && image.complete && image.naturalHeight > 0;
+    });
+
+    await isolatePrimaryThumbnails(page, [{
+      captureId: "portrait",
+      thumbnailUrl: portrait,
+    }]);
+
+    expect(await page.locator("img").evaluate(image => getComputedStyle(image).objectFit)).toBe("contain");
+    const screenshot = await page.locator("article").screenshot();
+    expect(await countSolidColorPixels(screenshot, [212, 59, 53])).toBeGreaterThan(0);
+    expect(await countSolidColorPixels(screenshot, [55, 163, 107])).toBeGreaterThan(0);
+    await page.close();
+  });
   it("preserves decimal Toomics chapters and their thumbnail without the work ID", async () => {
     const page = await browser.newPage();
     await page.setViewportSize({ width: 900, height: 800 });

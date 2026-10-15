@@ -106,6 +106,48 @@ describe("monitor release image", () => {
     expect(progress).toHaveBeenCalledWith(expect.stringContaining("mesmo capítulo"));
   });
 
+  it("preserves the full portrait thumbnail instead of cropping it to the fallback row", async () => {
+    vi.stubEnv("DISCORD_BOT_TOKEN", "unit-test-not-a-real-token");
+    const portrait = await sharp({
+      create: { width: 40, height: 120, channels: 3, background: "#d43b35" },
+    })
+      .composite([{
+        input: await sharp({
+          create: { width: 40, height: 60, channels: 3, background: "#37a36b" },
+        }).png().toBuffer(),
+        left: 0,
+        top: 60,
+      }])
+      .png()
+      .toBuffer();
+    let posted: FormData | undefined;
+    vi.stubGlobal("fetch", vi.fn(async (input: string, options?: RequestInit) => {
+      if (String(input).startsWith("https://discord.com/api/")) {
+        posted = options?.body as FormData;
+        return new Response("", { status: 200 });
+      }
+      return new Response(new Uint8Array(portrait), { status: 200, headers: { "content-type": "image/png" } });
+    }));
+
+    await postStrip("unit-test-channel", "Portrait artwork", [{
+      number: "1",
+      key: "portrait-artwork-1",
+      parser: "test",
+      thumbnailUrl: "https://example.test/portrait.png",
+      subtitlePt: "A chapter subtitle",
+    }], 1, 1);
+
+    const image = posted!.get("files[0]") as Blob;
+    const { data, info } = await sharp(Buffer.from(await image.arrayBuffer()))
+      .removeAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    const pixel = (x: number, y: number) =>
+      Array.from(data.subarray((y * info.width + x) * info.channels, (y * info.width + x) * info.channels + 3));
+    expect(pixel(160, 112)).toEqual([212, 59, 53]);
+    expect(pixel(160, 202)).toEqual([55, 163, 107]);
+  });
+
   it("renders two portrait panels for the browser-less experiment, with no primary panel", async () => {
     const images = await Promise.all(["#d43b35", "#37a36b"].map(background =>
       sharp({ create: { width: 260, height: 360, channels: 3, background } }).png().toBuffer(),
