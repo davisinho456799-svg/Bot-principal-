@@ -28,6 +28,8 @@ export async function fetchComick(url: string): Promise<ComickHttpResponse> {
     try {
       const response = await gotScraping({
         url,
+        // Avoid shared-response caching, including the unpatched max-stale path.
+        cache: false,
         headers: COMICK_HEADERS,
         headerGeneratorOptions: {
           browsers: [{ name: "chrome", minVersion: 120 }],

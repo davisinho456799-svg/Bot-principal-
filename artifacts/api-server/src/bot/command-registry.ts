@@ -25,7 +25,6 @@ import * as perfilCommand from "./commands/perfil.js";
 import * as similarCommand from "./commands/similar.js";
 import * as identificarCommand from "./commands/identificar.js";
 import * as temasCommand from "./commands/temas.js";
-import * as filmeCommand from "./commands/filme.js";
 import * as calendarioCommand from "./commands/calendario.js";
 import * as calendario18Command from "./commands/calendario18.js";
 import * as historicoCommand from "./commands/historico.js";
@@ -34,6 +33,7 @@ import * as assinarCommand from "./commands/assinar.js";
 import * as assinar18Command from "./commands/assinar18.js";
 import * as adminCommand from "./commands/admin.js";
 import * as limparCommand from "./commands/limpar.js";
+import * as embedCommand from "./commands/embed.js";
 import {
   executeManhwaCommand,
   monitorCommandDefinition,
@@ -71,7 +71,6 @@ const commandModules: BotCommand[] = [
   noticiasCommand,
   identificarCommand,
   temasCommand,
-  filmeCommand,
   mangaCommand,
   calendarioCommand,
   calendario18Command,
@@ -86,6 +85,7 @@ const commandModules: BotCommand[] = [
   assinar18Command,
   adminCommand,
   limparCommand,
+  embedCommand,
   { data: monitorCommandDefinition, execute: executeManhwaCommand },
 ];
 

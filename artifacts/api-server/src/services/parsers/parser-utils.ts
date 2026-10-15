@@ -1,4 +1,5 @@
 import type { MonitorPlatform, ParsedChapter, ParserContext } from "./parser-types";
+import { enrichChapterSubtitles } from "./chapter-subtitles";
 
 const USER_AGENT = "ChapterMonitor/1.0 (+public-thumbnail-monitor)";
 
@@ -30,10 +31,17 @@ function getAttribute(tag: string, names: string[]): string | null {
   return null;
 }
 
-function getThumbnail(markup: string, listingUrl: string): string | null {
+function getThumbnail(
+  markup: string,
+  listingUrl: string,
+  platform?: MonitorPlatform,
+): string | null {
   const image = markup.match(/<img\b[^>]*>/i)?.[0] ?? markup.match(/<source\b[^>]*>/i)?.[0];
   if (image) {
-    const src = getAttribute(image, ["src", "data-src", "data-original", "data-lazy-src", "data-image"]);
+    const attributes = platform === "toomics"
+      ? ["data-original", "data-src", "data-lazy-src", "data-image", "src"]
+      : ["src", "data-src", "data-original", "data-lazy-src", "data-image"];
+    const src = getAttribute(image, attributes);
     const srcset = getAttribute(image, ["srcset", "data-srcset"]);
     const candidate = src ?? srcset?.split(",")[0]?.trim().split(/\s+/)[0];
     if (candidate) return resolveUrl(candidate, listingUrl);
@@ -142,6 +150,20 @@ type PlatformMarkupRules = {
   chapterAttributes: string[];
 };
 
+function getToomicsDisplayedEpisodeNumber(
+  markup: string,
+  platform: MonitorPlatform,
+): string | null | undefined {
+  if (platform !== "toomics") return undefined;
+  const label = markup.match(
+    /<(?:div|span)\b[^>]*class=['"][^'"]*\bep__episode\b[^'"]*['"][^>]*>([\s\S]*?)<\/(?:div|span)>/i,
+  )?.[1];
+  if (label === undefined) return undefined;
+  const number = cleanText(label);
+  if (/^\d+(?:\.\d+)?$/.test(number)) return number;
+  return markup.match(/\/ep\/(\d+(?:\.\d+)?)(?:\/|[?#\s"']|$)/i)?.[1] ?? null;
+}
+
 function parsePlatformCards(
   html: string,
   listingUrl: string,
@@ -150,10 +172,15 @@ function parsePlatformCards(
   const candidates: ParsedChapter[] = [];
   for (const match of html.matchAll(rules.cardPattern)) {
     const markup = match[0];
+    const displayedNumber = getToomicsDisplayedEpisodeNumber(markup, rules.platform);
+    if (displayedNumber === null) continue;
     const href = getAttribute(markup, ["href", "data-href", "data-url"]);
-    const number = extractChapterNumber(markup, href, true);
-    const thumbnail = getThumbnail(markup, listingUrl);
-    if (number && thumbnail) candidates.push({ number, thumbnailUrl: thumbnail });
+    const number = displayedNumber ?? extractChapterNumber(markup, href, true);
+    const thumbnail = getThumbnail(markup, listingUrl, rules.platform);
+    const subtitle = markup.match(/<(?:p|span|div)\b[^>]*class=['"][^'"]*\b(?:ep_stitle|episode-subtitle|chapter-subtitle)\b[^'"]*['"][^>]*>([\s\S]*?)<\/(?:p|span|div)>/i)?.[1];
+    if (number && thumbnail) candidates.push({
+      number, thumbnailUrl: thumbnail, ...(subtitle?.trim() ? { subtitle: cleanText(subtitle) } : {}),
+    });
   }
 
   // Some localized pages render the chapter metadata on a wrapper and the
@@ -166,8 +193,10 @@ function parsePlatformCards(
     );
     for (const match of html.matchAll(markerPattern)) {
       const markup = match[0];
-      const number = extractChapterNumber(markup, getAttribute(markup, ["href", "data-href", "data-url"]), true);
-      const thumbnail = getThumbnail(markup, listingUrl);
+      const displayedNumber = getToomicsDisplayedEpisodeNumber(markup, rules.platform);
+      if (displayedNumber === null) continue;
+      const number = displayedNumber ?? extractChapterNumber(markup, getAttribute(markup, ["href", "data-href", "data-url"]), true);
+      const thumbnail = getThumbnail(markup, listingUrl, rules.platform);
       if (number && thumbnail) candidates.push({ number, thumbnailUrl: thumbnail });
     }
   }
@@ -190,7 +219,7 @@ export function parsePlatformChapterHtml(
           ? ["data-episode", "data-episode-no", "data-ep", "episodeNo"]
           : ["data-episode", "data-chapter", "data-episode-no", "chapterNumber", "episodeNo"],
   };
-  return parsePlatformCards(html, listingUrl, rules);
+  return enrichChapterSubtitles(html, listingUrl, platform, parsePlatformCards(html, listingUrl, rules));
 }
 
 export function buildChapterKey(
