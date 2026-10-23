@@ -118,6 +118,28 @@ describe("single-thumbnail chapter capture", () => {
     await page.close();
   });
 
+  it("captures the full Toomics episode row instead of a short nested fragment", async () => {
+    const page = await browser.newPage();
+    const thumbnail = "https://thumb.toomics.com/chapter-135.jpg";
+    await page.setContent(`<ul style="margin:0;padding:0">
+      <li style="list-style:none;width:320px;height:160px">
+        <a href="javascript:;" style="display:block;width:320px;height:160px">
+          <div class="episode-fragment" style="width:320px;height:94px;overflow:hidden">
+            <img src="${thumbnail}" width="96" height="72">
+            <div class="ep__episode">135</div>
+            <div class="ep__title">A chapter title</div>
+          </div>
+          <div class="episode-date" style="height:66px">26.10.24</div>
+        </a>
+      </li>
+    </ul>`);
+
+    const chapters = await findRenderedChapters(page, "toomics");
+    const chapter = chapters.find((candidate) => candidate.number === "135");
+    expect(chapter?.box.height).toBe(160);
+    await page.close();
+  });
+
   it("prefers the visible Toptoon chapter label over an internal episode ID", async () => {
     const page = await browser.newPage();
     await page.setViewportSize({ width: 900, height: 800 });
