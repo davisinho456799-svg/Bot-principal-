@@ -13,6 +13,7 @@ import { logger } from "../lib/logger";
 import { loadMonitorDependency } from "../lib/monitor-dependencies";
 import { measureImageMonitorRound, type ImageMonitorTiming } from "./monitor-timing";
 import { monitorExecution } from "./monitor-execution.js";
+import { assertMonitorPlatformEnabled, isMonitorPlatformEnabled } from "./monitor-platform-settings.js";
 import { translateChapterSubtitles } from "./chapter-subtitle-translation";
 import { recordBotError } from "../bot/error-log.js";
 import { buildSubtitleFallbackRow, buildSubtitleRowsLayout, chapterSubtitleForDisplay } from "./chapter-subtitle-render";
@@ -224,6 +225,7 @@ async function fetchListing(
   progress?: MonitorProgressReporter,
 ): Promise<ListingSession> {
   const platform = work.platform as MonitorPlatform;
+  assertMonitorPlatformEnabled(platform);
   const context: ParserContext = {
     listingUrl: work.listingUrl,
     platform,
@@ -1071,7 +1073,8 @@ export async function runMonitor() {
 
 async function runMonitorRound(timing: ImageMonitorTiming) {
   const [config] = await db.select().from(monitorConfigTable).limit(1);
-  const works = await db.select().from(monitoredWorksTable).where(eq(monitoredWorksTable.active, true));
+  const works = (await db.select().from(monitoredWorksTable).where(eq(monitoredWorksTable.active, true)))
+    .filter(work => isMonitorPlatformEnabled(work.platform as MonitorPlatform));
   let chaptersFound = 0;
   let postsSent = 0;
   for (const work of works) {

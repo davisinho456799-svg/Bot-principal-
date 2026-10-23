@@ -6,6 +6,7 @@ import { enrichChapterSubtitles } from "./parsers/chapter-subtitles";
 import { applyCaptureSubtitles, type CaptureSubtitle } from "./chapter-subtitle-capture";
 import { applyToptoonPairCapture } from "./toptoon-pair-capture";
 import { getMonitorDependencyExport, loadMonitorDependency } from "../lib/monitor-dependencies";
+import { assertMonitorPlatformEnabled } from "./monitor-platform-settings.js";
 
 const PAGE_TIMEOUT_MS = 30_000;
 const MAX_CAPTURE_WIDTH = 2_400;
@@ -1416,6 +1417,7 @@ export async function openBrowserListing(
   retryAfterCrash = true,
   signal?: AbortSignal,
 ): Promise<BrowserListingSession> {
+  assertMonitorPlatformEnabled(platform);
   signal?.throwIfAborted();
   const context = await getBrowserContext();
   signal?.throwIfAborted();
