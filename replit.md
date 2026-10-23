@@ -22,7 +22,6 @@ Panel Watch monitors public chapter listings for Lezhin, Toomics, and Toptoon an
 
 ## Where things live
 
-- `artifacts/chapter-monitor` — responsive configuration dashboard for watchlist, manual runs, channel selection, and health.
 - `artifacts/api-server/src/routes/monitor.ts` — monitor API endpoints, Discord channel discovery, and persisted configuration.
 - `artifacts/api-server/src/services/monitor-service.ts` — public listing polling, deduplication, grouped capture publishing, and Discord delivery.
 - `artifacts/api-server/src/services/browser-chapter-capture.ts` — singleton Playwright browser/context, chapter-card detection, region screenshots, and adaptive grouping.

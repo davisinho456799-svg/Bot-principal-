@@ -33,19 +33,14 @@ app.use(express.urlencoded({ extended: true }));
 
 app.use("/api", router);
 
-const frontendCandidates = process.env.FRONTEND_DIST_DIR
-  ? [path.resolve(process.env.FRONTEND_DIST_DIR)]
-  : [
-      path.resolve(process.cwd(), "artifacts/chapter-monitor/dist/public"),
-      path.resolve(process.cwd(), "../chapter-monitor/dist/public"),
-    ];
-const frontendDist =
-  frontendCandidates.find((candidate) => existsSync(candidate)) ??
-  frontendCandidates[0];
+// Optional static hosting requires an explicit directory, not a retired dashboard.
+const frontendDist = process.env.FRONTEND_DIST_DIR
+  ? path.resolve(process.env.FRONTEND_DIST_DIR)
+  : undefined;
 const shouldServeFrontend =
   process.env.SERVE_FRONTEND === "true" || process.env.NODE_ENV === "production";
 
-if (shouldServeFrontend && existsSync(frontendDist)) {
+if (shouldServeFrontend && frontendDist && existsSync(frontendDist)) {
   app.use(express.static(frontendDist, { index: false }));
   app.use((req, res, next) => {
     if (req.method !== "GET" || req.path.startsWith("/api")) {

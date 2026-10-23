@@ -28,14 +28,11 @@ import {
   type UnifiedResult,
   type DescriptionSearchResult,
 } from "../unified.js";
-import { cleanDescription, translateToPtBr, statusLabel, searchAnime } from "../anilist.js";
-import { searchKitsu } from "../kitsu.js";
-import { searchAniSearch } from "../anisearch.js";
+import { cleanDescription, translateToPtBr, statusLabel } from "../anilist.js";
 import { searchJikanAnimeAny } from "../jikan.js";
 import { jikanAnimeToUnified } from "../unified.js";
-import { searchTenraiAnime } from "../tenrai-fallback.js";
 import { logger } from "../../lib/logger.js";
-import { isDiscordRateLimitError } from "../interaction-rate-limit.js";
+import { respondTitleAutocomplete } from "../title-autocomplete.js";
 
 export const data = new SlashCommandBuilder()
   .setName("anime")
@@ -45,6 +42,7 @@ export const data = new SlashCommandBuilder()
       .setName("titulo")
       .setDescription("Nome do anime para pesquisar")
       .setRequired(false)
+      .setAutocomplete(true)
   )
   .addStringOption((opt) =>
     opt
@@ -55,81 +53,8 @@ export const data = new SlashCommandBuilder()
 
 // ─── Autocomplete ─────────────────────────────────────────────────────────────
 
-interface AutocompleteOption { name: string; value: string }
-const autocompleteCache = new Map<string, { results: AutocompleteOption[]; ts: number }>();
-const CACHE_TTL = 30_000;
-// Discord invalida autocomplete após alguns segundos. Uma fonte lenta não
-// pode bloquear todas as outras nem fazer a interação expirar.
-const AUTOCOMPLETE_SOURCE_TIMEOUT = 1_200;
-
-async function withAutocompleteTimeout<T>(
-  source: string,
-  promise: Promise<T>,
-  fallback: T,
-): Promise<T> {
-  const startedAt = Date.now();
-  let timedOut = false;
-  let timer: NodeJS.Timeout | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<T>((resolve) => {
-        timer = setTimeout(() => {
-          timedOut = true;
-          resolve(fallback);
-        }, AUTOCOMPLETE_SOURCE_TIMEOUT);
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-    logger.info({
-      source,
-      durationMs: Date.now() - startedAt,
-      timedOut,
-    }, "Fonte de autocomplete finalizada");
-  }
-}
-
-async function respondAutocomplete(
-  interaction: AutocompleteInteraction,
-  results: AutocompleteOption[],
-  source: "anime",
-): Promise<void> {
-  const startedAt = Date.now();
-  try {
-    await interaction.respond(results);
-    logger.info({
-      command: source,
-      optionCount: results.length,
-      respondDurationMs: Date.now() - startedAt,
-    }, "Resposta de autocomplete enviada");
-  } catch (err) {
-    if (!isDiscordRateLimitError(err)) {
-      logger.warn({ err, command: source }, "Falha ao enviar resposta de autocomplete");
-    }
-    throw err;
-  }
-}
-
-function autocompleteRelevance(query: string, title: string): number {
-  const normalize = (value: string) =>
-    value.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
-  const q = normalize(query);
-  const t = normalize(title.replace(/\s*·\s*Tenrai$/i, ""));
-  if (!q || !t) return 0;
-  if (q === t) return 1;
-  if (t.startsWith(q)) return 0.92;
-  if (t.includes(q)) return 0.78;
-  const words = q.split(/\s+/).filter((word) => word.length > 1);
-  const hits = words.filter((word) => t.includes(word)).length;
-  return words.length ? (hits / words.length) * 0.65 : 0;
-}
-
 export async function autocomplete(interaction: AutocompleteInteraction): Promise<void> {
-  logger.debug(
-    { interactionId: interaction.id },
-    "Autocomplete de /anime desativado",
-  );
+  await respondTitleAutocomplete(interaction, "anime");
 }
 
 // ─── Labels e ícones ──────────────────────────────────────────────────────────
