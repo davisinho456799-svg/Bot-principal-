@@ -418,7 +418,21 @@ async function buildStrip(
       ? null
       : await downloadThumbnail(chapter.thumbnailUrl, requireThumbnail ? 10_000 : undefined),
   })));
-  if (images.every(image => !image.data)) return null;
+  if (images.every(image => !image.data)) {
+    if (requireThumbnail) {
+      logger.warn(
+        {
+          title,
+          chapters: images.map(({ chapter }) => ({
+            number: chapter.number,
+            hasThumbnailUrl: Boolean(chapter.thumbnailUrl?.trim()),
+          })),
+        },
+        "Miniatura principal ausente ou não utilizável; fallback de imagem não gerado",
+      );
+    }
+    return null;
+  }
   const imageRows = images.map(({ chapter, data }, index) => {
     const y = layout.rows[index].y;
     if (chapterSubtitleForDisplay(chapter)) return buildSubtitleFallbackRow(chapter, y, layout.rows[index].height, Boolean(data));

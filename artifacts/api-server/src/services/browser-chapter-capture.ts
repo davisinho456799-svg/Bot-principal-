@@ -5,7 +5,7 @@ import type { MonitorPlatform, ParsedChapter } from "./parsers/index";
 import { enrichChapterSubtitles } from "./parsers/chapter-subtitles";
 import { applyCaptureSubtitles, type CaptureSubtitle } from "./chapter-subtitle-capture";
 import { applyToptoonPairCapture } from "./toptoon-pair-capture";
-import { loadMonitorDependency } from "../lib/monitor-dependencies";
+import { getMonitorDependencyExport, loadMonitorDependency } from "../lib/monitor-dependencies";
 
 const PAGE_TIMEOUT_MS = 30_000;
 const MAX_CAPTURE_WIDTH = 2_400;
@@ -66,7 +66,13 @@ let chromiumPromise: Promise<Chromium> | null = null;
 
 async function getChromium(): Promise<Chromium> {
   chromiumPromise ??= loadMonitorDependency("playwright")
-    .then((module) => (module as typeof import("playwright")).chromium)
+    .then((module) => {
+      const chromium = getMonitorDependencyExport<Chromium>(module, "chromium");
+      if (!chromium || typeof chromium.launch !== "function") {
+        throw new Error("Playwright não exportou um launcher Chromium utilizável.");
+      }
+      return chromium;
+    })
     .catch(error => { chromiumPromise = null; throw error; });
   return chromiumPromise;
 }

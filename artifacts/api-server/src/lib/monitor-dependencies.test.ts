@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createMonitorDependencyLoader } from "./monitor-dependencies";
+import { createMonitorDependencyLoader, getMonitorDependencyExport } from "./monitor-dependencies";
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
@@ -23,6 +23,13 @@ async function install(root: string, name: string, version: string, value: strin
 }
 
 describe("monitor dependencies after a Discloud overlay", () => {
+  it("reads named exports and CommonJS exports wrapped under default", () => {
+    const chromium = { launch: vi.fn() };
+    expect(getMonitorDependencyExport({ chromium }, "chromium")).toBe(chromium);
+    expect(getMonitorDependencyExport({ default: { chromium } }, "chromium")).toBe(chromium);
+    expect(getMonitorDependencyExport({}, "chromium")).toBeUndefined();
+  });
+
   it("reuses the declared intact store version when package links are missing", async () => {
     const root = await fixture();
     await install(root, "sharp", "0.33.0", "wrong-version");

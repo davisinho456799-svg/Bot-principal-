@@ -5,6 +5,25 @@ import { pathToFileURL } from "node:url";
 
 type MonitorDependency = "sharp" | "playwright";
 
+export function getMonitorDependencyExport<T>(
+  module: unknown,
+  exportName: string,
+): T | undefined {
+  if (!module || (typeof module !== "object" && typeof module !== "function")) {
+    return undefined;
+  }
+
+  const namespace = module as Record<string, unknown>;
+  const namedExport = namespace[exportName];
+  if (namedExport !== undefined) return namedExport as T;
+
+  const defaultExport = namespace.default;
+  if (defaultExport && (typeof defaultExport === "object" || typeof defaultExport === "function")) {
+    return (defaultExport as Record<string, unknown>)[exportName] as T | undefined;
+  }
+  return undefined;
+}
+
 /** Discloud overlays can retain pnpm packages while losing their public links. */
 export function createMonitorDependencyLoader({
   roots = [process.cwd(), path.resolve(process.cwd(), "../..")],
