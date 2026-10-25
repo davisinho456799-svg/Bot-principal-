@@ -100,17 +100,16 @@ async function installListing(numbers: string[], releaseDate = new Date().toISOS
 }
 
 describe("durable monitor delivery progress", () => {
-  it("skips Toomics during scheduled rounds without changing monitor history", async () => {
+  it("checks Toomics during scheduled rounds after its pause ends", async () => {
     state.records.monitored_works[0].platform = "toomics";
-    const before = structuredClone(state.records);
+    await installListing(["2"]);
     const outgoingRequest = vi.fn();
     vi.stubGlobal("fetch", outgoingRequest);
 
     await runMonitor();
 
-    expect(state.listing).not.toHaveBeenCalled();
-    expect(outgoingRequest).not.toHaveBeenCalled();
-    expect(state.records).toEqual(before);
+    expect(state.listing).toHaveBeenCalledWith("https://example.test/work", "toomics");
+    expect(outgoingRequest).toHaveBeenCalled();
   });
 
   it.each([false, true])("recovers only the unsent group, even below a newer published chapter (%s)", async failFirst => {
@@ -323,7 +322,7 @@ describe("manual resends preserve Toptoon pairs and independent fallback", () =>
     expect(state.db.insert).not.toHaveBeenCalled();
   });
 
-  it.each(["toptoon", "lezhin"])("uses the platform-specific browser capture without changing %s history", async platform => {
+  it.each(["toptoon", "lezhin", "toomics"])("uses the platform-specific browser capture without changing %s history", async platform => {
     state.records.monitored_works[0].platform = platform;
     await installListing(["2"]);
     const imageSession = await state.listing();
@@ -336,16 +335,7 @@ describe("manual resends preserve Toptoon pairs and independent fallback", () =>
     expect(state.records).toEqual(before);
   });
 
-  it("does not contact Toomics while its monitor is paused", async () => {
-    state.records.monitored_works[0].platform = "toomics";
-    vi.stubGlobal("fetch", vi.fn());
 
-    await expect(runResendNotification(1, "2"))
-      .rejects.toThrow("O monitor do Toomics está pausado temporariamente; nenhuma consulta foi feita.");
-
-    expect(state.listing).not.toHaveBeenCalled();
-    expect(fetch).not.toHaveBeenCalled();
-  });
 
   it("edits only the matching bot message with one captured group and leaves delivery history unchanged", async () => {
     state.records.detected_chapters.push({

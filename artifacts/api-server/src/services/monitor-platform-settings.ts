@@ -1,7 +1,7 @@
 import type { MonitorPlatform } from "./parsers/index";
 
-// Toomics requests are paused at the user's request until they ask to resume.
-const PAUSED_MONITOR_PLATFORMS = new Set<MonitorPlatform>(["toomics"]);
+// Add a platform here only when its monitor should be temporarily paused.
+const PAUSED_MONITOR_PLATFORMS = new Set<MonitorPlatform>();
 
 export function isMonitorPlatformEnabled(platform: MonitorPlatform): boolean {
   return !PAUSED_MONITOR_PLATFORMS.has(platform);
