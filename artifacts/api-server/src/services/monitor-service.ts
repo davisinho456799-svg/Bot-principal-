@@ -1,5 +1,6 @@
 import { and, eq, or } from "drizzle-orm";
 import { createHash } from "node:crypto";
+import type { Client } from "discord.js";
 import type sharp from "sharp";
 import { db } from "@workspace/db";
 import {
@@ -42,6 +43,11 @@ import {
   isAbsurdChapterOutlier,
   numericChapterNumber,
 } from "./monitor-chapter-guard";
+import {
+  formatMonitorLinkWarning,
+  getMonitorLinkRedirect,
+  monitorLinkWarningKey,
+} from "./monitor-link-warning.js";
 
 type ChapterCandidate = ParsedChapter & {
   key: string;
@@ -204,6 +210,7 @@ function withChapterKeys(
 type ListingSession = {
   parser: string;
   candidates: ChapterCandidate[];
+  finalUrl?: string;
   captureSession?: BrowserListingSession;
 };
 
@@ -232,9 +239,11 @@ async function fetchListing(
     workTitle: work.title,
   };
 
+  let browserFinalUrl: string | undefined;
   try {
     await reportProgress(progress, "Abrindo a página com o navegador e procurando os cards de capítulos.");
     const browserListing = await openBrowserListing(work.listingUrl, platform);
+    browserFinalUrl = browserListing.diagnostics?.finalUrl;
     if (browserListing.candidates.length) {
       const browserCandidates = browserListing.candidates as BrowserChapter[];
       await reportProgress(
@@ -249,6 +258,7 @@ async function fetchListing(
           work.title,
           "Playwright browser",
         ),
+        finalUrl: browserFinalUrl,
         captureSession: browserListing,
       };
     }
@@ -310,6 +320,7 @@ async function fetchListing(
   return {
     parser: specificParser ? `${genericParser.name} (fallback)` : genericParser.name,
     candidates: withChapterKeys(genericChapters, platform, work.title, genericParser.name),
+    finalUrl: browserFinalUrl,
   };
 }
 
@@ -1067,11 +1078,52 @@ export async function runTestNotification(
   }
 }
 
-export async function runMonitor() {
-  return monitorExecution.runRegular(() => measureImageMonitorRound(runMonitorRound));
+export async function runMonitor(client?: Client) {
+  return monitorExecution.runRegular(() => measureImageMonitorRound((timing) => runMonitorRound(timing, client)));
 }
 
-async function runMonitorRound(timing: ImageMonitorTiming) {
+async function sendLinkRedirectWarning(
+  client: Client | undefined,
+  config: typeof monitorConfigTable.$inferSelect | undefined,
+  work: typeof monitoredWorksTable.$inferSelect,
+  inputUrl: string,
+  finalUrl?: string,
+) {
+  if (!client || !config?.discordChannelId) return;
+  const platform = work.platform as MonitorPlatform;
+  const redirect = getMonitorLinkRedirect(inputUrl, platform, finalUrl);
+  const content = formatMonitorLinkWarning(work.title, redirect);
+  if (!content) return;
+
+  const status = `Link redirect warning:${monitorLinkWarningKey(work.id, platform, inputUrl)}`;
+  const [alreadySent] = await db.select({ id: monitorActivityTable.id })
+    .from(monitorActivityTable)
+    .where(and(
+      eq(monitorActivityTable.workId, work.id),
+      eq(monitorActivityTable.status, status),
+    ))
+    .limit(1);
+  if (alreadySent) return;
+
+  try {
+    const channel = await client.channels.fetch(config.discordChannelId);
+    if (!channel?.isTextBased()) throw new Error("Monitor channel is not text-based");
+    const send = (channel as unknown as {
+      send?: (payload: { content: string; allowedMentions: { parse: string[] } }) => Promise<unknown>;
+    }).send;
+    if (!send) throw new Error("Monitor channel cannot receive messages");
+    await send.call(channel, { content, allowedMentions: { parse: [] } });
+    await db.insert(monitorActivityTable).values({
+      workId: work.id,
+      chapterCount: 0,
+      status,
+    });
+  } catch (error) {
+    logger.warn({ err: error, workId: work.id }, "Could not send monitor link redirect warning");
+  }
+}
+
+async function runMonitorRound(timing: ImageMonitorTiming, client?: Client) {
   const [config] = await db.select().from(monitorConfigTable).limit(1);
   const works = (await db.select().from(monitoredWorksTable).where(eq(monitoredWorksTable.active, true)))
     .filter(work => isMonitorPlatformEnabled(work.platform as MonitorPlatform));
@@ -1086,10 +1138,14 @@ async function runMonitorRound(timing: ImageMonitorTiming) {
     let listing: ListingSession | undefined;
     let previousListing: ListingSession | undefined;
     try {
+      await sendLinkRedirectWarning(client, config, work, work.listingUrl);
       listing = await fetchListing(work);
+      await sendLinkRedirectWarning(client, config, work, work.listingUrl, listing.finalUrl);
       let previousLinkNumbers: Set<string> | undefined;
       if (linkDeltaPending && previousLinkUrl) {
+        await sendLinkRedirectWarning(client, config, work, previousLinkUrl);
         previousListing = await fetchListing({ ...work, listingUrl: previousLinkUrl });
+        await sendLinkRedirectWarning(client, config, work, previousLinkUrl, previousListing.finalUrl);
         if (previousListing.candidates.length === 0) {
           throw new Error("The previous listing returned no usable chapters; link-difference check remains pending");
         }

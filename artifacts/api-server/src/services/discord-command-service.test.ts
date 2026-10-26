@@ -389,6 +389,26 @@ describe("safe monitor commands", () => {
     expect(state.rows.find((row) => row.title === "D")!.id).toBe(11);
   });
 
+  it("warns when adding a work with a non-direct URL", async () => {
+    const { fake, command } = interaction("adicionar", null, false, {
+      link: "https://www.google.com/url?url=https%3A%2F%2Ftoptoon.com%2Fcomic%2Fep_list%2Fwork",
+      plataforma: "toptoon",
+    });
+    await executeManhwaCommand(command);
+    expect(fake.editReply.mock.calls.at(-1)![0].content).toContain("Link não direto");
+    expect(fake.editReply.mock.calls.at(-1)![0].content).toContain("www.google.com");
+  });
+
+  it("warns before confirming a non-direct link edit", async () => {
+    state.rows.find((row) => row.id === 10)!.platform = "toptoon";
+    const { fake, command } = interaction("editar_link", 2, false, {
+      link: "https://www.google.com/url?url=https%3A%2F%2Ftoptoon.com%2Fcomic%2Fep_list%2Fwork",
+    });
+    await executeManhwaCommand(command);
+    expect(fake.editReply.mock.calls[0]![0].content).toContain("Link não direto");
+    expect(state.rows.find((row) => row.id === 10)!.listingUrl).toContain("google.com");
+  });
+
   it("retains integer option names for compatibility but requires positive numbers", () => {
     for (const name of ["remover", "teste", "renomear", "editar_link", "reenviar"]) {
       const command = monitorCommandDefinition.options!.find((option) => option.name === name);

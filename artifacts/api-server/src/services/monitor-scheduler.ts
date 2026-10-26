@@ -1,4 +1,5 @@
 import { db } from "@workspace/db";
+import type { Client } from "discord.js";
 import { eq, sql } from "drizzle-orm";
 import { monitorConfigTable, monitoredWorksTable } from "@workspace/db/schema";
 import { logger } from "../lib/logger.js";
@@ -12,6 +13,7 @@ let enabled = false;
 let generation = 0;
 let timer: ReturnType<typeof setTimeout> | undefined;
 let running = false;
+let discordClient: Client | undefined;
 
 function isCurrent(currentGeneration: number) {
   return enabled && currentGeneration === generation;
@@ -90,7 +92,7 @@ async function runWhenDue(currentGeneration: number): Promise<void> {
 
   running = true;
   try {
-    await runMonitor();
+    await runMonitor(discordClient);
   } catch (error) {
     logger.error({ err: error }, "Scheduled monitor run failed");
   } finally {
@@ -100,8 +102,9 @@ async function runWhenDue(currentGeneration: number): Promise<void> {
   }
 }
 
-export async function startMonitorScheduler(): Promise<void> {
+export async function startMonitorScheduler(client?: Client): Promise<void> {
   if (enabled) return;
+  discordClient = client;
   enabled = true;
   generation++;
   await scheduleNext(generation);
@@ -109,6 +112,7 @@ export async function startMonitorScheduler(): Promise<void> {
 
 export function stopMonitorScheduler(): void {
   enabled = false;
+  discordClient = undefined;
   generation++;
   if (timer !== undefined) clearTimeout(timer);
   timer = undefined;

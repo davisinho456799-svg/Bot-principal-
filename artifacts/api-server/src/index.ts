@@ -34,11 +34,13 @@ async function startApplication() {
   if (!rawPort) {
     logger.info("PORT não definido; iniciando como worker do Discord");
     if (discordBotEnabled) {
-      await startBot();
-      void startMonitorScheduler().catch((error) => {
-        logger.error({ err: error }, "Falha ao iniciar o monitor scheduler");
-        process.exitCode = 1;
-      });
+      const client = await startBot();
+      if (client) {
+        void startMonitorScheduler(client).catch((error) => {
+          logger.error({ err: error }, "Falha ao iniciar o monitor scheduler");
+          process.exitCode = 1;
+        });
+      }
     }
     return;
   }
@@ -56,11 +58,16 @@ async function startApplication() {
 
     logger.info({ port }, "Server listening");
     if (discordBotEnabled) {
-      void startBot().catch((error) => {
+      void startBot().then((client) => {
+        if (client) {
+          void startMonitorScheduler(client).catch((error) => {
+            logger.error({ err: error }, "Falha ao iniciar o monitor scheduler");
+          });
+        }
+      }).catch((error) => {
         logger.error({ err: error }, "Falha ao iniciar o bot do Discord");
         process.exitCode = 1;
       });
-      void startMonitorScheduler();
     }
   });
 }

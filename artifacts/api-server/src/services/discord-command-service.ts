@@ -28,6 +28,7 @@ import { resolveMonitorWorkNumber } from "./monitor-work-numbering.js";
 import { runMonitorDiagnostic, formatMonitorDiagnostic } from "./monitor-diagnostic.js";
 import { MonitorUnavailableError } from "./monitor-execution.js";
 import { handleMonitorReportCommand } from "./monitor-report-service.js";
+import { formatMonitorLinkWarning, getMonitorLinkRedirect } from "./monitor-link-warning.js";
 
 export const monitorCommandDefinition = new SlashCommandBuilder()
     .setName("monitor")
@@ -320,6 +321,7 @@ async function handleAdd(interaction: ChatInputCommandInteraction) {
   }
 
   const title = requestedTitle || titleFromUrl(listingUrl);
+  const linkWarning = formatMonitorLinkWarning(title, getMonitorLinkRedirect(listingUrl, platform));
   const [work] = await db
     .insert(monitoredWorksTable)
     .values({ title, platform, listingUrl, active: true })
@@ -331,6 +333,7 @@ async function handleAdd(interaction: ChatInputCommandInteraction) {
     content: [
       `✅ **${work.title}** agora está sendo monitorado.`,
       `Plataforma: ${platform}`,
+      ...(linkWarning ? [linkWarning] : []),
       `A primeira verificação será feita na próxima rodada e criará a linha de base sem repostar o histórico.`,
       numberedWork
         ? `Número atual da obra: ${numberedWork.displayNumber}`
@@ -385,6 +388,10 @@ async function handleEditLink(interaction: ChatInputCommandInteraction) {
     await interaction.editReply({ content: `ℹ️ **${selected.title}** já usa esse link.` });
     return;
   }
+  const linkWarning = formatMonitorLinkWarning(
+    selected.title,
+    getMonitorLinkRedirect(listingUrl, selected.platform as Platform),
+  );
 
   const [duplicate] = await db
     .select()
@@ -406,6 +413,7 @@ async function handleEditLink(interaction: ChatInputCommandInteraction) {
       `Alterar o link de **${selected.title}** (nº ${selected.displayNumber})?`,
       `Atual: ${selected.listingUrl}`,
       `Novo: ${listingUrl}`,
+      ...(linkWarning ? [linkWarning] : []),
       "Confira o título; a numeração pode ter mudado. O nome, a plataforma e o histórico de capítulos serão preservados.",
     ].join("\n"),
     components: [
@@ -462,6 +470,7 @@ async function handleEditLink(interaction: ChatInputCommandInteraction) {
     content: [
       `✅ Link de **${changed.title}** atualizado.`,
       `Novo link: ${changed.listingUrl}`,
+      ...(linkWarning ? [linkWarning] : []),
       "Na próxima checagem, serão enviados apenas capítulos ainda não registrados no histórico; depois o monitor continua normalmente.",
     ].join("\n"),
     components: [],
@@ -658,7 +667,7 @@ export async function executeManhwaCommand(interaction: ChatInputCommandInteract
     return;
   }
   if (subcommand === "verificar") {
-    const result = await runMonitor();
+    const result = await runMonitor(interaction.client);
     await interaction.editReply({
       content: [
         "✅ Verificação concluída.",

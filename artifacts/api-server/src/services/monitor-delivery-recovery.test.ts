@@ -84,9 +84,17 @@ beforeEach(() => {
 });
 afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 
-async function installListing(numbers: string[], releaseDate = new Date().toISOString().slice(0, 10)) {
+async function installListing(
+  numbers: string[],
+  releaseDate = new Date().toISOString().slice(0, 10),
+  finalUrl?: string,
+) {
   const image = await sharp({ create: { width: 800, height: 300, channels: 3, background: "#213547" } }).png().toBuffer();
   state.listing.mockImplementation(async () => ({
+    ...(finalUrl ? { diagnostics: {
+      finalUrl, pageTitle: "Redirect Notice", bodyTextLength: 12, visibleImageCount: 0,
+      signals: [], authentication: "não aplicável",
+    } } : {}),
     candidates: numbers.map(number => ({ number, captureId: number,
       thumbnailUrl: `https://example.test/${number}.png`,
       releaseDate })),
@@ -198,6 +206,22 @@ describe("durable monitor delivery progress", () => {
     await runMonitor();
 
     expect(state.records.monitored_works[0].lastStatus).toBe(MONITOR_LINK_DELTA_PENDING_STATUS);
+  });
+
+  it("sends a scheduled redirect warning once per work and URL", async () => {
+    state.records.monitored_works[0].listingUrl = "https://toptoon.com/comic/ep_list/work";
+    await installListing(["1"], new Date().toISOString().slice(0, 10), "https://www.google.com/url");
+    const send = vi.fn(async () => ({}));
+    const client = {
+      channels: { fetch: vi.fn(async () => ({ isTextBased: () => true, send })) },
+    } as any;
+
+    await runMonitor(client);
+    await runMonitor(client);
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0]![0].content).toContain("Link não direto");
+    expect(state.records.monitor_activity.some(row => String(row.status).startsWith("Link redirect warning:"))).toBe(true);
   });
 
   it("compares both listing URLs and releases only the un-published chapter difference", async () => {

@@ -203,7 +203,7 @@ export async function startBot() {
       logger.info({ attempt }, "Chamando client.login()...");
       await loginAndWaitForReady(client, normalizedToken);
       logger.info({ attempt }, "client.login() concluiu e ClientReady foi recebido");
-      return;
+      return client;
     } catch (error) {
       logger.error(
         { err: error, attempt },
