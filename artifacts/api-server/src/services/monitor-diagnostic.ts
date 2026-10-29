@@ -81,7 +81,7 @@ function safeAuthenticationStatus(value: string): string {
         /\[ReferenceError\]\s*\(\s*(?:([A-Za-z_$][A-Za-z0-9_$]{0,59})\s+is not defined|Can't find variable:\s*([A-Za-z_$][A-Za-z0-9_$]{0,59})|Cannot access ['"]([A-Za-z_$][A-Za-z0-9_$]{0,59})['"] before initialization)/i,
       );
       const symbol = missingSymbol?.[1] ?? missingSymbol?.[2] ?? missingSymbol?.[3];
-      if (symbol && !/(token|secret|password|email|credential|api.?key|auth|cookie|session|database|url|dsn|connection)/i.test(symbol)) {
+      if (symbol && !/(token|secret|password|passwd|pwd|email|credential|api.?key|private.?key|signing.?key|cookie|authorization|bearer)/i.test(symbol)) {
         return `erro técnico no login (símbolo ${symbol} não definido)`;
       }
     }

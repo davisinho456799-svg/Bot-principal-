@@ -207,7 +207,8 @@ describe("read-only diagnostics", () => {
       ["[Error] (private-login-detail)", "erro técnico no login (erro genérico)"],
       ["[ReferenceError] (toomicsLoginHelper is not defined)", "erro técnico no login (símbolo toomicsLoginHelper não definido)"],
       ["[ReferenceError] (TOOMICS_PASSWORD is not defined)", "erro técnico no login (tipo ReferenceError)"],
-      ["[ReferenceError] (DATABASE_URL is not defined)", "erro técnico no login (tipo ReferenceError)"],
+      ["[ReferenceError] (DATABASE_URL is not defined)", "erro técnico no login (símbolo DATABASE_URL não definido)"],
+      ["[ReferenceError] (URL is not defined)", "erro técnico no login (símbolo URL não definido)"],
     ] as const;
 
     for (const [detail, expected] of cases) {
