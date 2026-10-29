@@ -57,11 +57,11 @@ Keep the image-heavy listing page separate from the Toomics login page: close th
 
 **How to apply:** Preserve cookies in the browser context, but use separate pages for listing and authentication and always close the temporary login page.
 
-Fresh Playwright login pages start at `about:blank`; derive a valid Toomics origin from the listing URL or use `https://toomics.com` before constructing `/por/login`.
+Fresh Playwright login pages start at `about:blank`; prioritize the origin from the Toomics listing URL when constructing `/por/login`, then try the root, `www`, and global hosts.
 
-**Why:** Building a relative login URL from `about:blank` produces an invalid navigation URL and hides the real authentication result.
+**Why:** Building a relative login URL from `about:blank` is invalid, and defaulting to the bare host can miss the login form available on the listing's `www` origin even when the account itself works.
 
-**How to apply:** Guard origin extraction with an HTTP(S) check and retain `global.toomics.com` as the alternate login origin.
+**How to apply:** Validate extracted origins as HTTP(S) Toomics hosts, deduplicate them, and try the listing origin before fallback hosts. Keep credentials out of diagnostics.
 
 Playwright visibility must be expressed in the selector (`:visible`), not as `{ visible: true }` passed to `locator.filter()`. Toomics exposes hidden login markup alongside the real form.
 

@@ -10,9 +10,34 @@ import {
   isolatePrimaryThumbnails,
   makeGreedyGroups,
   promotePrimaryThumbnails,
+  toomicsLoginUrls,
   type BrowserChapterSnapshot,
   type CaptureThumbnailTarget,
 } from "./browser-chapter-capture";
+
+describe("Toomics login URLs", () => {
+  it("tries the listing origin first and includes Toomics login host variants", () => {
+    expect(toomicsLoginUrls(
+      "https://www.toomics.com/uplms/episode/toon/7189",
+      "about:blank",
+    )).toEqual([
+      "https://www.toomics.com/por/login",
+      "https://toomics.com/por/login",
+      "https://global.toomics.com/por/login",
+    ]);
+  });
+
+  it("ignores non-Toomics listing origins", () => {
+    expect(toomicsLoginUrls(
+      "https://example.com/work",
+      "about:blank",
+    )).toEqual([
+      "https://toomics.com/por/login",
+      "https://www.toomics.com/por/login",
+      "https://global.toomics.com/por/login",
+    ]);
+  });
+});
 
 let browser: Browser;
 

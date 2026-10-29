@@ -191,7 +191,32 @@ async function resetBrowserAfterCrash(): Promise<void> {
   await browser?.close().catch(() => undefined);
 }
 
-async function loginToomics(page: Page): Promise<string> {
+export function toomicsLoginUrls(listingUrl: string, currentPageUrl: string): string[] {
+  const origins: string[] = [];
+  for (const candidate of [
+    listingUrl,
+    currentPageUrl,
+    "https://toomics.com",
+    "https://www.toomics.com",
+    "https://global.toomics.com",
+  ]) {
+    try {
+      const url = new URL(candidate);
+      if (
+        (url.protocol === "https:" || url.protocol === "http:") &&
+        (url.hostname === "toomics.com" || url.hostname.endsWith(".toomics.com"))
+      ) {
+        const origin = url.origin;
+        if (!origins.includes(origin)) origins.push(origin);
+      }
+    } catch {
+      // Ignore blank/about:blank pages and malformed origins.
+    }
+  }
+  return origins.map((origin) => `${origin}/por/login`);
+}
+
+async function loginToomics(page: Page, listingUrl: string): Promise<string> {
   const email = process.env.TOOMICS_EMAIL?.trim();
   const password = process.env.TOOMICS_PASSWORD;
   if (!email || !password) return "credenciais não configuradas";
@@ -219,14 +244,7 @@ async function loginToomics(page: Page): Promise<string> {
     }
 
     if (!(await passwordInput.count())) {
-      const currentPageUrl = page.url();
-      const currentOrigin = /^https?:\/\//i.test(currentPageUrl)
-        ? new URL(currentPageUrl).origin
-        : "https://toomics.com";
-      const loginUrls = [
-        `${currentOrigin}/por/login`,
-        "https://global.toomics.com/por/login",
-      ].filter((url, index, urls) => urls.indexOf(url) === index);
+      const loginUrls = toomicsLoginUrls(listingUrl, page.url());
 
       for (const loginUrl of loginUrls) {
         await page.goto(loginUrl, {
@@ -1458,7 +1476,7 @@ export async function openBrowserListing(
       page = await context.newPage();
       signal?.throwIfAborted();
       await setupPage(page);
-      authentication = await loginToomics(page);
+      authentication = await loginToomics(page, listingUrl);
       await page.close().catch(() => undefined);
       signal?.throwIfAborted();
 
