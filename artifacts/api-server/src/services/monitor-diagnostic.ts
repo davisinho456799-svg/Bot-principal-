@@ -51,13 +51,13 @@ function safeDiagnosticError(error: unknown): string {
 
 function safeAuthenticationStatus(value: string): string {
   const knownStatuses = new Set([
-    "não aplicável",
-    "credenciais não configuradas",
-    "formulário de login não encontrado",
-    "botão de login não encontrado",
-    "captcha ou verificação manual necessária",
+    "nÃ£o aplicÃ¡vel",
+    "credenciais nÃ£o configuradas",
+    "formulÃ¡rio de login nÃ£o encontrado",
+    "botÃ£o de login nÃ£o encontrado",
+    "captcha ou verificaÃ§Ã£o manual necessÃ¡ria",
     "login rejeitado",
-    "login concluído",
+    "login concluÃ­do",
   ]);
   if (knownStatuses.has(value)) return value;
   if (value.startsWith("erro no login")) {
@@ -65,22 +65,22 @@ function safeAuthenticationStatus(value: string): string {
     const detail = rawDetail.toLowerCase();
     const errorName = rawDetail.match(/^\s*\(?\s*\[([a-z][a-z0-9]{0,39})\]/i)?.[1];
     if (/page crashed|browser crashed|browser has crashed/.test(detail)) {
-      return "erro técnico no login (navegador travou)";
+      return "erro tÃ©cnico no login (navegador travou)";
     }
     if (/target page.*closed|page has been closed|context.*closed|browser has been closed/.test(detail)) {
-      return "erro técnico no login (página fechada)";
+      return "erro tÃ©cnico no login (pÃ¡gina fechada)";
     }
     if (/timeout|timed out|exceeded/.test(detail)) {
-      return "erro técnico no login (tempo esgotado)";
+      return "erro tÃ©cnico no login (tempo esgotado)";
     }
     if (/net::err_|enotfound|econn|network|socket/.test(detail)) {
-      return "erro técnico no login (falha de rede)";
+      return "erro tÃ©cnico no login (falha de rede)";
     }
     if (/execution context was destroyed|frame.*detached|navigation interrupted/.test(detail)) {
-      return "erro técnico no login (navegação interrompida)";
+      return "erro tÃ©cnico no login (navegaÃ§Ã£o interrompida)";
     }
     if (/locator|selector|fill|click|editable|pointer events/.test(detail)) {
-      return "erro técnico no login (campo ou botão)";
+      return "erro tÃ©cnico no login (campo ou botÃ£o)";
     }
     if (errorName === "ReferenceError") {
       const missingSymbol = rawDetail.match(
@@ -88,17 +88,17 @@ function safeAuthenticationStatus(value: string): string {
       );
       const symbol = missingSymbol?.[1] ?? missingSymbol?.[2] ?? missingSymbol?.[3];
       if (symbol && !/(token|secret|password|passwd|pwd|email|credential|api.?key|private.?key|signing.?key|cookie|authorization|bearer)/i.test(symbol)) {
-        return `erro técnico no login (símbolo ${symbol} não definido)`;
+        return `erro tÃ©cnico no login (sÃ­mbolo ${symbol} nÃ£o definido)`;
       }
     }
     if (errorName && errorName !== "UnknownError") {
       return errorName === "Error"
-        ? "erro técnico no login (erro genérico)"
-        : `erro técnico no login (tipo ${errorName})`;
+        ? "erro tÃ©cnico no login (erro genÃ©rico)"
+        : `erro tÃ©cnico no login (tipo ${errorName})`;
     }
-    return "erro técnico no login (causa não classificada)";
+    return "erro tÃ©cnico no login (causa nÃ£o classificada)";
   }
-  return "estado de autenticação desconhecido";
+  return "estado de autenticaÃ§Ã£o desconhecido";
 }
 
 function safePageLabel(finalUrl: string): string {
@@ -106,7 +106,7 @@ function safePageLabel(finalUrl: string): string {
     const url = new URL(finalUrl);
     return `${url.hostname}${url.pathname}`.slice(0, 160);
   } catch {
-    return "página desconhecida";
+    return "pÃ¡gina desconhecida";
   }
 }
 
@@ -121,9 +121,9 @@ function formatBrowserSummary(browser?: WorkDiagnostic["browser"]): string {
     ? `; etapa-login=${browser.authenticationFailureStage}`
     : "";
   const attempts = browser.authenticationAttempts?.length
-    ? `\n  Tentativas de login: ${browser.authenticationAttempts.map(attempt => `${attempt.page} [HTTP ${attempt.httpStatus ?? "?"}; links=${attempt.loginLinks}; clique=${attempt.loginClicked ? "sim" : "não"}${attempt.loginClickError ? `; erro-clique=${attempt.loginClickError}` : ""}${attempt.loginClickMode ? `; via=${attempt.loginClickMode}` : ""}; email=${attempt.emailFields}; senha=${attempt.passwordFields}; quadros=${attempt.frames}${attempt.signals.length ? `; sinais=${attempt.signals.join(", ")}` : ""}]`).join(" · ")}`
+    ? `\n  Tentativas de login: ${browser.authenticationAttempts.map(attempt => `${attempt.page} [HTTP ${attempt.httpStatus ?? "?"}; links=${attempt.loginLinks}${attempt.loginTarget ? `; alvo=${attempt.loginTarget}` : ""}; clique=${attempt.loginClicked ? "sim" : "nÃ£o"}${attempt.loginNormalClickError ? `; erro-clique-normal=${attempt.loginNormalClickError}` : ""}${attempt.loginClickError ? `; erro-clique=${attempt.loginClickError}` : ""}${attempt.loginClickMode ? `; via=${attempt.loginClickMode}` : ""}${attempt.postClickPage ? `; apÃ³s=${attempt.postClickPage}` : ""}; email=${attempt.emailFields}; senha=${attempt.passwordFields}; campos-total=${attempt.emailFieldsAcrossPages ?? attempt.emailFields}/${attempt.passwordFieldsAcrossPages ?? attempt.passwordFields}; quadros=${attempt.frames}${attempt.otherPages?.length ? `; pÃ¡ginas-extra=${attempt.otherPages.join(", ")}` : ""}${attempt.signals.length ? `; sinais=${attempt.signals.join(", ")}` : ""}]`).join(" Â· ")}`
     : "";
-  return `\n  Navegador: página=${browser.page}; título="${browser.title || "sem título"}"; autenticação=${browser.authentication}${loginFailureStage}; imagens=${browser.visibleImageCount}; texto=${browser.bodyTextLength} caracteres${signals}${attempts}`;
+  return `\n  Navegador: pÃ¡gina=${browser.page}; tÃ­tulo="${browser.title || "sem tÃ­tulo"}"; autenticaÃ§Ã£o=${browser.authentication}${loginFailureStage}; imagens=${browser.visibleImageCount}; texto=${browser.bodyTextLength} caracteres${signals}${attempts}`;
 }
 
 /** Read-only sampling: one browser card per work; no notification or DB writes. */
@@ -138,9 +138,9 @@ export async function runMonitorDiagnostic(workId?: number) {
         w.lastCheckedAt && (!latest || w.lastCheckedAt > latest) ? w.lastCheckedAt : latest, null);
     const nextDelay = getMonitorDelayMs(lastCheck, getMonitorIntervalMinutes(config?.intervalMinutes));
     const selected = workId === undefined ? works : works.filter(w => w.id === workId);
-    if (workId !== undefined && !selected.length) throw new MonitorUnavailableError("A obra selecionada não está mais ativa.");
+    if (workId !== undefined && !selected.length) throw new MonitorUnavailableError("A obra selecionada nÃ£o estÃ¡ mais ativa.");
     if (selected.length && nextDelay < MINIMUM_FREE_WINDOW_MS) {
-      throw new MonitorUnavailableError("A rodada automática está próxima ou pendente. Execute o diagnóstico depois dela para preservar seu horário.");
+      throw new MonitorUnavailableError("A rodada automÃ¡tica estÃ¡ prÃ³xima ou pendente. Execute o diagnÃ³stico depois dela para preservar seu horÃ¡rio.");
     }
     const signal = AbortSignal.any([prioritySignal, AbortSignal.timeout(MAX_DIAGNOSTIC_MS)]);
     const deadline = performance.now() + MAX_DIAGNOSTIC_MS;
@@ -151,7 +151,7 @@ export async function runMonitorDiagnostic(workId?: number) {
     };
     const results: WorkDiagnostic[] = [];
     let previewImage: Buffer | undefined;
-    logger.info({ event: "image_monitor_diagnostic_started", roundId, works: selected.length }, "Diagnóstico de imagens iniciado (somente leitura)");
+    logger.info({ event: "image_monitor_diagnostic_started", roundId, works: selected.length }, "DiagnÃ³stico de imagens iniciado (somente leitura)");
     for (const work of selected) {
       if (isInterrupted()) break;
       const workStarted = performance.now();
@@ -201,11 +201,11 @@ export async function runMonitorDiagnostic(workId?: number) {
           }
           if (!row.imageCaptured) {
             row.status = "failed";
-            row.issue = { stage: "capture", reason: "A captura não retornou uma imagem." };
+            row.issue = { stage: "capture", reason: "A captura nÃ£o retornou uma imagem." };
           }
         } else {
           row.status = "empty";
-          row.issue = { stage: "listing", reason: "A listagem não encontrou capítulos utilizáveis." };
+          row.issue = { stage: "listing", reason: "A listagem nÃ£o encontrou capÃ­tulos utilizÃ¡veis." };
         }
       } catch (error) {
         row[phase === "listing" ? "lookupMs" : "captureMs"] = Math.round(performance.now() - phaseStarted);
@@ -223,7 +223,7 @@ export async function runMonitorDiagnostic(workId?: number) {
         row.cleanupMs = Math.round(performance.now() - cleanupStarted);
         row.durationMs = Math.round(performance.now() - workStarted);
         results.push(row);
-        logger.info({ event: "image_monitor_diagnostic_work_completed", roundId, ...row }, "Tempo de diagnóstico por obra");
+        logger.info({ event: "image_monitor_diagnostic_work_completed", roundId, ...row }, "Tempo de diagnÃ³stico por obra");
       }
     }
     const report = {
@@ -233,20 +233,20 @@ export async function runMonitorDiagnostic(workId?: number) {
       results: results.sort((a, b) => b.durationMs - a.durationMs),
       ...(previewImage ? { previewImage } : {}),
     };
-    logger.info({ event: "image_monitor_diagnostic_completed", ...report, results: undefined, previewImage: undefined }, "Diagnóstico de imagens concluído (sem publicações)");
+    logger.info({ event: "image_monitor_diagnostic_completed", ...report, results: undefined, previewImage: undefined }, "DiagnÃ³stico de imagens concluÃ­do (sem publicaÃ§Ãµes)");
     return report;
   });
 }
 
 export function formatMonitorDiagnostic(report: Awaited<ReturnType<typeof runMonitorDiagnostic>>) {
   const seconds = (ms: number) => `${(ms / 1000).toFixed(2)} s`;
-  const status = { completed: "ok", empty: "sem capítulos", failed: "falha", interrupted: "interrompida" };
+  const status = { completed: "ok", empty: "sem capÃ­tulos", failed: "falha", interrupted: "interrompida" };
   const stage = { listing: "listagem", capture: "captura", cleanup: "fechamento" };
   return [
-    "**Diagnóstico — da obra mais lenta para a mais rápida**",
-    "Consulta pelo navegador + captura do formato usado pelo monitor (Toptoon: imagens 2 e 3; demais: miniatura principal). Sem envio ao canal, fallback HTML ou alteração do banco/agendamento.",
-    ...report.results.map(w => `Nº ${w.number} — ${w.title.replace(/[\r\n]/g, " ")}: **${seconds(w.durationMs)}** (${status[w.status]})\n  Consulta: ${seconds(w.lookupMs)} · captura: ${seconds(w.captureMs)} · fechamento: ${seconds(w.cleanupMs)} · capítulos: ${w.chaptersFound}${formatBrowserSummary(w.browser)}${w.issue ? `\n  Etapa: ${stage[w.issue.stage]} · motivo: ${w.issue.reason}` : ""}`),
-    `Total: ${seconds(report.durationMs)} · não verificadas: ${report.worksSkipped}`,
-    report.status === "interrupted" ? "Diagnóstico interrompido pelo limite de tempo ou para dar prioridade à verificação normal." : "",
+    "**DiagnÃ³stico â da obra mais lenta para a mais rÃ¡pida**",
+    "Consulta pelo navegador + captura do formato usado pelo monitor (Toptoon: imagens 2 e 3; demais: miniatura principal). Sem envio ao canal, fallback HTML ou alteraÃ§Ã£o do banco/agendamento.",
+    ...report.results.map(w => `NÂº ${w.number} â ${w.title.replace(/[\r\n]/g, " ")}: **${seconds(w.durationMs)}** (${status[w.status]})\n  Consulta: ${seconds(w.lookupMs)} Â· captura: ${seconds(w.captureMs)} Â· fechamento: ${seconds(w.cleanupMs)} Â· capÃ­tulos: ${w.chaptersFound}${formatBrowserSummary(w.browser)}${w.issue ? `\n  Etapa: ${stage[w.issue.stage]} Â· motivo: ${w.issue.reason}` : ""}`),
+    `Total: ${seconds(report.durationMs)} Â· nÃ£o verificadas: ${report.worksSkipped}`,
+    report.status === "interrupted" ? "DiagnÃ³stico interrompido pelo limite de tempo ou para dar prioridade Ã  verificaÃ§Ã£o normal." : "",
   ].filter(Boolean).join("\n");
 }

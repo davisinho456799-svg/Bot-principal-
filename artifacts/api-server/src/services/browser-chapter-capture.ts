@@ -43,12 +43,18 @@ export type ToomicsLoginAttemptDiagnostic = {
   page: string;
   httpStatus: number | null;
   loginLinks: number;
+  loginTarget?: string;
   loginClicked: boolean;
-  loginClickMode?: "normal" | "forçado";
+  loginClickMode?: "normal" | "forÃ§ado";
+  loginNormalClickError?: string;
   loginClickError?: string;
+  postClickPage?: string;
   emailFields: number;
   passwordFields: number;
+  emailFieldsAcrossPages?: number;
+  passwordFieldsAcrossPages?: number;
   frames: number;
+  otherPages?: string[];
   signals: string[];
 };
 
@@ -85,7 +91,7 @@ async function getChromium(): Promise<Chromium> {
     .then((module) => {
       const chromium = getMonitorDependencyExport<Chromium>(module, "chromium");
       if (!chromium || typeof chromium.launch !== "function") {
-        throw new Error("Playwright não exportou um launcher Chromium utilizável.");
+        throw new Error("Playwright nÃ£o exportou um launcher Chromium utilizÃ¡vel.");
       }
       return chromium;
     })
@@ -189,10 +195,10 @@ async function loadToomicsKoreanFont(page: Page): Promise<boolean> {
     });
     return await page.evaluate(async () => {
       const loaded = await Promise.race([
-        document.fonts.load('500 16px "Noto Sans KR"', "한국어"),
+        document.fonts.load('500 16px "Noto Sans KR"', "íêµ­ì´"),
         new Promise<FontFace[]>((resolve) => setTimeout(() => resolve([]), 6_000)),
       ]);
-      return loaded.length > 0 && document.fonts.check('500 16px "Noto Sans KR"', "한국어");
+      return loaded.length > 0 && document.fonts.check('500 16px "Noto Sans KR"', "íêµ­ì´");
     });
   } catch {
     return false;
@@ -251,7 +257,7 @@ export function toomicsLoginUrls(listingUrl: string, currentPageUrl: string, dis
 
 export async function discoverToomicsLoginUrls(page: Page): Promise<string[]> {
   return page.evaluate(() => {
-    const loginText = /login|sign[\s-]?in|log[\s-]?in|entrar|로그인/i;
+    const loginText = /login|sign[\s-]?in|log[\s-]?in|entrar|ë¡ê·¸ì¸/i;
     return Array.from(document.querySelectorAll<HTMLAnchorElement>("a[href]"))
       .filter((anchor) => {
         const style = getComputedStyle(anchor);
@@ -264,15 +270,29 @@ export async function discoverToomicsLoginUrls(page: Page): Promise<string[]> {
   });
 }
 export const TOOMICS_LOGIN_LINK_SELECTOR =
-  'a[href*="login" i]:visible, a[href*="signin" i]:visible, a:has-text("Login"):visible, a:has-text("Entrar"):visible, a:has-text("로그인"):visible, button:has-text("Login"):visible, button:has-text("Entrar"):visible, button:has-text("로그인"):visible';
+  'a[href*="login" i]:visible, a[href*="signin" i]:visible, a:has-text("Login"):visible, a:has-text("Entrar"):visible, a:has-text("ë¡ê·¸ì¸"):visible, button:has-text("Login"):visible, button:has-text("Entrar"):visible, button:has-text("ë¡ê·¸ì¸"):visible';
 
 function safeToomicsPageLabel(value: string): string {
   try {
     const url = new URL(value);
     return `${url.hostname}${url.pathname}`.slice(0, 160);
   } catch {
-    return "página desconhecida";
+    return "pÃ¡gina desconhecida";
   }
+}
+
+async function countVisibleFieldsAcrossPages(pages: Page[], selector: string): Promise<number> {
+  let count = 0;
+  for (const candidatePage of pages) {
+    for (const frame of candidatePage.frames()) {
+      try {
+        count += await frame.locator(selector).count();
+      } catch {
+        // A popup or frame can close while the login diagnostic is sampling it.
+      }
+    }
+  }
+  return count;
 }
 
 type ToomicsLoginProgress = { stage: string };
@@ -282,11 +302,11 @@ async function loginToomics(
   listingUrl: string,
   discoveredLoginUrls: string[] = [],
   attempts: ToomicsLoginAttemptDiagnostic[] = [],
-  progress: ToomicsLoginProgress = { stage: "preparação do login" },
+  progress: ToomicsLoginProgress = { stage: "preparaÃ§Ã£o do login" },
 ): Promise<string> {
   const email = process.env.TOOMICS_EMAIL?.trim();
   const password = process.env.TOOMICS_PASSWORD;
-  if (!email || !password) return "credenciais não configuradas";
+  if (!email || !password) return "credenciais nÃ£o configuradas";
 
   try {
     // `visible` is a Playwright locator pseudo-class, not an option accepted
@@ -295,83 +315,104 @@ async function loginToomics(
     const emailSelector =
       'input[type="email"]:visible, input[name*="email" i]:visible, input[name*="user" i]:visible, input[name*="login" i]:visible, input[name*="id" i]:visible';
     const passwordSelector = 'input[type="password"]:visible';
-    progress.stage = "localização dos campos";
+    progress.stage = "localizaÃ§Ã£o dos campos";
     let emailInput = page.locator(emailSelector).first();
     let passwordInput = page.locator(passwordSelector).first();
 
-    progress.stage = "verificação dos campos";
+    progress.stage = "verificaÃ§Ã£o dos campos";
     if (!(await passwordInput.count())) {
-      progress.stage = "localização do link de login";
+      progress.stage = "localizaÃ§Ã£o do link de login";
       const loginLink = page.locator(
         TOOMICS_LOGIN_LINK_SELECTOR,
       ).first();
       if (await loginLink.count()) {
         progress.stage = "clique no link de login";
         await loginLink.click().catch(() => undefined);
-        progress.stage = "espera após abrir o login";
+        progress.stage = "espera apÃ³s abrir o login";
         await page.waitForTimeout(500);
-        progress.stage = "localização dos campos";
+        progress.stage = "localizaÃ§Ã£o dos campos";
         emailInput = page.locator(emailSelector).first();
         passwordInput = page.locator(passwordSelector).first();
       }
     }
 
-    progress.stage = "verificação dos campos";
+    progress.stage = "verificaÃ§Ã£o dos campos";
     if (!(await passwordInput.count())) {
       const loginUrls = toomicsLoginUrls(listingUrl, page.url(), discoveredLoginUrls);
 
       for (const loginUrl of loginUrls) {
-        progress.stage = "abertura da página de login";
+        progress.stage = "abertura da pÃ¡gina de login";
         const response = await page.goto(loginUrl, {
           waitUntil: "domcontentloaded",
           timeout: PAGE_TIMEOUT_MS,
         });
-        progress.stage = "espera da página de login";
+        progress.stage = "espera da pÃ¡gina de login";
         await waitForRenderedPage(page);
-        progress.stage = "espera dos campos do formulário";
+        progress.stage = "espera dos campos do formulÃ¡rio";
         await page
           .locator('input[type="email"], input[type="password"], #user_id, #user_pw')
           .first()
           .waitFor({ state: "attached", timeout: 3_000 })
           .catch(() => undefined);
 
-        progress.stage = "localização do link de login";
+        progress.stage = "localizaÃ§Ã£o do link de login";
         const loginLink = page.locator(TOOMICS_LOGIN_LINK_SELECTOR).first();
         const loginLinks = await loginLink.count();
         let loginClicked = false;
-        let loginClickMode: "normal" | "forçado" | undefined;
+        let loginClickMode: "normal" | "forÃ§ado" | undefined;
+        let loginNormalClickError: string | undefined;
         let loginClickError: string | undefined;
+        let loginTarget: string | undefined;
+        let postClickPage: string | undefined;
+        const popupPages: Page[] = [];
+        const recordPopup = (popup: Page) => popupPages.push(popup);
         let loginEmail = page.locator(emailSelector).first();
         let loginPassword = page.locator(passwordSelector).first();
         let emailFields = await loginEmail.count();
         let passwordFields = await loginPassword.count();
         if (!(emailFields && passwordFields) && loginLinks) {
           try {
+            const href = await loginLink.getAttribute("href");
+            if (href) loginTarget = safeToomicsPageLabel(new URL(href, page.url()).toString());
+          } catch {
+            // Keep the diagnostic limited to sanitized URL labels.
+          }
+          page.on("popup", recordPopup);
+          try {
             progress.stage = "clique no link de login";
             await loginLink.click({ timeout: 1_500, noWaitAfter: true });
             loginClicked = true;
             loginClickMode = "normal";
           } catch (error) {
-            loginClickError = error instanceof Error ? error.name : "Error";
+            const normalError = error instanceof Error ? error.name : "Error";
+            loginNormalClickError = normalError;
+            loginClickError = normalError;
             if (error instanceof Error && error.name === "TimeoutError") {
               try {
-                progress.stage = "clique forçado no link de login";
+                progress.stage = "clique forÃ§ado no link de login";
                 await loginLink.click({ force: true, timeout: 1_500, noWaitAfter: true });
                 loginClicked = true;
-                loginClickMode = "forçado";
+                loginClickMode = "forÃ§ado";
+                loginClickError = undefined;
               } catch (forcedError) {
                 loginClickError = forcedError instanceof Error ? forcedError.name : "Error";
               }
             }
           }
-          progress.stage = "espera após abrir o login";
+          postClickPage = safeToomicsPageLabel(page.url());
+          progress.stage = "espera apÃ³s abrir o login";
           await page.waitForTimeout(500);
-          progress.stage = "localização dos campos";
+          page.off("popup", recordPopup);
+          progress.stage = "localizaÃ§Ã£o dos campos";
           loginEmail = page.locator(emailSelector).first();
           loginPassword = page.locator(passwordSelector).first();
           emailFields = await loginEmail.count();
           passwordFields = await loginPassword.count();
         }
+        const inspectedPages = [page, ...popupPages];
+        const otherPages = popupPages.map((popup) => safeToomicsPageLabel(popup.url()));
+        const emailFieldsAcrossPages = await countVisibleFieldsAcrossPages(inspectedPages, emailSelector);
+        const passwordFieldsAcrossPages = await countVisibleFieldsAcrossPages(inspectedPages, passwordSelector);
         const signals = await page.evaluate(() => {
           const text = `${document.title} ${document.body?.innerText || ""}`.toLocaleLowerCase();
           return [
@@ -384,12 +425,18 @@ async function loginToomics(
           page: safeToomicsPageLabel(page.url()),
           httpStatus: response?.status() ?? null,
           loginLinks,
+          ...(loginTarget ? { loginTarget } : {}),
           loginClicked,
           ...(loginClickMode ? { loginClickMode } : {}),
+          ...(loginNormalClickError ? { loginNormalClickError } : {}),
           ...(loginClickError ? { loginClickError } : {}),
+          ...(postClickPage ? { postClickPage } : {}),
           emailFields,
           passwordFields,
+          emailFieldsAcrossPages,
+          passwordFieldsAcrossPages,
           frames: page.frames().length,
+          ...(otherPages.length ? { otherPages } : {}),
           signals,
         });
         if (emailFields && passwordFields) {
@@ -401,30 +448,30 @@ async function loginToomics(
     }
 
     if (!(await emailInput.count()) || !(await passwordInput.count())) {
-      return "formulário de login não encontrado";
+      return "formulÃ¡rio de login nÃ£o encontrado";
     }
 
     progress.stage = "preenchimento do e-mail";
     await emailInput.fill(email, { force: true });
     progress.stage = "preenchimento da senha";
     await passwordInput.fill(password, { force: true });
-    progress.stage = "localização do botão de login";
+    progress.stage = "localizaÃ§Ã£o do botÃ£o de login";
     const submit = page.locator(
-      'form:has(#user_id) button[type="submit"]:visible, form:has(#user_id) input[type="submit"]:visible, button:has-text("Login"):visible, button:has-text("Entrar"):visible, button:has-text("로그인"):visible',
+      'form:has(#user_id) button[type="submit"]:visible, form:has(#user_id) input[type="submit"]:visible, button:has-text("Login"):visible, button:has-text("Entrar"):visible, button:has-text("ë¡ê·¸ì¸"):visible',
     ).last();
     const submitButton = await submit.count()
       ? submit
       : page.locator('form:has(#user_id) button[type="submit"], form:has(#user_id) input[type="submit"]').last();
-    if (!(await submitButton.count())) return "botão de login não encontrado";
+    if (!(await submitButton.count())) return "botÃ£o de login nÃ£o encontrado";
 
-    progress.stage = "envio do formulário";
+    progress.stage = "envio do formulÃ¡rio";
     await Promise.all([
       submitButton.click({ force: true }).catch(() => undefined),
       page.waitForLoadState("domcontentloaded", { timeout: 15_000 }).catch(() => undefined),
     ]);
     await page.waitForTimeout(1_000);
 
-    progress.stage = "verificação do resultado do login";
+    progress.stage = "verificaÃ§Ã£o do resultado do login";
     const state = await page.evaluate(() => {
       const text = (document.body?.innerText || "").replace(/\s+/g, " ").toLocaleLowerCase();
       const hasPassword = Array.from(document.querySelectorAll('input[type="password"]'))
@@ -435,12 +482,12 @@ async function loginToomics(
             Number.parseFloat(style.opacity || "1") > 0 && rect.width > 2 && rect.height > 2;
         });
       const hasCaptcha = /captcha|recaptcha|are you human|verifique que/.test(text);
-      const hasError = /invalid password|incorrect|senha inválida|email inválido|로그인 실패/.test(text);
+      const hasError = /invalid password|incorrect|senha invÃ¡lida|email invÃ¡lido|ë¡ê·¸ì¸ ì¤í¨/.test(text);
       return { hasPassword, hasCaptcha, hasError };
     });
-    if (state.hasCaptcha) return "captcha ou verificação manual necessária";
+    if (state.hasCaptcha) return "captcha ou verificaÃ§Ã£o manual necessÃ¡ria";
     if (state.hasError || state.hasPassword) return "login rejeitado";
-    return "login concluído";
+    return "login concluÃ­do";
   } catch (error) {
     const errorName = error instanceof Error && /^[A-Za-z][A-Za-z0-9]{0,39}$/.test(error.name)
       ? error.name
@@ -483,8 +530,8 @@ export async function findRenderedChapters(
        const blockedWords = platform === "toomics"
          ? /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[/._-])(?:lock|locked|no[-_ ]?image|placeholder)(?:[/._-]|$)/i
          : /fullversion|full version|download app|app version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)|(?:^|[/._-])(?:banner|bnr|lock|locked|no[-_ ]?image|placeholder)(?:[/._-]|$)/i;
-      const chapterLabel = /(?:chapter|episode|episodio|epis[oó]dio|ep(?:isode)?|ch(?:apter)?|cap(?:itulo|ítulo)?|cap\\\\.)/i;
-      const chapterPattern = /(?:chapter|episode|episodio|epis[oó]dio|ep(?:isode)?|ch(?:apter)?|cap(?:itulo|ítulo)?|cap\\\\.)\\\\s*(?:#|[-_:])?\\\\s*(\\\\d{1,5}(?:[.,]\\\\d+)?)/ig;
+      const chapterLabel = /(?:chapter|episode|episodio|epis[oÃ³]dio|ep(?:isode)?|ch(?:apter)?|cap(?:itulo|Ã­tulo)?|cap\\\\.)/i;
+      const chapterPattern = /(?:chapter|episode|episodio|epis[oÃ³]dio|ep(?:isode)?|ch(?:apter)?|cap(?:itulo|Ã­tulo)?|cap\\\\.)\\\\s*(?:#|[-_:])?\\\\s*(\\\\d{1,5}(?:[.,]\\\\d+)?)/ig;
       const hashPattern = /(?:^|\\\\s)#(\\\\d{1,5}(?:[.,]\\\\d+)?)(?=\\\\s|$)/g;
       const numberFromHref = /(?:chapter|episode|episodio|ep|ch|cap)[/_=-](\\\\d{1,5}(?:[.,]\\\\d+)?)/i;
       const platformAttributes = platform === "lezhin"
@@ -500,11 +547,11 @@ export async function findRenderedChapters(
       );
       const whitespacePattern = new RegExp(whitespace + "+", "g");
       const chapterLabelFixed = new RegExp(
-        "(?:chapter|episode|episodio|epis[oó]dio|ep(?:isode)?|ch(?:apter)?|cap(?:itulo|título)?|cap" + slash + ".)",
+        "(?:chapter|episode|episodio|epis[oÃ³]dio|ep(?:isode)?|ch(?:apter)?|cap(?:itulo|tÃ­tulo)?|cap" + slash + ".)",
         "i",
       );
       const chapterPatternFixed = new RegExp(
-        "(?:chapter|episode|episodio|epis[oó]dio|ep(?:isode)?|ch(?:apter)?|cap(?:itulo|título)?|cap" +
+        "(?:chapter|episode|episodio|epis[oÃ³]dio|ep(?:isode)?|ch(?:apter)?|cap(?:itulo|tÃ­tulo)?|cap" +
           slash + ".)" + whitespace + "*(?:#|[-_:])?" + whitespace + "*(" + digit +
           "{1,5}(?:[.,]" + digit + "+)?)",
         "ig",
@@ -515,8 +562,8 @@ export async function findRenderedChapters(
         "g",
       );
       const koreanChapterPatternFixed = new RegExp(
-        "제" + whitespace + "*(" + digit + "{1,5}(?:[.,]" + digit + "+)?)" +
-          whitespace + "*화",
+        "ì " + whitespace + "*(" + digit + "{1,5}(?:[.,]" + digit + "+)?)" +
+          whitespace + "*í",
         "ig",
       );
       const numberFromHrefFixed = new RegExp(
@@ -612,7 +659,7 @@ export async function findRenderedChapters(
             chapterPatternFixed.lastIndex = 0;
             while ((match = koreanChapterPatternFixed.exec(labelText))) visibleNumbers.push(normalizeNumber(match[1]));
             koreanChapterPatternFixed.lastIndex = 0;
-            const koreanEpisode = labelText.match(new RegExp("(?:제" + whitespace + "*)?(" + digit + "{1,5}(?:[.,]" + digit + "+)?)" + whitespace + "*화", "i"));
+            const koreanEpisode = labelText.match(new RegExp("(?:ì " + whitespace + "*)?(" + digit + "{1,5}(?:[.,]" + digit + "+)?)" + whitespace + "*í", "i"));
             if (!visibleNumbers.length && koreanEpisode) visibleNumbers.push(normalizeNumber(koreanEpisode[1]));
             if (visibleNumbers.length) return [visibleNumbers[0]];
           }
@@ -702,8 +749,8 @@ export async function findRenderedChapters(
             continue;
           }
           cardElement = parent;
-          // Pare no primeiro card válido. Continuar subindo pode selecionar
-          // o contêiner da lista inteira e repetir a mesma imagem na captura.
+          // Pare no primeiro card vÃ¡lido. Continuar subindo pode selecionar
+          // o contÃªiner da lista inteira e repetir a mesma imagem na captura.
           break;
         }
 
@@ -1606,7 +1653,7 @@ export async function openBrowserListing(
     await waitForRenderedPage(page);
     signal?.throwIfAborted();
 
-    let authentication = "não aplicável";
+    let authentication = "nÃ£o aplicÃ¡vel";
     let authenticationFailureStage: string | undefined;
     let authenticationAttempts: ToomicsLoginAttemptDiagnostic[] | undefined;
     if (platform === "toomics") {
@@ -1620,7 +1667,7 @@ export async function openBrowserListing(
       signal?.throwIfAborted();
       await setupPage(page);
       authenticationAttempts = [];
-      const loginProgress: ToomicsLoginProgress = { stage: "preparação do login" };
+      const loginProgress: ToomicsLoginProgress = { stage: "preparaÃ§Ã£o do login" };
       authentication = await loginToomics(
         page, listingUrl, discoveredLoginUrls, authenticationAttempts, loginProgress,
       );

@@ -136,12 +136,17 @@ describe("read-only diagnostics", () => {
           page: "toomics.com/kr",
           httpStatus: 200,
           loginLinks: 1,
+          loginTarget: "toomics.com/kr/login",
           loginClicked: true,
-          loginClickMode: "forçado",
-          loginClickError: "TimeoutError",
+          loginClickMode: "forÃ§ado",
+          loginNormalClickError: "TimeoutError",
+          postClickPage: "toomics.com/kr/login",
           emailFields: 0,
           passwordFields: 0,
+          emailFieldsAcrossPages: 1,
+          passwordFieldsAcrossPages: 1,
           frames: 1,
+          otherPages: ["auth.toomics.com/login"],
           signals: [],
         }],
       },
@@ -154,7 +159,8 @@ describe("read-only diagnostics", () => {
     const formatted = formatMonitorDiagnostic(report);
 
     expect(formatted).toContain("toomics.com/kr [HTTP 200");
-    expect(formatted).toContain("links=1; clique=sim; erro-clique=TimeoutError; via=forçado; email=0; senha=0");
+    expect(formatted).toContain("links=1; alvo=toomics.com/kr/login; clique=sim; erro-clique-normal=TimeoutError; via=forÃ§ado; apÃ³s=toomics.com/kr/login");
+    expect(formatted).toContain("email=0; senha=0; campos-total=1/1; quadros=1; pÃ¡ginas-extra=auth.toomics.com/login");
     expect(formatted).toContain("etapa-login=preenchimento do e-mail");
     expect(state.writes).not.toHaveBeenCalled();
   });
@@ -180,9 +186,9 @@ describe("read-only diagnostics", () => {
   it("refuses to start near the automatic deadline or with unchecked works", async () => {
     state.works[0].lastCheckedAt = new Date(Date.now() - 55 * 60_000);
     state.works[1].lastCheckedAt = state.works[0].lastCheckedAt;
-    await expect(runMonitorDiagnostic()).rejects.toThrow("automática");
+    await expect(runMonitorDiagnostic()).rejects.toThrow("automÃ¡tica");
     state.works[0].lastCheckedAt = null;
-    await expect(runMonitorDiagnostic()).rejects.toThrow("automática");
+    await expect(runMonitorDiagnostic()).rejects.toThrow("automÃ¡tica");
     expect(state.open).not.toHaveBeenCalled();
     expect(state.writes).not.toHaveBeenCalled();
   });
@@ -221,7 +227,7 @@ describe("read-only diagnostics", () => {
     const result = await runMonitorDiagnostic(1);
     expect(result.results[0]).toMatchObject({
       status: "empty",
-      issue: { stage: "listing", reason: "A listagem não encontrou capítulos utilizáveis." },
+      issue: { stage: "listing", reason: "A listagem nÃ£o encontrou capÃ­tulos utilizÃ¡veis." },
     });
   });
 
@@ -234,7 +240,7 @@ describe("read-only diagnostics", () => {
           bodyTextLength: 42,
           visibleImageCount: 0,
           signals: ["login", "unrecognized-signal"],
-          authentication: "credenciais não configuradas",
+          authentication: "credenciais nÃ£o configuradas",
         },
         close: state.close,
       });
@@ -248,23 +254,23 @@ describe("read-only diagnostics", () => {
         bodyTextLength: 42,
         visibleImageCount: 0,
         signals: ["login"],
-        authentication: "credenciais não configuradas",
+        authentication: "credenciais nÃ£o configuradas",
       });
-      expect(formatted).toContain("autenticação=credenciais não configuradas");
+      expect(formatted).toContain("autenticaÃ§Ã£o=credenciais nÃ£o configuradas");
       expect(JSON.stringify(result)).not.toContain("private-value");
     });
 
       it("reports only safe categories for technical login errors", async () => {
     const cases = [
-      ["TimeoutError: locator.fill: Timeout 8000ms exceeded.", "erro técnico no login (tempo esgotado)"],
-      ["Error: Target page, context or browser has been closed", "erro técnico no login (página fechada)"],
-      ["Error: net::ERR_TUNNEL_CONNECTION_FAILED", "erro técnico no login (falha de rede)"],
-      ["[TypeError] (private-login-detail)", "erro técnico no login (tipo TypeError)"],
-      ["[Error] (private-login-detail)", "erro técnico no login (erro genérico)"],
-      ["[ReferenceError] (toomicsLoginHelper is not defined)", "erro técnico no login (símbolo toomicsLoginHelper não definido)"],
-      ["[ReferenceError] (TOOMICS_PASSWORD is not defined)", "erro técnico no login (tipo ReferenceError)"],
-      ["[ReferenceError] (DATABASE_URL is not defined)", "erro técnico no login (símbolo DATABASE_URL não definido)"],
-      ["[ReferenceError] (URL is not defined)", "erro técnico no login (símbolo URL não definido)"],
+      ["TimeoutError: locator.fill: Timeout 8000ms exceeded.", "erro tÃ©cnico no login (tempo esgotado)"],
+      ["Error: Target page, context or browser has been closed", "erro tÃ©cnico no login (pÃ¡gina fechada)"],
+      ["Error: net::ERR_TUNNEL_CONNECTION_FAILED", "erro tÃ©cnico no login (falha de rede)"],
+      ["[TypeError] (private-login-detail)", "erro tÃ©cnico no login (tipo TypeError)"],
+      ["[Error] (private-login-detail)", "erro tÃ©cnico no login (erro genÃ©rico)"],
+      ["[ReferenceError] (toomicsLoginHelper is not defined)", "erro tÃ©cnico no login (sÃ­mbolo toomicsLoginHelper nÃ£o definido)"],
+      ["[ReferenceError] (TOOMICS_PASSWORD is not defined)", "erro tÃ©cnico no login (tipo ReferenceError)"],
+      ["[ReferenceError] (DATABASE_URL is not defined)", "erro tÃ©cnico no login (sÃ­mbolo DATABASE_URL nÃ£o definido)"],
+      ["[ReferenceError] (URL is not defined)", "erro tÃ©cnico no login (sÃ­mbolo URL nÃ£o definido)"],
     ] as const;
 
     for (const [detail, expected] of cases) {
@@ -293,7 +299,7 @@ describe("read-only diagnostics", () => {
     const result = await runMonitorDiagnostic(10);
     expect(result.results).toHaveLength(1);
     expect(result.results[0]).toMatchObject({ workId: 10, number: 2, status: "empty" });
-    await expect(runMonitorDiagnostic(99)).rejects.toThrow("não está mais ativa");
+    await expect(runMonitorDiagnostic(99)).rejects.toThrow("nÃ£o estÃ¡ mais ativa");
   });
 
   it("interrupts and cleans up before giving priority to a regular verification", async () => {
@@ -318,6 +324,6 @@ describe("read-only diagnostics", () => {
     expect(text).toContain("1.20 s");
     expect(text).toContain("Sem envio");
     expect(text).toContain("captura do formato usado pelo monitor");
-    expect(text).toContain("Etapa: captura · motivo: tempo esgotado");
+    expect(text).toContain("Etapa: captura Â· motivo: tempo esgotado");
   });
 });
