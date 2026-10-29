@@ -103,6 +103,21 @@ describe("read-only diagnostics", () => {
     expect(JSON.stringify(state.works)).toBe(before);
   });
 
+  it("returns the selected work's captured image only for a private preview and never logs image bytes", async () => {
+    const image = Buffer.from("private-preview");
+    state.open.mockResolvedValue({
+      candidates: [{ captureId: "card", number: "117" }],
+      captureGroups: async () => [{ image }],
+      close: state.close,
+    });
+
+    const report = await runMonitorDiagnostic(1);
+
+    expect(report.previewImage).toEqual(image);
+    expect(state.info.mock.calls.at(-1)?.[0]).not.toHaveProperty("previewImage", image);
+    expect(state.writes).not.toHaveBeenCalled();
+  });
+
   it("uses the automatic paired capture path for Toptoon works", async () => {
     state.works = [{
       id: 1, displayNumber: 1, title: "Obra Toptoon", platform: "toptoon",

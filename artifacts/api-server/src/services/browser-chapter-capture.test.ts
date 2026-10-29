@@ -11,20 +11,21 @@ import {
   isolatePrimaryThumbnails,
   makeGreedyGroups,
   promotePrimaryThumbnails,
+  TOOMICS_LOGIN_LINK_SELECTOR,
   toomicsLoginUrls,
   type BrowserChapterSnapshot,
   type CaptureThumbnailTarget,
 } from "./browser-chapter-capture";
 
 describe("Toomics login URLs", () => {
-  it("tries the listing origin first and includes Toomics login host variants", () => {
+  it("tries the listing homepage and Toomics host variants", () => {
     expect(toomicsLoginUrls(
       "https://www.toomics.com/uplms/episode/toon/7189",
       "about:blank",
     )).toEqual([
-      "https://www.toomics.com/por/login",
-      "https://toomics.com/por/login",
-      "https://global.toomics.com/por/login",
+      "https://www.toomics.com/",
+      "https://toomics.com/",
+      "https://global.toomics.com/",
     ]);
   });
 
@@ -33,9 +34,9 @@ describe("Toomics login URLs", () => {
       "https://example.com/work",
       "about:blank",
     )).toEqual([
-      "https://toomics.com/por/login",
-      "https://www.toomics.com/por/login",
-      "https://global.toomics.com/por/login",
+      "https://toomics.com/",
+      "https://www.toomics.com/",
+      "https://global.toomics.com/",
     ]);
   });
   it("prefers discovered same-site login routes and rejects external links", () => {
@@ -45,9 +46,9 @@ describe("Toomics login URLs", () => {
       ["https://www.toomics.com/uplmscg/login?return=/episode", "https://example.com/login"],
     )).toEqual([
       "https://www.toomics.com/uplmscg/login",
-      "https://www.toomics.com/por/login",
-      "https://toomics.com/por/login",
-      "https://global.toomics.com/por/login",
+      "https://www.toomics.com/",
+      "https://toomics.com/",
+      "https://global.toomics.com/",
     ]);
   });
 
@@ -63,6 +64,20 @@ describe("Toomics login URLs", () => {
     expect(discovered).not.toContain("https://www.toomics.com/uplmscg/hidden-login");
     expect(toomicsLoginUrls("https://www.toomics.com/uplmscg/episode/toon/7189", "about:blank", discovered))
       .not.toContain("https://example.com/login");
+    await page.close();
+  });
+  it("opens the login modal from a JavaScript Korean login link", async () => {
+    const page = await browser.newPage();
+    await page.setContent(`<div id="login" style="display:none">
+      <input id="user_id" type="email"><input id="user_pw" type="password">
+    </div>
+    <a href="javascript:void(0)" onclick="document.querySelector('#login').style.display='block'">로그인</a>`);
+
+    const loginLink = page.locator(TOOMICS_LOGIN_LINK_SELECTOR).first();
+    expect(await loginLink.isVisible()).toBe(true);
+    await loginLink.click();
+    expect(await page.locator("#user_id:visible").count()).toBe(1);
+    expect(await page.locator("#user_pw:visible").count()).toBe(1);
     await page.close();
   });
 });

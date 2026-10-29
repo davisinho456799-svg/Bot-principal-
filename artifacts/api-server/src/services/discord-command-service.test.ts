@@ -169,6 +169,22 @@ describe("safe monitor commands", () => {
     expect(state.updates).not.toHaveBeenCalled();
   });
 
+  it("attaches the selected diagnostic image only to the private response", async () => {
+    const image = Buffer.from("captured-image");
+    state.diagnostic.mockResolvedValue({ results: [], worksSkipped: 0, previewImage: image });
+    const { fake, command } = interaction("diagnostico", 2);
+
+    await executeManhwaCommand(command);
+
+    const response = fake.editReply.mock.calls.at(-1)?.[0];
+    expect(response.content).toContain("somente nesta resposta privada");
+    expect(response.files).toEqual([
+      { attachment: image, name: "monitor-preview-obra-2.png" },
+    ]);
+    expect(state.resend).not.toHaveBeenCalled();
+    expect(state.notification).not.toHaveBeenCalled();
+  });
+
   it("does not run a diagnostic with an invalid work number", async () => {
     await executeManhwaCommand(interaction("diagnostico", 99).command);
     expect(state.diagnostic).not.toHaveBeenCalled();

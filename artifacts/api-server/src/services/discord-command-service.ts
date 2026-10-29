@@ -690,9 +690,24 @@ export async function executeManhwaCommand(interaction: ChatInputCommandInteract
       await interaction.editReply({ content: "Medindo consulta e captura, sem enviar notificações nem alterar o agendamento. A verificação normal tem prioridade." });
       const report = await runMonitorDiagnostic(work?.id);
       const content = formatMonitorDiagnostic(report);
-      await interaction.editReply(content.length <= 1950
-        ? { content, allowedMentions: { parse: [] } }
-        : { content: `Diagnóstico concluído. ${report.results.length} obras medidas; ${report.worksSkipped} não verificadas. Comparação completa no arquivo.`, files: [{ attachment: Buffer.from(content), name: "tempos-diagnostico.txt" }], allowedMentions: { parse: [] } });
+      const previewNote = report.previewImage
+        ? "\n\nPrévia anexada somente nesta resposta privada; nada foi publicado no canal."
+        : "";
+      const files = [
+        ...(content.length > 1950
+          ? [{ attachment: Buffer.from(content), name: "tempos-diagnostico.txt" }]
+          : []),
+        ...(report.previewImage
+          ? [{ attachment: report.previewImage, name: `monitor-preview-obra-${work?.displayNumber ?? number}.png` }]
+          : []),
+      ];
+      await interaction.editReply({
+        content: content.length <= 1950
+          ? `${content}${previewNote}`
+          : `Diagnóstico concluído. ${report.results.length} obras medidas; ${report.worksSkipped} não verificadas. Comparação completa no arquivo.${previewNote}`,
+        ...(files.length ? { files } : {}),
+        allowedMentions: { parse: [] },
+      });
     } catch (error) {
       logger.warn({ errorName: error instanceof Error ? error.name : "Error" }, "Diagnóstico do monitor indisponível");
       await replyError(interaction, error instanceof MonitorUnavailableError

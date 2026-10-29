@@ -138,6 +138,7 @@ export async function runMonitorDiagnostic(workId?: number) {
       if (performance.now() >= deadline) throw new Error("Monitor diagnostic time limit reached");
     };
     const results: WorkDiagnostic[] = [];
+    let previewImage: Buffer | undefined;
     logger.info({ event: "image_monitor_diagnostic_started", roundId, works: selected.length }, "Diagnóstico de imagens iniciado (somente leitura)");
     for (const work of selected) {
       if (isInterrupted()) break;
@@ -179,6 +180,9 @@ export async function runMonitorDiagnostic(workId?: number) {
           ensureWithinDeadline();
           row.captureMs = Math.round(performance.now() - phaseStarted);
           row.imageCaptured = captured.some(group => group.image.length > 0);
+          if (workId !== undefined) {
+            previewImage = captured.find(group => group.image.length > 0)?.image;
+          }
           if (!row.imageCaptured) {
             row.status = "failed";
             row.issue = { stage: "capture", reason: "A captura não retornou uma imagem." };
@@ -211,8 +215,9 @@ export async function runMonitorDiagnostic(workId?: number) {
       durationMs: Math.round(performance.now() - started),
       worksSkipped: selected.length - results.length,
       results: results.sort((a, b) => b.durationMs - a.durationMs),
+      ...(previewImage ? { previewImage } : {}),
     };
-    logger.info({ event: "image_monitor_diagnostic_completed", ...report, results: undefined }, "Diagnóstico de imagens concluído (sem publicações)");
+    logger.info({ event: "image_monitor_diagnostic_completed", ...report, results: undefined, previewImage: undefined }, "Diagnóstico de imagens concluído (sem publicações)");
     return report;
   });
 }

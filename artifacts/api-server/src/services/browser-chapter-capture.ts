@@ -228,8 +228,8 @@ export function toomicsLoginUrls(listingUrl: string, currentPageUrl: string, dis
     }
   }
   for (const origin of origins) {
-    const fallback = `${origin}/por/login`;
-    if (!urls.includes(fallback)) urls.push(fallback);
+    const home = `${origin}/`;
+    if (!urls.includes(home)) urls.push(home);
   }
   return urls;
 }
@@ -248,6 +248,9 @@ export async function discoverToomicsLoginUrls(page: Page): Promise<string[]> {
       .map((anchor) => anchor.href);
   });
 }
+export const TOOMICS_LOGIN_LINK_SELECTOR =
+  'a[href*="login" i]:visible, a[href*="signin" i]:visible, a:has-text("Login"):visible, a:has-text("Entrar"):visible, a:has-text("로그인"):visible, button:has-text("Login"):visible, button:has-text("Entrar"):visible, button:has-text("로그인"):visible';
+
 async function loginToomics(page: Page, listingUrl: string, discoveredLoginUrls: string[] = []): Promise<string> {
   const email = process.env.TOOMICS_EMAIL?.trim();
   const password = process.env.TOOMICS_PASSWORD;
@@ -265,7 +268,7 @@ async function loginToomics(page: Page, listingUrl: string, discoveredLoginUrls:
 
     if (!(await passwordInput.count())) {
       const loginLink = page.locator(
-        'a[href*="login" i]:visible, a[href*="signin" i]:visible, button:has-text("Login"):visible, button:has-text("Entrar"):visible, button:has-text("로그인"):visible',
+        TOOMICS_LOGIN_LINK_SELECTOR,
       ).first();
       if (await loginLink.count()) {
         await loginLink.click().catch(() => undefined);
@@ -298,7 +301,7 @@ async function loginToomics(page: Page, listingUrl: string, discoveredLoginUrls:
           break;
         }
         const loginLink = page.locator(
-          'a[href*="login" i]:visible, a[href*="signin" i]:visible, button:has-text("Login"):visible, button:has-text("Entrar"):visible, button:has-text("로그인"):visible',
+          TOOMICS_LOGIN_LINK_SELECTOR,
         ).first();
         if (await loginLink.count()) {
           await loginLink.click({ timeout: 3_000 }).catch(() => undefined);
