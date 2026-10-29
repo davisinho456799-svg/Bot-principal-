@@ -8,6 +8,7 @@ import {
   capturedGroupWithinLimit,
   discoverToomicsLoginUrls,
   findRenderedChapters,
+  inspectToomicsLoginFrames,
   isolatePrimaryThumbnails,
   makeGreedyGroups,
   promotePrimaryThumbnails,
@@ -93,6 +94,24 @@ describe("Toomics login URLs", () => {
     await loginLink.click();
     expect(await page.locator("#user_id:visible").count()).toBe(1);
     expect(await page.locator("#user_pw:visible").count()).toBe(1);
+    await page.close();
+  });
+
+  it("reports login field presence and visibility by frame without reading field values", async () => {
+    const page = await browser.newPage();
+    await page.setContent(`<form>
+      <input id="user_id" type="text" value="private-user" style="display:none">
+      <input id="user_pw" type="password" value="private-password">
+    </form>
+    <iframe srcdoc="<form><input id=&quot;user_id&quot; type=&quot;text&quot;><input id=&quot;user_pw&quot; type=&quot;password&quot;></form>"></iframe>`);
+    await page.waitForTimeout(100);
+    const frames = await inspectToomicsLoginFrames([page]);
+    const mainFrame = frames.find((frame) => frame.forms === 1 && frame.userIdFields === 1);
+    const childFrame = frames.find((frame) => frame.userIdFields === 1 && frame.page !== mainFrame?.page);
+    expect(mainFrame).toMatchObject({ userIdFields: 1, visibleUserIdFields: 0, userPwFields: 1, visibleUserPwFields: 1, passwordFields: 1, visiblePasswordFields: 1 });
+    expect(childFrame).toMatchObject({ userIdFields: 1, visibleUserIdFields: 1, userPwFields: 1, visibleUserPwFields: 1 });
+    expect(JSON.stringify(frames)).not.toContain("private-user");
+    expect(JSON.stringify(frames)).not.toContain("private-password");
     await page.close();
   });
 });

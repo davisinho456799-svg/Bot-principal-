@@ -1,6 +1,6 @@
 /// <reference lib="dom" />
 
-import type { Browser, BrowserContext, Page } from "playwright";
+import type { Browser, BrowserContext, Page, Request, Response } from "playwright";
 import type { MonitorPlatform, ParsedChapter } from "./parsers/index";
 import { enrichChapterSubtitles } from "./parsers/chapter-subtitles";
 import { applyCaptureSubtitles, type CaptureSubtitle } from "./chapter-subtitle-capture";
@@ -54,8 +54,32 @@ export type ToomicsLoginAttemptDiagnostic = {
   emailFieldsAcrossPages?: number;
   passwordFieldsAcrossPages?: number;
   frames: number;
+  frameFields?: ToomicsLoginFrameDiagnostic[];
+  trace?: ToomicsLoginTraceStep[];
   otherPages?: string[];
   signals: string[];
+};
+
+export type ToomicsLoginTraceStep = {
+  type: "navegação" | "resposta" | "página" | "campos" | "clique" | "janela";
+  page: string;
+  httpStatus?: number | null;
+  result?: string;
+  emailFields?: number;
+  passwordFields?: number;
+};
+
+export type ToomicsLoginFrameDiagnostic = {
+  page: string;
+  forms: number;
+  userIdFields: number;
+  visibleUserIdFields: number;
+  userPwFields: number;
+  visibleUserPwFields: number;
+  emailLikeFields: number;
+  visibleEmailLikeFields: number;
+  passwordFields: number;
+  visiblePasswordFields: number;
 };
 
 export type BrowserListingDiagnostics = {
@@ -308,6 +332,65 @@ async function countVisibleFieldsAcrossPages(pages: Page[], selector: string): P
   return count;
 }
 
+
+async function toomicsDocumentRedirectTrace(response: Response | null): Promise<ToomicsLoginTraceStep[]> {
+  if (!response) return [];
+  const trace: ToomicsLoginTraceStep[] = [];
+  let request: Request | null = response.request();
+  while (request) {
+    const documentResponse = await request.response().catch(() => null);
+    trace.push({
+      type: "resposta",
+      page: safeToomicsPageLabel(request.url()),
+      httpStatus: documentResponse?.status() ?? null,
+      result: request.method(),
+    });
+    request = request.redirectedFrom();
+  }
+  return trace.reverse();
+}
+
+
+const TOOMICS_EMAIL_FIELD_CANDIDATES =
+  'input[type="email"], input[name*="email" i], input[name*="user" i], input[name*="login" i], input[name*="id" i], input#user_id';
+const TOOMICS_PASSWORD_FIELD_CANDIDATES = 'input[type="password"], input#user_pw';
+
+function visibleSelector(selector: string): string {
+  return selector.split(",").map((part) => `${part.trim()}:visible`).join(", ");
+}
+
+export async function inspectToomicsLoginFrames(pages: Page[]): Promise<ToomicsLoginFrameDiagnostic[]> {
+  const diagnostics: ToomicsLoginFrameDiagnostic[] = [];
+  for (const candidatePage of pages) {
+    for (const frame of candidatePage.frames()) {
+      try {
+        const [
+          forms, userIdFields, visibleUserIdFields, userPwFields, visibleUserPwFields,
+          emailLikeFields, visibleEmailLikeFields, passwordFields, visiblePasswordFields,
+        ] = await Promise.all([
+          frame.locator("form").count(),
+          frame.locator("input#user_id").count(),
+          frame.locator("input#user_id:visible").count(),
+          frame.locator("input#user_pw").count(),
+          frame.locator("input#user_pw:visible").count(),
+          frame.locator(TOOMICS_EMAIL_FIELD_CANDIDATES).count(),
+          frame.locator(visibleSelector(TOOMICS_EMAIL_FIELD_CANDIDATES)).count(),
+          frame.locator(TOOMICS_PASSWORD_FIELD_CANDIDATES).count(),
+          frame.locator(visibleSelector(TOOMICS_PASSWORD_FIELD_CANDIDATES)).count(),
+        ]);
+        diagnostics.push({
+          page: safeToomicsPageLabel(frame.url()), forms, userIdFields, visibleUserIdFields,
+          userPwFields, visibleUserPwFields, emailLikeFields, visibleEmailLikeFields,
+          passwordFields, visiblePasswordFields,
+        });
+      } catch {
+        // A popup or frame can close while its login controls are being sampled.
+      }
+    }
+  }
+  return diagnostics.slice(0, 12);
+}
+
 type ToomicsLoginProgress = { stage: string };
 
 async function loginToomics(
@@ -354,13 +437,16 @@ async function loginToomics(
       const loginUrls = toomicsLoginUrls(listingUrl, page.url(), discoveredLoginUrls);
 
       for (const loginUrl of loginUrls) {
+        const trace: ToomicsLoginTraceStep[] = [{ type: "navegação", page: safeToomicsPageLabel(loginUrl), result: "iniciada" }];
         progress.stage = "abertura da pÃ¡gina de login";
         const response = await page.goto(loginUrl, {
           waitUntil: "domcontentloaded",
           timeout: PAGE_TIMEOUT_MS,
         });
+        trace.push(...await toomicsDocumentRedirectTrace(response));
         progress.stage = "espera da pÃ¡gina de login";
         await waitForRenderedPage(page);
+        trace.push({ type: "página", page: safeToomicsPageLabel(page.url()), result: "renderizada" });
         progress.stage = "espera dos campos do formulÃ¡rio";
         await page
           .locator('input[type="email"], input[type="password"], #user_id, #user_pw')
@@ -383,6 +469,7 @@ async function loginToomics(
         let loginPassword = page.locator(passwordSelector).first();
         let emailFields = await loginEmail.count();
         let passwordFields = await loginPassword.count();
+        trace.push({ type: "campos", page: safeToomicsPageLabel(page.url()), emailFields, passwordFields, result: "visíveis antes do clique" });
         if (!(emailFields && passwordFields) && loginLinks && shouldClickToomicsLoginLink(loginUrl)) {
           try {
             const href = await loginLink.getAttribute("href");
@@ -413,6 +500,7 @@ async function loginToomics(
             }
           }
           postClickPage = safeToomicsPageLabel(page.url());
+          trace.push({ type: "clique", page: postClickPage, result: loginClickMode ?? loginClickError ?? "não concluído" });
           progress.stage = "espera apÃ³s abrir o login";
           await page.waitForTimeout(500);
           page.off("popup", recordPopup);
@@ -424,8 +512,11 @@ async function loginToomics(
         }
         const inspectedPages = [page, ...popupPages];
         const otherPages = popupPages.map((popup) => safeToomicsPageLabel(popup.url()));
+        trace.push(...otherPages.map((page) => ({ type: "janela" as const, page, result: "aberta" })));
         const emailFieldsAcrossPages = await countVisibleFieldsAcrossPages(inspectedPages, emailSelector);
         const passwordFieldsAcrossPages = await countVisibleFieldsAcrossPages(inspectedPages, passwordSelector);
+        const frameFields = await inspectToomicsLoginFrames(inspectedPages);
+        trace.push({ type: "campos", page: safeToomicsPageLabel(page.url()), emailFields: emailFieldsAcrossPages, passwordFields: passwordFieldsAcrossPages, result: `visíveis em ${frameFields.length} quadros` });
         const signals = await page.evaluate(() => {
           const text = `${document.title} ${document.body?.innerText || ""}`.toLocaleLowerCase();
           return [
@@ -449,6 +540,8 @@ async function loginToomics(
           emailFieldsAcrossPages,
           passwordFieldsAcrossPages,
           frames: page.frames().length,
+          frameFields,
+          trace: trace.slice(0, 32),
           ...(otherPages.length ? { otherPages } : {}),
           signals,
         });

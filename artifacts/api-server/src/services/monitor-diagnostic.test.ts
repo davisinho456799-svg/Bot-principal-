@@ -146,6 +146,7 @@ describe("read-only diagnostics", () => {
           emailFieldsAcrossPages: 1,
           passwordFieldsAcrossPages: 1,
           frames: 1,
+          frameFields: [{ page: "toomics.com/kr/login", forms: 1, userIdFields: 1, visibleUserIdFields: 0, userPwFields: 1, visibleUserPwFields: 1, emailLikeFields: 1, visibleEmailLikeFields: 0, passwordFields: 1, visiblePasswordFields: 1 }],
           otherPages: ["auth.toomics.com/login"],
           signals: [],
         }],
@@ -160,7 +161,9 @@ describe("read-only diagnostics", () => {
 
     expect(formatted).toContain("toomics.com/kr [HTTP 200");
     expect(formatted).toContain("links=1; alvo=toomics.com/kr/login; clique=sim; erro-clique-normal=TimeoutError; via=forÃ§ado; depois=toomics.com/kr/login");
-    expect(formatted).toContain("email=0; senha=0; campos-total=1/1; quadros=1; janelas-extras=auth.toomics.com/login");
+    expect(formatted).toContain("email=0; senha=0; campos-total=1/1; quadros=1; quadros-login=");
+    expect(formatted).toContain("janelas-extras=auth.toomics.com/login");
+    expect(formatted).toContain("quadros-login=toomics.com/kr/login{forms=1, user_id=1/0, user_pw=1/1, email=1/0, senha=1/1}");
     expect(formatted).toContain("etapa-login=preenchimento do e-mail");
     expect(state.writes).not.toHaveBeenCalled();
   });
