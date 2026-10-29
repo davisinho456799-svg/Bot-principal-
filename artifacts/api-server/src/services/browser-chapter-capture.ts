@@ -191,7 +191,7 @@ async function resetBrowserAfterCrash(): Promise<void> {
   await browser?.close().catch(() => undefined);
 }
 
-export function toomicsLoginUrls(listingUrl: string, currentPageUrl: string): string[] {
+export function toomicsLoginUrls(listingUrl: string, currentPageUrl: string, discoveredLoginUrls: string[] = []): string[] {
   const origins: string[] = [];
   const urls: string[] = [];
   for (const candidate of discoveredLoginUrls) {
