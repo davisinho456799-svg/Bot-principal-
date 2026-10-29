@@ -159,8 +159,8 @@ describe("read-only diagnostics", () => {
     const formatted = formatMonitorDiagnostic(report);
 
     expect(formatted).toContain("toomics.com/kr [HTTP 200");
-    expect(formatted).toContain("links=1; alvo=toomics.com/kr/login; clique=sim; erro-clique-normal=TimeoutError; via=forÃ§ado; apÃ³s=toomics.com/kr/login");
-    expect(formatted).toContain("email=0; senha=0; campos-total=1/1; quadros=1; pÃ¡ginas-extra=auth.toomics.com/login");
+    expect(formatted).toContain("links=1; alvo=toomics.com/kr/login; clique=sim; erro-clique-normal=TimeoutError; via=forÃ§ado; depois=toomics.com/kr/login");
+    expect(formatted).toContain("email=0; senha=0; campos-total=1/1; quadros=1; janelas-extras=auth.toomics.com/login");
     expect(formatted).toContain("etapa-login=preenchimento do e-mail");
     expect(state.writes).not.toHaveBeenCalled();
   });
