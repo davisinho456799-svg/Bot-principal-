@@ -121,7 +121,7 @@ function formatBrowserSummary(browser?: WorkDiagnostic["browser"]): string {
     ? `; etapa-login=${browser.authenticationFailureStage}`
     : "";
   const attempts = browser.authenticationAttempts?.length
-    ? `\n  Tentativas de login: ${browser.authenticationAttempts.map(attempt => `${attempt.page} [HTTP ${attempt.httpStatus ?? "?"}; links=${attempt.loginLinks}; clique=${attempt.loginClicked ? "sim" : "não"}${attempt.loginClickError ? `; erro-clique=${attempt.loginClickError}` : ""}; email=${attempt.emailFields}; senha=${attempt.passwordFields}; quadros=${attempt.frames}${attempt.signals.length ? `; sinais=${attempt.signals.join(", ")}` : ""}]`).join(" · ")}`
+    ? `\n  Tentativas de login: ${browser.authenticationAttempts.map(attempt => `${attempt.page} [HTTP ${attempt.httpStatus ?? "?"}; links=${attempt.loginLinks}; clique=${attempt.loginClicked ? "sim" : "não"}${attempt.loginClickError ? `; erro-clique=${attempt.loginClickError}` : ""}${attempt.loginClickMode ? `; via=${attempt.loginClickMode}` : ""}; email=${attempt.emailFields}; senha=${attempt.passwordFields}; quadros=${attempt.frames}${attempt.signals.length ? `; sinais=${attempt.signals.join(", ")}` : ""}]`).join(" · ")}`
     : "";
   return `\n  Navegador: página=${browser.page}; título="${browser.title || "sem título"}"; autenticação=${browser.authentication}${loginFailureStage}; imagens=${browser.visibleImageCount}; texto=${browser.bodyTextLength} caracteres${signals}${attempts}`;
 }

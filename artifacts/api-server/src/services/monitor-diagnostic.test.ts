@@ -136,7 +136,8 @@ describe("read-only diagnostics", () => {
           page: "toomics.com/kr",
           httpStatus: 200,
           loginLinks: 1,
-          loginClicked: false,
+          loginClicked: true,
+          loginClickMode: "forçado",
           loginClickError: "TimeoutError",
           emailFields: 0,
           passwordFields: 0,
@@ -153,7 +154,7 @@ describe("read-only diagnostics", () => {
     const formatted = formatMonitorDiagnostic(report);
 
     expect(formatted).toContain("toomics.com/kr [HTTP 200");
-    expect(formatted).toContain("links=1; clique=não; erro-clique=TimeoutError; email=0; senha=0");
+    expect(formatted).toContain("links=1; clique=sim; erro-clique=TimeoutError; via=forçado; email=0; senha=0");
     expect(formatted).toContain("etapa-login=preenchimento do e-mail");
     expect(state.writes).not.toHaveBeenCalled();
   });

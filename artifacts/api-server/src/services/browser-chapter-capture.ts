@@ -44,6 +44,7 @@ export type ToomicsLoginAttemptDiagnostic = {
   httpStatus: number | null;
   loginLinks: number;
   loginClicked: boolean;
+  loginClickMode?: "normal" | "forçado";
   loginClickError?: string;
   emailFields: number;
   passwordFields: number;
@@ -338,6 +339,7 @@ async function loginToomics(
         const loginLink = page.locator(TOOMICS_LOGIN_LINK_SELECTOR).first();
         const loginLinks = await loginLink.count();
         let loginClicked = false;
+        let loginClickMode: "normal" | "forçado" | undefined;
         let loginClickError: string | undefined;
         let loginEmail = page.locator(emailSelector).first();
         let loginPassword = page.locator(passwordSelector).first();
@@ -346,10 +348,21 @@ async function loginToomics(
         if (!(emailFields && passwordFields) && loginLinks) {
           try {
             progress.stage = "clique no link de login";
-            await loginLink.click({ timeout: 3_000, noWaitAfter: true });
+            await loginLink.click({ timeout: 1_500, noWaitAfter: true });
             loginClicked = true;
+            loginClickMode = "normal";
           } catch (error) {
             loginClickError = error instanceof Error ? error.name : "Error";
+            if (error instanceof Error && error.name === "TimeoutError") {
+              try {
+                progress.stage = "clique forçado no link de login";
+                await loginLink.click({ force: true, timeout: 1_500, noWaitAfter: true });
+                loginClicked = true;
+                loginClickMode = "forçado";
+              } catch (forcedError) {
+                loginClickError = forcedError instanceof Error ? forcedError.name : "Error";
+              }
+            }
           }
           progress.stage = "espera após abrir o login";
           await page.waitForTimeout(500);
@@ -372,6 +385,7 @@ async function loginToomics(
           httpStatus: response?.status() ?? null,
           loginLinks,
           loginClicked,
+          ...(loginClickMode ? { loginClickMode } : {}),
           ...(loginClickError ? { loginClickError } : {}),
           emailFields,
           passwordFields,
