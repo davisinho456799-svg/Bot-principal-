@@ -205,6 +205,9 @@ describe("read-only diagnostics", () => {
       ["Error: net::ERR_TUNNEL_CONNECTION_FAILED", "erro técnico no login (falha de rede)"],
       ["[TypeError] (private-login-detail)", "erro técnico no login (tipo TypeError)"],
       ["[Error] (private-login-detail)", "erro técnico no login (erro genérico)"],
+      ["[ReferenceError] (toomicsLoginHelper is not defined)", "erro técnico no login (símbolo toomicsLoginHelper não definido)"],
+      ["[ReferenceError] (TOOMICS_PASSWORD is not defined)", "erro técnico no login (tipo ReferenceError)"],
+      ["[ReferenceError] (DATABASE_URL is not defined)", "erro técnico no login (tipo ReferenceError)"],
     ] as const;
 
     for (const [detail, expected] of cases) {
