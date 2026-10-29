@@ -1,7 +1,11 @@
 import { db } from "@workspace/db";
 import { monitorConfigTable } from "@workspace/db/schema";
 import { logger } from "../lib/logger";
-import { openBrowserListing, type BrowserListingSession } from "./browser-chapter-capture";
+import {
+  openBrowserListing,
+  type BrowserListingSession,
+  type ToomicsLoginAttemptDiagnostic,
+} from "./browser-chapter-capture";
 import type { MonitorPlatform } from "./parsers/index";
 import { getActiveNumberedMonitorWorks } from "./monitor-work-list";
 import { getMonitorIntervalMinutes } from "./monitor-interval";
@@ -24,6 +28,7 @@ export type WorkDiagnostic = {
     visibleImageCount: number;
     signals: string[];
     authentication: string;
+    authenticationAttempts?: ToomicsLoginAttemptDiagnostic[];
   };
   issue?: { stage: "listing" | "capture" | "cleanup"; reason: string };
 };
@@ -111,7 +116,10 @@ function safeBrowserTitle(title: string): string {
 function formatBrowserSummary(browser?: WorkDiagnostic["browser"]): string {
   if (!browser) return "";
   const signals = browser.signals.length ? `; sinais=${browser.signals.join(", ")}` : "";
-  return `\n  Navegador: página=${browser.page}; título="${browser.title || "sem título"}"; autenticação=${browser.authentication}; imagens=${browser.visibleImageCount}; texto=${browser.bodyTextLength} caracteres${signals}`;
+  const attempts = browser.authenticationAttempts?.length
+    ? `\n  Tentativas de login: ${browser.authenticationAttempts.map(attempt => `${attempt.page} [HTTP ${attempt.httpStatus ?? "?"}; links=${attempt.loginLinks}; clique=${attempt.loginClicked ? "sim" : "não"}; email=${attempt.emailFields}; senha=${attempt.passwordFields}; quadros=${attempt.frames}${attempt.signals.length ? `; sinais=${attempt.signals.join(", ")}` : ""}]`).join(" · ")}`
+    : "";
+  return `\n  Navegador: página=${browser.page}; título="${browser.title || "sem título"}"; autenticação=${browser.authentication}; imagens=${browser.visibleImageCount}; texto=${browser.bodyTextLength} caracteres${signals}${attempts}`;
 }
 
 /** Read-only sampling: one browser card per work; no notification or DB writes. */
@@ -165,6 +173,7 @@ export async function runMonitorDiagnostic(workId?: number) {
               ["login", "captcha", "cloudflare", "access-denied", "korean-font-unavailable"].includes(signal),
             ),
             authentication: safeAuthenticationStatus(session.diagnostics.authentication),
+          authenticationAttempts: session.diagnostics.authenticationAttempts,
           };
         }
         row.chaptersFound = session.candidates.length;

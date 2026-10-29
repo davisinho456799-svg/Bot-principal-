@@ -39,6 +39,17 @@ export type CapturedChapterGroup = {
   image: Buffer;
 };
 
+export type ToomicsLoginAttemptDiagnostic = {
+  page: string;
+  httpStatus: number | null;
+  loginLinks: number;
+  loginClicked: boolean;
+  emailFields: number;
+  passwordFields: number;
+  frames: number;
+  signals: string[];
+};
+
 export type BrowserListingDiagnostics = {
   finalUrl: string;
   pageTitle: string;
@@ -46,6 +57,7 @@ export type BrowserListingDiagnostics = {
   visibleImageCount: number;
   signals: string[];
   authentication: string;
+  authenticationAttempts?: ToomicsLoginAttemptDiagnostic[];
 };
 
 export type BrowserListingSession = {
@@ -251,7 +263,21 @@ export async function discoverToomicsLoginUrls(page: Page): Promise<string[]> {
 export const TOOMICS_LOGIN_LINK_SELECTOR =
   'a[href*="login" i]:visible, a[href*="signin" i]:visible, a:has-text("Login"):visible, a:has-text("Entrar"):visible, a:has-text("로그인"):visible, button:has-text("Login"):visible, button:has-text("Entrar"):visible, button:has-text("로그인"):visible';
 
-async function loginToomics(page: Page, listingUrl: string, discoveredLoginUrls: string[] = []): Promise<string> {
+function safeToomicsPageLabel(value: string): string {
+  try {
+    const url = new URL(value);
+    return `${url.hostname}${url.pathname}`.slice(0, 160);
+  } catch {
+    return "página desconhecida";
+  }
+}
+
+async function loginToomics(
+  page: Page,
+  listingUrl: string,
+  discoveredLoginUrls: string[] = [],
+  attempts: ToomicsLoginAttemptDiagnostic[] = [],
+): Promise<string> {
   const email = process.env.TOOMICS_EMAIL?.trim();
   const password = process.env.TOOMICS_PASSWORD;
   if (!email || !password) return "credenciais não configuradas";
@@ -282,39 +308,61 @@ async function loginToomics(page: Page, listingUrl: string, discoveredLoginUrls:
       const loginUrls = toomicsLoginUrls(listingUrl, page.url(), discoveredLoginUrls);
 
       for (const loginUrl of loginUrls) {
-        await page.goto(loginUrl, {
+        const response = await page.goto(loginUrl, {
           waitUntil: "domcontentloaded",
           timeout: PAGE_TIMEOUT_MS,
         });
         await waitForRenderedPage(page);
         await page
-          .locator("#user_id, #user_pw")
+          .locator('input[type="email"], input[type="password"], #user_id, #user_pw')
           .first()
-          .waitFor({ state: "attached", timeout: 8_000 })
+          .waitFor({ state: "attached", timeout: 3_000 })
           .catch(() => undefined);
 
-        const loginEmail = page.locator("#user_id:visible").first();
-        const loginPassword = page.locator("#user_pw:visible").first();
-        if (await loginEmail.count() && await loginPassword.count()) {
+        const loginLink = page.locator(TOOMICS_LOGIN_LINK_SELECTOR).first();
+        const loginLinks = await loginLink.count();
+        let loginClicked = false;
+        let loginEmail = page.locator(emailSelector).first();
+        let loginPassword = page.locator(passwordSelector).first();
+        let emailFields = await loginEmail.count();
+        let passwordFields = await loginPassword.count();
+        if (!(emailFields && passwordFields) && loginLinks) {
+          try {
+            await loginLink.click({ timeout: 3_000 });
+            loginClicked = true;
+          } catch {
+            // The attempt summary reports that the link could not be clicked.
+          }
+          if (loginClicked) {
+            await page.waitForTimeout(500);
+            loginEmail = page.locator(emailSelector).first();
+            loginPassword = page.locator(passwordSelector).first();
+            emailFields = await loginEmail.count();
+            passwordFields = await loginPassword.count();
+          }
+        }
+        const signals = await page.evaluate(() => {
+          const text = `${document.title} ${document.body?.innerText || ""}`.toLocaleLowerCase();
+          return [
+            /captcha|recaptcha|are you human|verifique que/.test(text) ? "captcha" : "",
+            /cloudflare|just a moment|checking your browser/.test(text) ? "cloudflare" : "",
+            /access denied|403 forbidden|forbidden/.test(text) ? "access-denied" : "",
+          ].filter(Boolean);
+        }).catch(() => []);
+        attempts.push({
+          page: safeToomicsPageLabel(page.url()),
+          httpStatus: response?.status() ?? null,
+          loginLinks,
+          loginClicked,
+          emailFields,
+          passwordFields,
+          frames: page.frames().length,
+          signals,
+        });
+        if (emailFields && passwordFields) {
           emailInput = loginEmail;
           passwordInput = loginPassword;
           break;
-        }
-        const loginLink = page.locator(
-          TOOMICS_LOGIN_LINK_SELECTOR,
-        ).first();
-        if (await loginLink.count()) {
-          await loginLink.click({ timeout: 3_000 }).catch(() => undefined);
-          await page.waitForTimeout(500);
-          await page.locator("#user_id, #user_pw").first()
-            .waitFor({ state: "attached", timeout: 8_000 }).catch(() => undefined);
-          const modalEmail = page.locator("#user_id:visible").first();
-          const modalPassword = page.locator("#user_pw:visible").first();
-          if (await modalEmail.count() && await modalPassword.count()) {
-            emailInput = modalEmail;
-            passwordInput = modalPassword;
-            break;
-          }
         }
       }
     }
@@ -1521,6 +1569,7 @@ export async function openBrowserListing(
     signal?.throwIfAborted();
 
     let authentication = "não aplicável";
+    let authenticationAttempts: ToomicsLoginAttemptDiagnostic[] | undefined;
     if (platform === "toomics") {
       const discoveredLoginUrls = await discoverToomicsLoginUrls(page).catch(() => []);
       // Do not navigate the image-heavy listing page to the login flow.
@@ -1531,7 +1580,8 @@ export async function openBrowserListing(
       page = await context.newPage();
       signal?.throwIfAborted();
       await setupPage(page);
-      authentication = await loginToomics(page, listingUrl, discoveredLoginUrls);
+      authenticationAttempts = [];
+      authentication = await loginToomics(page, listingUrl, discoveredLoginUrls, authenticationAttempts);
       await page.close().catch(() => undefined);
       signal?.throwIfAborted();
 
@@ -1546,7 +1596,7 @@ export async function openBrowserListing(
       await waitForRenderedPage(page);
     }
     const koreanFontLoaded = platform !== "toomics" || await loadToomicsKoreanFont(page);
-    const diagnostics = await page.evaluate(() => {
+    const diagnostics: BrowserListingDiagnostics = await page.evaluate(() => {
       const bodyText = (document.body?.innerText || "").replace(/\s+/g, " ").trim();
       const lowerText = bodyText.toLocaleLowerCase();
       const signalEntries: Array<[name: string, present: boolean]> = [
@@ -1577,6 +1627,7 @@ export async function openBrowserListing(
       };
     });
     diagnostics.authentication = authentication;
+    if (authenticationAttempts?.length) diagnostics.authenticationAttempts = authenticationAttempts;
     if (!koreanFontLoaded) diagnostics.signals.push("korean-font-unavailable");
     const candidates = await findRenderedChapters(page, platform);
     const enriched = enrichChapterSubtitles(await page.content(), listingUrl, platform, candidates);

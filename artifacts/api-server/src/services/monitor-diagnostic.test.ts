@@ -118,6 +118,44 @@ describe("read-only diagnostics", () => {
     expect(state.writes).not.toHaveBeenCalled();
   });
 
+  it("reports sanitized Toomics login route status and visible-field counts", async () => {
+    state.works = [{
+      id: 1, displayNumber: 1, title: "Toomics", platform: "toomics",
+      listingUrl: "https://www.toomics.com/uplmscg/episode/toon/7189", lastCheckedAt: new Date(),
+    }];
+    state.open.mockResolvedValue({
+      diagnostics: {
+        finalUrl: "https://www.toomics.com/uplmscg/episode/toon/7189",
+        pageTitle: "Toomics",
+        bodyTextLength: 100,
+        visibleImageCount: 3,
+        signals: [],
+        authentication: "formulário de login não encontrado",
+        authenticationAttempts: [{
+          page: "global.toomics.com/en",
+          httpStatus: 403,
+          loginLinks: 0,
+          loginClicked: false,
+          emailFields: 0,
+          passwordFields: 0,
+          frames: 1,
+          signals: ["access-denied"],
+        }],
+      },
+      candidates: [],
+      captureGroups: async () => [],
+      close: state.close,
+    });
+
+    const report = await runMonitorDiagnostic(1);
+    const formatted = formatMonitorDiagnostic(report);
+
+    expect(formatted).toContain("global.toomics.com/en [HTTP 403");
+    expect(formatted).toContain("links=0; clique=não; email=0; senha=0");
+    expect(formatted).toContain("sinais=access-denied");
+    expect(state.writes).not.toHaveBeenCalled();
+  });
+
   it("uses the automatic paired capture path for Toptoon works", async () => {
     state.works = [{
       id: 1, displayNumber: 1, title: "Obra Toptoon", platform: "toptoon",
