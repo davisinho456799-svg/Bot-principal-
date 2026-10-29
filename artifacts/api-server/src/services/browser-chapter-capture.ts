@@ -864,6 +864,10 @@ export async function findRenderedChapters(
       const nodes = Array.from(document.querySelectorAll(selector));
       const bestByNumber = new Map();
       const minimumCardHeight = platform === "toomics" ? 120 : 90;
+      const isCompactToomicsCard = (candidate) =>
+        platform === "toomics" && candidate.matches(".ep, .eps__li");
+      const minimumHeightFor = (candidate) =>
+        isCompactToomicsCard(candidate) ? 90 : minimumCardHeight;
 
       for (const element of nodes) {
         if (!visible(element)) continue;
@@ -893,7 +897,7 @@ export async function findRenderedChapters(
             parentNumbers.length !== 1 ||
             !parentHasImage ||
             parentRect.width < 240 ||
-            parentRect.height < minimumCardHeight ||
+            parentRect.height < minimumHeightFor(parent) ||
             parentRect.width > 1_400 ||
             parentRect.height > 600 ||
             parentText.length > 1_200
@@ -908,10 +912,10 @@ export async function findRenderedChapters(
         }
 
         const rect = cardElement.getBoundingClientRect();
-        // Toomics has nested episode fragments that can look like a complete
-        // card at 90px tall. Capturing that inner wrapper cuts off the rest of
-        // the chapter row, so require a larger card or keep walking ancestors.
-        if (rect.height < minimumCardHeight) continue;
+        // Current Toomics episode rows use these known wrappers and render at
+        // about 93px. Keep the larger threshold for unrecognized fragments.
+        const minimumCardHeightForElement = minimumHeightFor(cardElement);
+        if (rect.height < minimumCardHeightForElement) continue;
         const cardText = (cardElement.innerText || cardElement.textContent || " ")
           .replace(whitespacePattern, " ")
           .trim();
@@ -926,7 +930,7 @@ export async function findRenderedChapters(
          const hasImage = Boolean(cardElement.querySelector("img, picture, source, [data-bg], [data-ep_thumb1], [data-ep_thumb2], [data-ep_thumb3]"));
         const hasLink = cardElement.tagName.toLowerCase() === "a" || Boolean(cardElement.querySelector("a[href]"));
         const hasChapterText = chapterLabelFixed.test(cardText);
-         const hasCardDimensions = rect.width >= 240 && rect.height >= minimumCardHeight;
+         const hasCardDimensions = rect.width >= 240 && rect.height >= minimumCardHeightForElement;
          const mediaElements = [
            ...Array.from(cardElement.querySelectorAll("img, source, [data-bg], [data-ep_thumb1], [data-ep_thumb2], [data-ep_thumb3]")),
            cardElement,

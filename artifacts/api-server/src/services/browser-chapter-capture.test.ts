@@ -256,6 +256,27 @@ describe("single-thumbnail chapter capture", () => {
     await page.close();
   });
 
+  it("recognizes complete Toomics episode rows rendered at 93px", async () => {
+    const page = await browser.newPage();
+    const thumbnail = "https://thumb.toomics.com/chapter-1.jpg";
+    await page.setContent(`<ul style="margin:0;padding:0">
+      <li class="eps__li" style="list-style:none;width:640px;height:93px">
+        <a href="javascript:;" style="display:block;width:640px;height:93px">
+          <div class="ep" style="display:flex;width:640px;height:93px">
+            <img src="${thumbnail}" width="120" height="90">
+            <div class="ep__episode" style="width:120px;height:91px">1</div>
+            <div class="ep__title">담배피지 마세요!</div>
+          </div>
+        </a>
+      </li>
+    </ul>`, { waitUntil: "domcontentloaded" });
+
+    const chapters = await findRenderedChapters(page, "toomics");
+    const chapter = chapters.find((candidate) => candidate.number === "1");
+    expect(chapter?.box.height).toBe(93);
+    expect(chapter?.thumbnailUrl).toContain("chapter-1.jpg");
+    await page.close();
+  });
   it("captures the full Toomics episode row instead of a short nested fragment", async () => {
     const page = await browser.newPage();
     const thumbnail = "https://thumb.toomics.com/chapter-135.jpg";
