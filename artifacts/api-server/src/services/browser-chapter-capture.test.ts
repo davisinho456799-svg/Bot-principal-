@@ -6,6 +6,7 @@ import { applyCaptureSubtitles } from "./chapter-subtitle-capture";
 import { applyToptoonPairCapture } from "./toptoon-pair-capture";
 import {
   capturedGroupWithinLimit,
+  discoverToomicsLoginUrls,
   findRenderedChapters,
   isolatePrimaryThumbnails,
   makeGreedyGroups,
@@ -36,6 +37,33 @@ describe("Toomics login URLs", () => {
       "https://www.toomics.com/por/login",
       "https://global.toomics.com/por/login",
     ]);
+  });
+  it("prefers discovered same-site login routes and rejects external links", () => {
+    expect(toomicsLoginUrls(
+      "https://www.toomics.com/uplmscg/episode/toon/7189",
+      "about:blank",
+      ["https://www.toomics.com/uplmscg/login?return=/episode", "https://example.com/login"],
+    )).toEqual([
+      "https://www.toomics.com/uplmscg/login",
+      "https://www.toomics.com/por/login",
+      "https://toomics.com/por/login",
+      "https://global.toomics.com/por/login",
+    ]);
+  });
+
+  it("reads visible login links from the actual listing page", async () => {
+    const page = await browser.newPage();
+    await page.setContent(`<base href="https://www.toomics.com/uplmscg/episode/toon/7189">
+      <a href="/uplmscg/login">로그인</a>
+      <a href="/uplmscg/home">Home</a>
+      <a href="https://example.com/login">Login</a>
+      <a href="/uplmscg/hidden-login" style="display:none">Login</a>`);
+    const discovered = await discoverToomicsLoginUrls(page);
+    expect(discovered).toContain("https://www.toomics.com/uplmscg/login");
+    expect(discovered).not.toContain("https://www.toomics.com/uplmscg/hidden-login");
+    expect(toomicsLoginUrls("https://www.toomics.com/uplmscg/episode/toon/7189", "about:blank", discovered))
+      .not.toContain("https://example.com/login");
+    await page.close();
   });
 });
 

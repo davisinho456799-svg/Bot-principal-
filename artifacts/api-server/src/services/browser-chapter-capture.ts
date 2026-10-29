@@ -193,6 +193,20 @@ async function resetBrowserAfterCrash(): Promise<void> {
 
 export function toomicsLoginUrls(listingUrl: string, currentPageUrl: string): string[] {
   const origins: string[] = [];
+  const urls: string[] = [];
+  for (const candidate of discoveredLoginUrls) {
+    try {
+      const url = new URL(candidate, listingUrl);
+      if ((url.protocol === "https:" || url.protocol === "http:") &&
+          (url.hostname === "toomics.com" || url.hostname.endsWith(".toomics.com"))) {
+        const loginUrl = `${url.origin}${url.pathname}`;
+        if (!urls.includes(loginUrl)) urls.push(loginUrl);
+        if (!origins.includes(url.origin)) origins.push(url.origin);
+      }
+    } catch {
+      // Ignore malformed login links and non-URL click handlers.
+    }
+  }
   for (const candidate of [
     listingUrl,
     currentPageUrl,
@@ -213,10 +227,28 @@ export function toomicsLoginUrls(listingUrl: string, currentPageUrl: string): st
       // Ignore blank/about:blank pages and malformed origins.
     }
   }
-  return origins.map((origin) => `${origin}/por/login`);
+  for (const origin of origins) {
+    const fallback = `${origin}/por/login`;
+    if (!urls.includes(fallback)) urls.push(fallback);
+  }
+  return urls;
 }
 
-async function loginToomics(page: Page, listingUrl: string): Promise<string> {
+export async function discoverToomicsLoginUrls(page: Page): Promise<string[]> {
+  return page.evaluate(() => {
+    const loginText = /login|sign[\s-]?in|log[\s-]?in|entrar|로그인/i;
+    return Array.from(document.querySelectorAll<HTMLAnchorElement>("a[href]"))
+      .filter((anchor) => {
+        const style = getComputedStyle(anchor);
+        const rect = anchor.getBoundingClientRect();
+        return style.display !== "none" && style.visibility !== "hidden" &&
+          Number.parseFloat(style.opacity || "1") > 0 && rect.width > 2 && rect.height > 2 &&
+          loginText.test(`${anchor.href} ${anchor.textContent || ""}`);
+      })
+      .map((anchor) => anchor.href);
+  });
+}
+async function loginToomics(page: Page, listingUrl: string, discoveredLoginUrls: string[] = []): Promise<string> {
   const email = process.env.TOOMICS_EMAIL?.trim();
   const password = process.env.TOOMICS_PASSWORD;
   if (!email || !password) return "credenciais não configuradas";
@@ -244,7 +276,7 @@ async function loginToomics(page: Page, listingUrl: string): Promise<string> {
     }
 
     if (!(await passwordInput.count())) {
-      const loginUrls = toomicsLoginUrls(listingUrl, page.url());
+      const loginUrls = toomicsLoginUrls(listingUrl, page.url(), discoveredLoginUrls);
 
       for (const loginUrl of loginUrls) {
         await page.goto(loginUrl, {
@@ -264,6 +296,22 @@ async function loginToomics(page: Page, listingUrl: string): Promise<string> {
           emailInput = loginEmail;
           passwordInput = loginPassword;
           break;
+        }
+        const loginLink = page.locator(
+          'a[href*="login" i]:visible, a[href*="signin" i]:visible, button:has-text("Login"):visible, button:has-text("Entrar"):visible, button:has-text("로그인"):visible',
+        ).first();
+        if (await loginLink.count()) {
+          await loginLink.click({ timeout: 3_000 }).catch(() => undefined);
+          await page.waitForTimeout(500);
+          await page.locator("#user_id, #user_pw").first()
+            .waitFor({ state: "attached", timeout: 8_000 }).catch(() => undefined);
+          const modalEmail = page.locator("#user_id:visible").first();
+          const modalPassword = page.locator("#user_pw:visible").first();
+          if (await modalEmail.count() && await modalPassword.count()) {
+            emailInput = modalEmail;
+            passwordInput = modalPassword;
+            break;
+          }
         }
       }
     }
@@ -1468,6 +1516,7 @@ export async function openBrowserListing(
 
     let authentication = "não aplicável";
     if (platform === "toomics") {
+      const discoveredLoginUrls = await discoverToomicsLoginUrls(page).catch(() => []);
       // Do not navigate the image-heavy listing page to the login flow.
       // Closing it first avoids keeping all chapter thumbnails alive while
       // Toomics creates the authentication page.
@@ -1476,7 +1525,7 @@ export async function openBrowserListing(
       page = await context.newPage();
       signal?.throwIfAborted();
       await setupPage(page);
-      authentication = await loginToomics(page, listingUrl);
+      authentication = await loginToomics(page, listingUrl, discoveredLoginUrls);
       await page.close().catch(() => undefined);
       signal?.throwIfAborted();
 
