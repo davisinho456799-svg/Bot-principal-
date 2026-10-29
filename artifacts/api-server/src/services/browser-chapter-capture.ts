@@ -353,8 +353,11 @@ async function loginToomics(page: Page, listingUrl: string, discoveredLoginUrls:
     if (state.hasError || state.hasPassword) return "login rejeitado";
     return "login concluído";
   } catch (error) {
+    const errorName = error instanceof Error && /^[A-Za-z][A-Za-z0-9]{0,39}$/.test(error.name)
+      ? error.name
+      : "UnknownError";
     const message = error instanceof Error ? error.message.split("\n")[0].slice(0, 160) : "erro desconhecido";
-    return `erro no login (${message})`;
+    return `erro no login [${errorName}] (${message})`;
   }
 }
 

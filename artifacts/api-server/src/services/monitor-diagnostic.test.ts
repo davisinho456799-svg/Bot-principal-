@@ -203,7 +203,8 @@ describe("read-only diagnostics", () => {
       ["TimeoutError: locator.fill: Timeout 8000ms exceeded.", "erro técnico no login (tempo esgotado)"],
       ["Error: Target page, context or browser has been closed", "erro técnico no login (página fechada)"],
       ["Error: net::ERR_TUNNEL_CONNECTION_FAILED", "erro técnico no login (falha de rede)"],
-      ["TypeError: private-login-detail", "erro técnico no login (causa não classificada)"],
+      ["[TypeError] (private-login-detail)", "erro técnico no login (tipo TypeError)"],
+      ["[Error] (private-login-detail)", "erro técnico no login (erro genérico)"],
     ] as const;
 
     for (const [detail, expected] of cases) {

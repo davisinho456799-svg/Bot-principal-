@@ -55,7 +55,9 @@ function safeAuthenticationStatus(value: string): string {
   ]);
   if (knownStatuses.has(value)) return value;
   if (value.startsWith("erro no login")) {
-    const detail = value.slice("erro no login".length).toLowerCase();
+    const rawDetail = value.slice("erro no login".length);
+    const detail = rawDetail.toLowerCase();
+    const errorName = rawDetail.match(/^\s*\(?\s*\[([a-z][a-z0-9]{0,39})\]/i)?.[1];
     if (/page crashed|browser crashed|browser has crashed/.test(detail)) {
       return "erro técnico no login (navegador travou)";
     }
@@ -73,6 +75,11 @@ function safeAuthenticationStatus(value: string): string {
     }
     if (/locator|selector|fill|click|editable|pointer events/.test(detail)) {
       return "erro técnico no login (campo ou botão)";
+    }
+    if (errorName && errorName !== "UnknownError") {
+      return errorName === "Error"
+        ? "erro técnico no login (erro genérico)"
+        : `erro técnico no login (tipo ${errorName})`;
     }
     return "erro técnico no login (causa não classificada)";
   }
