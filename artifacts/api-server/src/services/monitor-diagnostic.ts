@@ -117,7 +117,7 @@ function formatBrowserSummary(browser?: WorkDiagnostic["browser"]): string {
   if (!browser) return "";
   const signals = browser.signals.length ? `; sinais=${browser.signals.join(", ")}` : "";
   const attempts = browser.authenticationAttempts?.length
-    ? `\n  Tentativas de login: ${browser.authenticationAttempts.map(attempt => `${attempt.page} [HTTP ${attempt.httpStatus ?? "?"}; links=${attempt.loginLinks}; clique=${attempt.loginClicked ? "sim" : "não"}; email=${attempt.emailFields}; senha=${attempt.passwordFields}; quadros=${attempt.frames}${attempt.signals.length ? `; sinais=${attempt.signals.join(", ")}` : ""}]`).join(" · ")}`
+    ? `\n  Tentativas de login: ${browser.authenticationAttempts.map(attempt => `${attempt.page} [HTTP ${attempt.httpStatus ?? "?"}; links=${attempt.loginLinks}; clique=${attempt.loginClicked ? "sim" : "não"}${attempt.loginClickError ? `; erro-clique=${attempt.loginClickError}` : ""}; email=${attempt.emailFields}; senha=${attempt.passwordFields}; quadros=${attempt.frames}${attempt.signals.length ? `; sinais=${attempt.signals.join(", ")}` : ""}]`).join(" · ")}`
     : "";
   return `\n  Navegador: página=${browser.page}; título="${browser.title || "sem título"}"; autenticação=${browser.authentication}; imagens=${browser.visibleImageCount}; texto=${browser.bodyTextLength} caracteres${signals}${attempts}`;
 }

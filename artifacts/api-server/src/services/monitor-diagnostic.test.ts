@@ -132,14 +132,15 @@ describe("read-only diagnostics", () => {
         signals: [],
         authentication: "formulário de login não encontrado",
         authenticationAttempts: [{
-          page: "global.toomics.com/en",
-          httpStatus: 403,
-          loginLinks: 0,
+          page: "toomics.com/kr",
+          httpStatus: 200,
+          loginLinks: 1,
           loginClicked: false,
+          loginClickError: "TimeoutError",
           emailFields: 0,
           passwordFields: 0,
           frames: 1,
-          signals: ["access-denied"],
+          signals: [],
         }],
       },
       candidates: [],
@@ -150,9 +151,8 @@ describe("read-only diagnostics", () => {
     const report = await runMonitorDiagnostic(1);
     const formatted = formatMonitorDiagnostic(report);
 
-    expect(formatted).toContain("global.toomics.com/en [HTTP 403");
-    expect(formatted).toContain("links=0; clique=não; email=0; senha=0");
-    expect(formatted).toContain("sinais=access-denied");
+    expect(formatted).toContain("toomics.com/kr [HTTP 200");
+    expect(formatted).toContain("links=1; clique=não; erro-clique=TimeoutError; email=0; senha=0");
     expect(state.writes).not.toHaveBeenCalled();
   });
 

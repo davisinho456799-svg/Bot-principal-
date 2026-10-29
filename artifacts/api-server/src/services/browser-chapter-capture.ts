@@ -44,6 +44,7 @@ export type ToomicsLoginAttemptDiagnostic = {
   httpStatus: number | null;
   loginLinks: number;
   loginClicked: boolean;
+  loginClickError?: string;
   emailFields: number;
   passwordFields: number;
   frames: number;
@@ -328,18 +329,16 @@ async function loginToomics(
         let passwordFields = await loginPassword.count();
         if (!(emailFields && passwordFields) && loginLinks) {
           try {
-            await loginLink.click({ timeout: 3_000 });
+            await loginLink.click({ timeout: 3_000, noWaitAfter: true });
             loginClicked = true;
-          } catch {
-            // The attempt summary reports that the link could not be clicked.
+          } catch (error) {
+            loginClickError = error instanceof Error ? error.name : "Error";
           }
-          if (loginClicked) {
-            await page.waitForTimeout(500);
-            loginEmail = page.locator(emailSelector).first();
-            loginPassword = page.locator(passwordSelector).first();
-            emailFields = await loginEmail.count();
-            passwordFields = await loginPassword.count();
-          }
+          await page.waitForTimeout(500);
+          loginEmail = page.locator(emailSelector).first();
+          loginPassword = page.locator(passwordSelector).first();
+          emailFields = await loginEmail.count();
+          passwordFields = await loginPassword.count();
         }
         const signals = await page.evaluate(() => {
           const text = `${document.title} ${document.body?.innerText || ""}`.toLocaleLowerCase();
@@ -354,6 +353,7 @@ async function loginToomics(
           httpStatus: response?.status() ?? null,
           loginLinks,
           loginClicked,
+          ...(loginClickError ? { loginClickError } : {}),
           emailFields,
           passwordFields,
           frames: page.frames().length,
