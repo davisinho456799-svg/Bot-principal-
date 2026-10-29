@@ -198,7 +198,36 @@ describe("read-only diagnostics", () => {
       expect(JSON.stringify(result)).not.toContain("private-value");
     });
 
-      it("handles empty works and limits a selected diagnostic to its immutable ID", async () => {
+      it("reports only safe categories for technical login errors", async () => {
+    const cases = [
+      ["TimeoutError: locator.fill: Timeout 8000ms exceeded.", "erro técnico no login (tempo esgotado)"],
+      ["Error: Target page, context or browser has been closed", "erro técnico no login (página fechada)"],
+      ["Error: net::ERR_TUNNEL_CONNECTION_FAILED", "erro técnico no login (falha de rede)"],
+      ["TypeError: private-login-detail", "erro técnico no login (causa não classificada)"],
+    ] as const;
+
+    for (const [detail, expected] of cases) {
+      state.open.mockResolvedValueOnce({
+        candidates: [],
+        diagnostics: {
+          finalUrl: "https://www.toomics.com/uplmscg/episode/toon/7189",
+          pageTitle: "Someone Stop Her!",
+          bodyTextLength: 42,
+          visibleImageCount: 2,
+          signals: [],
+          authentication: `erro no login (${detail})`,
+        },
+        close: state.close,
+      });
+
+      const result = await runMonitorDiagnostic(1);
+      const authentication = result.results[0]?.browser?.authentication;
+      expect(authentication).toBe(expected);
+      expect(JSON.stringify(result)).not.toContain(detail);
+    }
+  });
+
+  it("handles empty works and limits a selected diagnostic to its immutable ID", async () => {
     state.open.mockResolvedValueOnce({ candidates: [], close: state.close });
     const result = await runMonitorDiagnostic(10);
     expect(result.results).toHaveLength(1);

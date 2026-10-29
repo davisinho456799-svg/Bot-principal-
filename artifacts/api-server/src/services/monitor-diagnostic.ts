@@ -54,9 +54,29 @@ function safeAuthenticationStatus(value: string): string {
     "login concluído",
   ]);
   if (knownStatuses.has(value)) return value;
-  return value.startsWith("erro no login")
-    ? "erro técnico no login"
-    : "estado de autenticação desconhecido";
+  if (value.startsWith("erro no login")) {
+    const detail = value.slice("erro no login".length).toLowerCase();
+    if (/page crashed|browser crashed|browser has crashed/.test(detail)) {
+      return "erro técnico no login (navegador travou)";
+    }
+    if (/target page.*closed|page has been closed|context.*closed|browser has been closed/.test(detail)) {
+      return "erro técnico no login (página fechada)";
+    }
+    if (/timeout|timed out|exceeded/.test(detail)) {
+      return "erro técnico no login (tempo esgotado)";
+    }
+    if (/net::err_|enotfound|econn|network|socket/.test(detail)) {
+      return "erro técnico no login (falha de rede)";
+    }
+    if (/execution context was destroyed|frame.*detached|navigation interrupted/.test(detail)) {
+      return "erro técnico no login (navegação interrompida)";
+    }
+    if (/locator|selector|fill|click|editable|pointer events/.test(detail)) {
+      return "erro técnico no login (campo ou botão)";
+    }
+    return "erro técnico no login (causa não classificada)";
+  }
+  return "estado de autenticação desconhecido";
 }
 
 function safePageLabel(finalUrl: string): string {
