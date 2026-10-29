@@ -11,6 +11,7 @@ import {
   isolatePrimaryThumbnails,
   makeGreedyGroups,
   promotePrimaryThumbnails,
+  shouldClickToomicsLoginLink,
   TOOMICS_LOGIN_LINK_SELECTOR,
   toomicsLoginUrls,
   type BrowserChapterSnapshot,
@@ -23,7 +24,10 @@ describe("Toomics login URLs", () => {
       "https://www.toomics.com/uplms/episode/toon/7189",
       "about:blank",
     )).toEqual([
+      "https://global.toomics.com/por/login",
+      "https://www.toomics.com/por/login",
       "https://www.toomics.com/",
+      "https://toomics.com/por/login",
       "https://toomics.com/",
       "https://global.toomics.com/",
     ]);
@@ -34,10 +38,18 @@ describe("Toomics login URLs", () => {
       "https://example.com/work",
       "about:blank",
     )).toEqual([
+      "https://global.toomics.com/por/login",
+      "https://toomics.com/por/login",
       "https://toomics.com/",
+      "https://www.toomics.com/por/login",
       "https://www.toomics.com/",
       "https://global.toomics.com/",
     ]);
+  });
+  it("avoids click redirects on dedicated login pages", () => {
+    expect(shouldClickToomicsLoginLink("https://global.toomics.com/por/login")).toBe(false);
+    expect(shouldClickToomicsLoginLink("https://www.toomics.com/kr/login?return=/episode")).toBe(false);
+    expect(shouldClickToomicsLoginLink("https://www.toomics.com/")).toBe(true);
   });
   it("prefers discovered same-site login routes and rejects external links", () => {
     expect(toomicsLoginUrls(
@@ -45,8 +57,11 @@ describe("Toomics login URLs", () => {
       "about:blank",
       ["https://www.toomics.com/uplmscg/login?return=/episode", "https://example.com/login"],
     )).toEqual([
+      "https://global.toomics.com/por/login",
       "https://www.toomics.com/uplmscg/login",
+      "https://www.toomics.com/por/login",
       "https://www.toomics.com/",
+      "https://toomics.com/por/login",
       "https://toomics.com/",
       "https://global.toomics.com/",
     ]);

@@ -215,6 +215,7 @@ async function resetBrowserAfterCrash(): Promise<void> {
 export function toomicsLoginUrls(listingUrl: string, currentPageUrl: string, discoveredLoginUrls: string[] = []): string[] {
   const origins: string[] = [];
   const urls: string[] = [];
+  urls.push("https://global.toomics.com/por/login");
   for (const candidate of discoveredLoginUrls) {
     try {
       const url = new URL(candidate, listingUrl);
@@ -249,10 +250,22 @@ export function toomicsLoginUrls(listingUrl: string, currentPageUrl: string, dis
     }
   }
   for (const origin of origins) {
+    const localizedLogin = `${origin}/por/login`;
+    if (!urls.includes(localizedLogin)) urls.push(localizedLogin);
     const home = `${origin}/`;
     if (!urls.includes(home)) urls.push(home);
   }
   return urls;
+}
+
+export function shouldClickToomicsLoginLink(value: string): boolean {
+  try {
+    const segments = new URL(value).pathname.split("/").filter(Boolean);
+    const lastSegment = segments[segments.length - 1]?.toLowerCase();
+    return lastSegment !== "login" && lastSegment !== "signin";
+  } catch {
+    return false;
+  }
 }
 
 export async function discoverToomicsLoginUrls(page: Page): Promise<string[]> {
@@ -370,7 +383,7 @@ async function loginToomics(
         let loginPassword = page.locator(passwordSelector).first();
         let emailFields = await loginEmail.count();
         let passwordFields = await loginPassword.count();
-        if (!(emailFields && passwordFields) && loginLinks) {
+        if (!(emailFields && passwordFields) && loginLinks && shouldClickToomicsLoginLink(loginUrl)) {
           try {
             const href = await loginLink.getAttribute("href");
             if (href) loginTarget = safeToomicsPageLabel(new URL(href, page.url()).toString());
