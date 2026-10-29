@@ -12,6 +12,7 @@ import {
   isolatePrimaryThumbnails,
   makeGreedyGroups,
   promotePrimaryThumbnails,
+  revealToomicsEmailLoginForm,
   shouldClickToomicsLoginLink,
   TOOMICS_LOGIN_LINK_SELECTOR,
   toomicsLoginUrls,
@@ -97,6 +98,41 @@ describe("Toomics login URLs", () => {
     await page.close();
   });
 
+  it("opens Toomics login and switches from social to visible email fields", async () => {
+    const page = await browser.newPage();
+    await page.setContent(`<div id="menu" style="display:none">
+      <button onclick="Base.popup('modal-login-header','modal-login','/por/login','N')">Login</button>
+    </div>
+    <div id="modal-login" style="display:none">
+      <div id="login_tab">
+        <form id="login_frm">
+          <fieldset id="sns_login_fieldset">
+            <button type="button" onclick="Base.changeSignInForm()">Log in com email</button>
+          </fieldset>
+          <fieldset id="login_fieldset" style="display:none">
+            <input id="user_id" type="text">
+            <input id="user_pw" type="password">
+          </fieldset>
+        </form>
+      </div>
+    </div>
+    <script>
+      window.Base = {
+        popup() {
+          document.querySelector("#modal-login").style.display = "block";
+        },
+        changeSignInForm() {
+          document.querySelector("#sns_login_fieldset").style.display = "none";
+          document.querySelector("#login_fieldset").style.display = "block";
+        }
+      };
+    </script>`);
+
+    await expect(revealToomicsEmailLoginForm(page)).resolves.toBe("opened");
+    expect(await page.locator("#user_id:visible").count()).toBe(1);
+    expect(await page.locator("#user_pw:visible").count()).toBe(1);
+    await page.close();
+  });
   it("reports login field presence and visibility by frame without reading field values", async () => {
     const page = await browser.newPage();
     await page.setContent(`<form>

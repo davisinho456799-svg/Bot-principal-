@@ -292,6 +292,44 @@ export function shouldClickToomicsLoginLink(value: string): boolean {
   }
 }
 
+export async function revealToomicsEmailLoginForm(
+  page: Page,
+): Promise<"not-found" | "opened" | "still-hidden" | "click-failed"> {
+  if (!(await page.locator("#login_tab:visible").count())) {
+    const modalOpened = await page.evaluate(() => {
+      const modal = document.querySelector<HTMLElement>(
+        '[onclick*="Base.popup"][onclick*="modal-login"]',
+      );
+      if (!modal) return false;
+      modal.click();
+      return true;
+    }).catch(() => false);
+    if (!modalOpened) return "not-found";
+    await page.locator("#login_tab:visible").waitFor({ state: "visible", timeout: 3_000 }).catch(() => undefined);
+    if (!(await page.locator("#login_tab:visible").count())) return "still-hidden";
+  }
+
+  const emailLoginToggle = page
+    .locator('form#login_frm button[onclick*="changeSignInForm"]:visible')
+    .first();
+  if (!(await emailLoginToggle.count())) return "not-found";
+
+  try {
+    await emailLoginToggle.click({ timeout: 1_500, noWaitAfter: true });
+  } catch {
+    return "click-failed";
+  }
+
+  await Promise.all([
+    page.locator("#user_id:visible").waitFor({ state: "visible", timeout: 3_000 }).catch(() => undefined),
+    page.locator("#user_pw:visible").waitFor({ state: "visible", timeout: 3_000 }).catch(() => undefined),
+  ]);
+  return await page.locator("#user_id:visible").count() &&
+    await page.locator("#user_pw:visible").count()
+    ? "opened"
+    : "still-hidden";
+}
+
 export async function discoverToomicsLoginUrls(page: Page): Promise<string[]> {
   return page.evaluate(() => {
     const loginText = /login|sign[\s-]?in|log[\s-]?in|entrar|ë¡ê·¸ì¸/i;
@@ -455,6 +493,15 @@ async function loginToomics(
           .catch(() => undefined);
 
         progress.stage = "localizaÃ§Ã£o do link de login";
+        const emailFormToggleResult = await revealToomicsEmailLoginForm(page);
+        if (emailFormToggleResult !== "not-found") {
+          trace.push({
+            type: "clique",
+            page: safeToomicsPageLabel(page.url()),
+            result: "alternância para login por e-mail: " + emailFormToggleResult,
+          });
+        }
+
         const loginLink = page.locator(TOOMICS_LOGIN_LINK_SELECTOR).first();
         const loginLinks = await loginLink.count();
         let loginClicked = false;
