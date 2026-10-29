@@ -17,6 +17,14 @@ export type WorkDiagnostic = {
   status: "completed" | "empty" | "failed" | "interrupted";
   durationMs: number; lookupMs: number; captureMs: number; cleanupMs: number;
   chaptersFound: number; imageCaptured: boolean;
+  browser?: {
+    page: string;
+    title: string;
+    bodyTextLength: number;
+    visibleImageCount: number;
+    signals: string[];
+    authentication: string;
+  };
   issue?: { stage: "listing" | "capture" | "cleanup"; reason: string };
 };
 
@@ -33,6 +41,41 @@ function safeDiagnosticError(error: unknown): string {
     .trim()
     .slice(0, 180);
   return safe || "Falha sem detalhe.";
+}
+
+function safeAuthenticationStatus(value: string): string {
+  const knownStatuses = new Set([
+    "não aplicável",
+    "credenciais não configuradas",
+    "formulário de login não encontrado",
+    "botão de login não encontrado",
+    "captcha ou verificação manual necessária",
+    "login rejeitado",
+    "login concluído",
+  ]);
+  if (knownStatuses.has(value)) return value;
+  return value.startsWith("erro no login")
+    ? "erro técnico no login"
+    : "estado de autenticação desconhecido";
+}
+
+function safePageLabel(finalUrl: string): string {
+  try {
+    const url = new URL(finalUrl);
+    return `${url.hostname}${url.pathname}`.slice(0, 160);
+  } catch {
+    return "página desconhecida";
+  }
+}
+
+function safeBrowserTitle(title: string): string {
+  return safeDiagnosticError(title).slice(0, 100);
+}
+
+function formatBrowserSummary(browser?: WorkDiagnostic["browser"]): string {
+  if (!browser) return "";
+  const signals = browser.signals.length ? `; sinais=${browser.signals.join(", ")}` : "";
+  return `\n  Navegador: página=${browser.page}; título="${browser.title || "sem título"}"; autenticação=${browser.authentication}; imagens=${browser.visibleImageCount}; texto=${browser.bodyTextLength} caracteres${signals}`;
 }
 
 /** Read-only sampling: one browser card per work; no notification or DB writes. */
@@ -75,6 +118,18 @@ export async function runMonitorDiagnostic(workId?: number) {
         session = await openBrowserListing(work.listingUrl, work.platform as MonitorPlatform, true, signal);
         ensureWithinDeadline();
         row.lookupMs = Math.round(performance.now() - phaseStarted);
+        if (session.diagnostics) {
+          row.browser = {
+            page: safePageLabel(session.diagnostics.finalUrl),
+            title: safeBrowserTitle(session.diagnostics.pageTitle),
+            bodyTextLength: session.diagnostics.bodyTextLength,
+            visibleImageCount: session.diagnostics.visibleImageCount,
+            signals: session.diagnostics.signals.filter(signal =>
+              ["login", "captcha", "cloudflare", "access-denied", "korean-font-unavailable"].includes(signal),
+            ),
+            authentication: safeAuthenticationStatus(session.diagnostics.authentication),
+          };
+        }
         row.chaptersFound = session.candidates.length;
         const sample = session.candidates[0];
         if (sample) {
@@ -133,7 +188,7 @@ export function formatMonitorDiagnostic(report: Awaited<ReturnType<typeof runMon
   return [
     "**Diagnóstico — da obra mais lenta para a mais rápida**",
     "Consulta pelo navegador + captura do formato usado pelo monitor (Toptoon: imagens 2 e 3; demais: miniatura principal). Sem envio ao canal, fallback HTML ou alteração do banco/agendamento.",
-    ...report.results.map(w => `Nº ${w.number} — ${w.title.replace(/[\r\n]/g, " ")}: **${seconds(w.durationMs)}** (${status[w.status]})\n  Consulta: ${seconds(w.lookupMs)} · captura: ${seconds(w.captureMs)} · fechamento: ${seconds(w.cleanupMs)} · capítulos: ${w.chaptersFound}${w.issue ? `\n  Etapa: ${stage[w.issue.stage]} · motivo: ${w.issue.reason}` : ""}`),
+    ...report.results.map(w => `Nº ${w.number} — ${w.title.replace(/[\r\n]/g, " ")}: **${seconds(w.durationMs)}** (${status[w.status]})\n  Consulta: ${seconds(w.lookupMs)} · captura: ${seconds(w.captureMs)} · fechamento: ${seconds(w.cleanupMs)} · capítulos: ${w.chaptersFound}${formatBrowserSummary(w.browser)}${w.issue ? `\n  Etapa: ${stage[w.issue.stage]} · motivo: ${w.issue.reason}` : ""}`),
     `Total: ${seconds(report.durationMs)} · não verificadas: ${report.worksSkipped}`,
     report.status === "interrupted" ? "Diagnóstico interrompido pelo limite de tempo ou para dar prioridade à verificação normal." : "",
   ].filter(Boolean).join("\n");

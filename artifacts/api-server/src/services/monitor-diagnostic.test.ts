@@ -169,7 +169,36 @@ describe("read-only diagnostics", () => {
     });
   });
 
-  it("handles empty works and limits a selected diagnostic to its immutable ID", async () => {
+  it("includes safe browser context for empty listings", async () => {
+      state.open.mockResolvedValueOnce({
+        candidates: [],
+        diagnostics: {
+          finalUrl: "https://global.toomics.com/por/login?access_token=private-value",
+          pageTitle: "Toomics Login",
+          bodyTextLength: 42,
+          visibleImageCount: 0,
+          signals: ["login", "unrecognized-signal"],
+          authentication: "credenciais não configuradas",
+        },
+        close: state.close,
+      });
+
+      const result = await runMonitorDiagnostic(1);
+      const formatted = formatMonitorDiagnostic(result);
+
+      expect(result.results[0]?.browser).toMatchObject({
+        page: "global.toomics.com/por/login",
+        title: "Toomics Login",
+        bodyTextLength: 42,
+        visibleImageCount: 0,
+        signals: ["login"],
+        authentication: "credenciais não configuradas",
+      });
+      expect(formatted).toContain("autenticação=credenciais não configuradas");
+      expect(JSON.stringify(result)).not.toContain("private-value");
+    });
+
+      it("handles empty works and limits a selected diagnostic to its immutable ID", async () => {
     state.open.mockResolvedValueOnce({ candidates: [], close: state.close });
     const result = await runMonitorDiagnostic(10);
     expect(result.results).toHaveLength(1);
