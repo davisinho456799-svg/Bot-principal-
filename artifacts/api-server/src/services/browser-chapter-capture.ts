@@ -58,6 +58,7 @@ export type BrowserListingDiagnostics = {
   visibleImageCount: number;
   signals: string[];
   authentication: string;
+  authenticationFailureStage?: string;
   authenticationAttempts?: ToomicsLoginAttemptDiagnostic[];
 };
 
@@ -273,11 +274,14 @@ function safeToomicsPageLabel(value: string): string {
   }
 }
 
+type ToomicsLoginProgress = { stage: string };
+
 async function loginToomics(
   page: Page,
   listingUrl: string,
   discoveredLoginUrls: string[] = [],
   attempts: ToomicsLoginAttemptDiagnostic[] = [],
+  progress: ToomicsLoginProgress = { stage: "preparação do login" },
 ): Promise<string> {
   const email = process.env.TOOMICS_EMAIL?.trim();
   const password = process.env.TOOMICS_PASSWORD;
@@ -290,51 +294,66 @@ async function loginToomics(
     const emailSelector =
       'input[type="email"]:visible, input[name*="email" i]:visible, input[name*="user" i]:visible, input[name*="login" i]:visible, input[name*="id" i]:visible';
     const passwordSelector = 'input[type="password"]:visible';
+    progress.stage = "localização dos campos";
     let emailInput = page.locator(emailSelector).first();
     let passwordInput = page.locator(passwordSelector).first();
 
+    progress.stage = "verificação dos campos";
     if (!(await passwordInput.count())) {
+      progress.stage = "localização do link de login";
       const loginLink = page.locator(
         TOOMICS_LOGIN_LINK_SELECTOR,
       ).first();
       if (await loginLink.count()) {
+        progress.stage = "clique no link de login";
         await loginLink.click().catch(() => undefined);
+        progress.stage = "espera após abrir o login";
         await page.waitForTimeout(500);
+        progress.stage = "localização dos campos";
         emailInput = page.locator(emailSelector).first();
         passwordInput = page.locator(passwordSelector).first();
       }
     }
 
+    progress.stage = "verificação dos campos";
     if (!(await passwordInput.count())) {
       const loginUrls = toomicsLoginUrls(listingUrl, page.url(), discoveredLoginUrls);
 
       for (const loginUrl of loginUrls) {
+        progress.stage = "abertura da página de login";
         const response = await page.goto(loginUrl, {
           waitUntil: "domcontentloaded",
           timeout: PAGE_TIMEOUT_MS,
         });
+        progress.stage = "espera da página de login";
         await waitForRenderedPage(page);
+        progress.stage = "espera dos campos do formulário";
         await page
           .locator('input[type="email"], input[type="password"], #user_id, #user_pw')
           .first()
           .waitFor({ state: "attached", timeout: 3_000 })
           .catch(() => undefined);
 
+        progress.stage = "localização do link de login";
         const loginLink = page.locator(TOOMICS_LOGIN_LINK_SELECTOR).first();
         const loginLinks = await loginLink.count();
         let loginClicked = false;
+        let loginClickError: string | undefined;
         let loginEmail = page.locator(emailSelector).first();
         let loginPassword = page.locator(passwordSelector).first();
         let emailFields = await loginEmail.count();
         let passwordFields = await loginPassword.count();
         if (!(emailFields && passwordFields) && loginLinks) {
           try {
+            progress.stage = "clique no link de login";
             await loginLink.click({ timeout: 3_000, noWaitAfter: true });
             loginClicked = true;
           } catch (error) {
             loginClickError = error instanceof Error ? error.name : "Error";
           }
+          progress.stage = "espera após abrir o login";
           await page.waitForTimeout(500);
+          progress.stage = "localização dos campos";
           loginEmail = page.locator(emailSelector).first();
           loginPassword = page.locator(passwordSelector).first();
           emailFields = await loginEmail.count();
@@ -371,8 +390,11 @@ async function loginToomics(
       return "formulário de login não encontrado";
     }
 
+    progress.stage = "preenchimento do e-mail";
     await emailInput.fill(email, { force: true });
+    progress.stage = "preenchimento da senha";
     await passwordInput.fill(password, { force: true });
+    progress.stage = "localização do botão de login";
     const submit = page.locator(
       'form:has(#user_id) button[type="submit"]:visible, form:has(#user_id) input[type="submit"]:visible, button:has-text("Login"):visible, button:has-text("Entrar"):visible, button:has-text("로그인"):visible',
     ).last();
@@ -381,12 +403,14 @@ async function loginToomics(
       : page.locator('form:has(#user_id) button[type="submit"], form:has(#user_id) input[type="submit"]').last();
     if (!(await submitButton.count())) return "botão de login não encontrado";
 
+    progress.stage = "envio do formulário";
     await Promise.all([
       submitButton.click({ force: true }).catch(() => undefined),
       page.waitForLoadState("domcontentloaded", { timeout: 15_000 }).catch(() => undefined),
     ]);
     await page.waitForTimeout(1_000);
 
+    progress.stage = "verificação do resultado do login";
     const state = await page.evaluate(() => {
       const text = (document.body?.innerText || "").replace(/\s+/g, " ").toLocaleLowerCase();
       const hasPassword = Array.from(document.querySelectorAll('input[type="password"]'))
@@ -408,7 +432,7 @@ async function loginToomics(
       ? error.name
       : "UnknownError";
     const message = error instanceof Error ? error.message.split("\n")[0].slice(0, 160) : "erro desconhecido";
-    return `erro no login [${errorName}] (${message})`;
+    return `erro no login [${errorName}] (etapa: ${progress.stage}; ${message})`;
   }
 }
 
@@ -1569,6 +1593,7 @@ export async function openBrowserListing(
     signal?.throwIfAborted();
 
     let authentication = "não aplicável";
+    let authenticationFailureStage: string | undefined;
     let authenticationAttempts: ToomicsLoginAttemptDiagnostic[] | undefined;
     if (platform === "toomics") {
       const discoveredLoginUrls = await discoverToomicsLoginUrls(page).catch(() => []);
@@ -1581,7 +1606,11 @@ export async function openBrowserListing(
       signal?.throwIfAborted();
       await setupPage(page);
       authenticationAttempts = [];
-      authentication = await loginToomics(page, listingUrl, discoveredLoginUrls, authenticationAttempts);
+      const loginProgress: ToomicsLoginProgress = { stage: "preparação do login" };
+      authentication = await loginToomics(
+        page, listingUrl, discoveredLoginUrls, authenticationAttempts, loginProgress,
+      );
+      if (authentication.startsWith("erro no login")) authenticationFailureStage = loginProgress.stage;
       await page.close().catch(() => undefined);
       signal?.throwIfAborted();
 
@@ -1627,6 +1656,7 @@ export async function openBrowserListing(
       };
     });
     diagnostics.authentication = authentication;
+    if (authenticationFailureStage) diagnostics.authenticationFailureStage = authenticationFailureStage;
     if (authenticationAttempts?.length) diagnostics.authenticationAttempts = authenticationAttempts;
     if (!koreanFontLoaded) diagnostics.signals.push("korean-font-unavailable");
     const candidates = await findRenderedChapters(page, platform);

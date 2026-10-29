@@ -130,7 +130,8 @@ describe("read-only diagnostics", () => {
         bodyTextLength: 100,
         visibleImageCount: 3,
         signals: [],
-        authentication: "formulário de login não encontrado",
+        authentication: "erro no login [TypeError] (etapa: preenchimento do e-mail; locator.fill failed)",
+        authenticationFailureStage: "preenchimento do e-mail",
         authenticationAttempts: [{
           page: "toomics.com/kr",
           httpStatus: 200,
@@ -153,6 +154,7 @@ describe("read-only diagnostics", () => {
 
     expect(formatted).toContain("toomics.com/kr [HTTP 200");
     expect(formatted).toContain("links=1; clique=não; erro-clique=TimeoutError; email=0; senha=0");
+    expect(formatted).toContain("etapa-login=preenchimento do e-mail");
     expect(state.writes).not.toHaveBeenCalled();
   });
 

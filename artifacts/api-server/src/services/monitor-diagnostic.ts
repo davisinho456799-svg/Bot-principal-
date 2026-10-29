@@ -28,6 +28,7 @@ export type WorkDiagnostic = {
     visibleImageCount: number;
     signals: string[];
     authentication: string;
+    authenticationFailureStage?: string;
     authenticationAttempts?: ToomicsLoginAttemptDiagnostic[];
   };
   issue?: { stage: "listing" | "capture" | "cleanup"; reason: string };
@@ -116,10 +117,13 @@ function safeBrowserTitle(title: string): string {
 function formatBrowserSummary(browser?: WorkDiagnostic["browser"]): string {
   if (!browser) return "";
   const signals = browser.signals.length ? `; sinais=${browser.signals.join(", ")}` : "";
+  const loginFailureStage = browser.authenticationFailureStage
+    ? `; etapa-login=${browser.authenticationFailureStage}`
+    : "";
   const attempts = browser.authenticationAttempts?.length
     ? `\n  Tentativas de login: ${browser.authenticationAttempts.map(attempt => `${attempt.page} [HTTP ${attempt.httpStatus ?? "?"}; links=${attempt.loginLinks}; clique=${attempt.loginClicked ? "sim" : "não"}${attempt.loginClickError ? `; erro-clique=${attempt.loginClickError}` : ""}; email=${attempt.emailFields}; senha=${attempt.passwordFields}; quadros=${attempt.frames}${attempt.signals.length ? `; sinais=${attempt.signals.join(", ")}` : ""}]`).join(" · ")}`
     : "";
-  return `\n  Navegador: página=${browser.page}; título="${browser.title || "sem título"}"; autenticação=${browser.authentication}; imagens=${browser.visibleImageCount}; texto=${browser.bodyTextLength} caracteres${signals}${attempts}`;
+  return `\n  Navegador: página=${browser.page}; título="${browser.title || "sem título"}"; autenticação=${browser.authentication}${loginFailureStage}; imagens=${browser.visibleImageCount}; texto=${browser.bodyTextLength} caracteres${signals}${attempts}`;
 }
 
 /** Read-only sampling: one browser card per work; no notification or DB writes. */
@@ -173,7 +177,10 @@ export async function runMonitorDiagnostic(workId?: number) {
               ["login", "captcha", "cloudflare", "access-denied", "korean-font-unavailable"].includes(signal),
             ),
             authentication: safeAuthenticationStatus(session.diagnostics.authentication),
-          authenticationAttempts: session.diagnostics.authenticationAttempts,
+            ...(session.diagnostics.authenticationFailureStage
+              ? { authenticationFailureStage: session.diagnostics.authenticationFailureStage }
+              : {}),
+            authenticationAttempts: session.diagnostics.authenticationAttempts,
           };
         }
         row.chaptersFound = session.candidates.length;
