@@ -148,6 +148,42 @@ describe("monitor release image", () => {
     expect(pixel(160, 202)).toEqual([55, 163, 107]);
   });
 
+  it("uses the same thumbnail-and-details card layout without a subtitle", async () => {
+    vi.stubEnv("DISCORD_BOT_TOKEN", "unit-test-not-a-real-token");
+    const thumbnail = await sharp({
+      create: { width: 40, height: 60, channels: 3, background: "#d43b35" },
+    }).png().toBuffer();
+    let posted: FormData | undefined;
+    vi.stubGlobal("fetch", vi.fn(async (input: string, options?: RequestInit) => {
+      if (String(input).startsWith("https://discord.com/api/")) {
+        posted = options?.body as FormData;
+        return new Response("", { status: 200 });
+      }
+      return new Response(new Uint8Array(thumbnail), {
+        status: 200,
+        headers: { "content-type": "image/png" },
+      });
+    }));
+
+    await postStrip("unit-test-channel", "Parser fallback", [{
+      number: "12",
+      key: "parser-fallback-12",
+      parser: "test",
+      thumbnailUrl: "https://example.test/chapter-12.png",
+    }], 1, 1);
+
+    const image = posted!.get("files[0]") as Blob;
+    const { data, info } = await sharp(Buffer.from(await image.arrayBuffer()))
+      .removeAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    const pixel = (x: number, y: number) =>
+      Array.from(data.subarray((y * info.width + x) * info.channels, (y * info.width + x) * info.channels + 3));
+
+    expect(info.width).toBe(920);
+    expect(pixel(130, 120)).toEqual([212, 59, 53]);
+  });
+
   it("renders two portrait panels for the browser-less experiment, with no primary panel", async () => {
     const images = await Promise.all(["#d43b35", "#37a36b"].map(background =>
       sharp({ create: { width: 260, height: 360, channels: 3, background } }).png().toBuffer(),

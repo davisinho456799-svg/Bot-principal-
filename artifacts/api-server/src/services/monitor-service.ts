@@ -17,7 +17,7 @@ import { monitorExecution } from "./monitor-execution.js";
 import { assertMonitorPlatformEnabled, isMonitorPlatformEnabled } from "./monitor-platform-settings.js";
 import { translateChapterSubtitles } from "./chapter-subtitle-translation";
 import { recordBotError } from "../bot/error-log.js";
-import { buildSubtitleFallbackRow, buildSubtitleRowsLayout, chapterSubtitleForDisplay } from "./chapter-subtitle-render";
+import { buildSubtitleFallbackRow, buildSubtitleRowsLayout } from "./chapter-subtitle-render";
 import { renderToptoonPairCard } from "./toptoon-pair-render";
 import { selectPairTestImage, type TestImageSelection } from "./monitor-test-fallback";
 import { fetchThumbnailBytes } from "./monitor-thumbnail-download";
@@ -448,15 +448,14 @@ async function buildStrip(
   }
   const imageRows = images.map(({ chapter, data }, index) => {
     const y = layout.rows[index].y;
-    if (chapterSubtitleForDisplay(chapter)) return buildSubtitleFallbackRow(chapter, y, layout.rows[index].height, Boolean(data));
-    return `<rect x="24" y="${y}" width="872" height="140" rx="14" fill="#f5f0e8" stroke="#ded5c8"/><text x="52" y="${y + 78}" fill="#132b3f" font-family="Arial,sans-serif" font-size="25" font-weight="700">${escapeXml(chapter.number)}</text>${data ? "" : `<text x="185" y="${y + 78}" fill="#7a746c" font-family="Arial,sans-serif" font-size="18">Thumbnail unavailable</text>`}`;
+    return buildSubtitleFallbackRow(chapter, y, layout.rows[index].height, Boolean(data));
   }).join("");
   const baseSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="100%" height="100%" fill="#fffaf3"/>${includeBanner ? buildReleaseBannerMarkup(title, chapters.length) : ""}${imageRows}</svg>`;
   let output = await sharp(Buffer.from(baseSvg)).png().toBuffer();
   const composites = await Promise.all(images.map(async ({ data, chapter }, index) => {
     if (!data) return null;
     const thumbnail = await sharp(data)
-      .resize(chapterSubtitleForDisplay(chapter) ? 240 : 690, 120, {
+      .resize(240, 120, {
         fit: "contain",
         background: { r: 245, g: 240, b: 232, alpha: 1 },
       })
@@ -464,7 +463,7 @@ async function buildStrip(
       .toBuffer();
     return {
       input: thumbnail,
-      left: chapterSubtitleForDisplay(chapter) ? 40 : 185,
+      left: 40,
       top: layout.rows[index].y + 10,
     };
   }));
@@ -582,10 +581,6 @@ export async function addReleaseBanner(
     logger.warn({ err: error }, "Não foi possível adicionar o banner à captura do navegador");
     return null;
   }
-}
-
-function escapeXml(value: string) {
-  return value.replace(/[<>&'"]/g, (character) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", "'": "&apos;", "\"": "&quot;" })[character] ?? character);
 }
 
 export async function postStrip(
