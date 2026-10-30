@@ -5,6 +5,7 @@ import sharp from "sharp";
 import { applyCaptureSubtitles } from "./chapter-subtitle-capture";
 import { applyToptoonPairCapture } from "./toptoon-pair-capture";
 import {
+  classifyToomicsLoginPostSubmitState,
   capturedGroupWithinLimit,
   discoverToomicsLoginUrls,
   findRenderedChapters,
@@ -19,6 +20,34 @@ import {
   type BrowserChapterSnapshot,
   type CaptureThumbnailTarget,
 } from "./browser-chapter-capture";
+
+describe("Toomics login response classification", () => {
+  it("prioritizes CAPTCHA and explicit login errors over visible fields", () => {
+    expect(classifyToomicsLoginPostSubmitState({
+      hasPassword: true,
+      hasCaptcha: true,
+      hasError: true,
+    })).toBe("captcha-detectado");
+    expect(classifyToomicsLoginPostSubmitState({
+      hasPassword: true,
+      hasCaptcha: false,
+      hasError: true,
+    })).toBe("mensagem-de-erro-detectada");
+  });
+
+  it("distinguishes a persistent password field from a hidden field", () => {
+    expect(classifyToomicsLoginPostSubmitState({
+      hasPassword: true,
+      hasCaptcha: false,
+      hasError: false,
+    })).toBe("campo-de-senha-ainda-visivel");
+    expect(classifyToomicsLoginPostSubmitState({
+      hasPassword: false,
+      hasCaptcha: false,
+      hasError: false,
+    })).toBe("campo-de-senha-oculto-sem-erro");
+  });
+});
 
 describe("Toomics login URLs", () => {
   it("tries the listing homepage and Toomics host variants", () => {

@@ -53,12 +53,32 @@ export type ToomicsLoginAttemptDiagnostic = {
   passwordFields: number;
   emailFieldsAcrossPages?: number;
   passwordFieldsAcrossPages?: number;
+  postSubmitPage?: string;
+  postSubmitState?: ToomicsLoginPostSubmitState;
   frames: number;
   frameFields?: ToomicsLoginFrameDiagnostic[];
   trace?: ToomicsLoginTraceStep[];
   otherPages?: string[];
   signals: string[];
 };
+
+export type ToomicsLoginPostSubmitState =
+  | "captcha-detectado"
+  | "mensagem-de-erro-detectada"
+  | "campo-de-senha-ainda-visivel"
+  | "campo-de-senha-oculto-sem-erro";
+
+export function classifyToomicsLoginPostSubmitState(state: {
+  hasPassword: boolean;
+  hasCaptcha: boolean;
+  hasError: boolean;
+}): ToomicsLoginPostSubmitState {
+  if (state.hasCaptcha) return "captcha-detectado";
+  if (state.hasError) return "mensagem-de-erro-detectada";
+  return state.hasPassword
+    ? "campo-de-senha-ainda-visivel"
+    : "campo-de-senha-oculto-sem-erro";
+}
 
 export type ToomicsLoginTraceStep = {
   type: "navegação" | "resposta" | "página" | "campos" | "clique" | "janela";
@@ -625,7 +645,7 @@ async function loginToomics(
     await page.waitForTimeout(1_000);
 
     progress.stage = "verificaÃ§Ã£o do resultado do login";
-    const state = await page.evaluate(() => {
+    const readLoginState = () => page.evaluate(() => {
       const text = (document.body?.innerText || "").replace(/\s+/g, " ").toLocaleLowerCase();
       const hasPassword = Array.from(document.querySelectorAll('input[type="password"]'))
         .some((input) => {
@@ -638,6 +658,26 @@ async function loginToomics(
       const hasError = /invalid password|incorrect|senha invÃ¡lida|email invÃ¡lido|ë¡ê·¸ì¸ ì¤í¨/.test(text);
       return { hasPassword, hasCaptcha, hasError };
     });
+    let state = await readLoginState();
+    if (state.hasPassword && !state.hasCaptcha && !state.hasError) {
+      // Toomics can submit login asynchronously. Give the page a short,
+      // bounded grace period before reporting that the password field stayed.
+      await page.waitForTimeout(2_000);
+      state = await readLoginState();
+    }
+    const submittedAttempt = attempts.at(-1);
+    const postSubmitState = classifyToomicsLoginPostSubmitState(state);
+    if (submittedAttempt) {
+      submittedAttempt.postSubmitPage = safeToomicsPageLabel(page.url());
+      submittedAttempt.postSubmitState = postSubmitState;
+      submittedAttempt.trace?.push({
+        type: "campos",
+        page: submittedAttempt.postSubmitPage,
+        emailFields: await page.locator(emailSelector).count().catch(() => 0),
+        passwordFields: await page.locator(passwordSelector).count().catch(() => 0),
+        result: `resultado apÃ³s envio: ${postSubmitState}`,
+      });
+    }
     if (state.hasCaptcha) return "captcha ou verificaÃ§Ã£o manual necessÃ¡ria";
     if (state.hasError || state.hasPassword) return "login rejeitado";
     return "login concluÃ­do";

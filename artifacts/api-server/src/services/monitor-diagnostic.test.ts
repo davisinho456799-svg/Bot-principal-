@@ -141,6 +141,8 @@ describe("read-only diagnostics", () => {
           loginClickMode: "forÃ§ado",
           loginNormalClickError: "TimeoutError",
           postClickPage: "toomics.com/kr/login",
+          postSubmitPage: "toomics.com/kr/login",
+          postSubmitState: "campo-de-senha-ainda-visivel",
           emailFields: 0,
           passwordFields: 0,
           emailFieldsAcrossPages: 1,
@@ -148,6 +150,13 @@ describe("read-only diagnostics", () => {
           frames: 1,
           frameFields: [{ page: "toomics.com/kr/login", forms: 1, userIdFields: 1, visibleUserIdFields: 0, userPwFields: 1, visibleUserPwFields: 1, emailLikeFields: 1, visibleEmailLikeFields: 0, passwordFields: 1, visiblePasswordFields: 1 }],
           otherPages: ["auth.toomics.com/login"],
+          trace: [{
+            type: "campos",
+            page: "toomics.com/kr/login",
+            emailFields: 0,
+            passwordFields: 0,
+            result: "resultado após envio: campo-de-senha-ainda-visivel",
+          }],
           signals: [],
         }],
       },
@@ -165,6 +174,11 @@ describe("read-only diagnostics", () => {
     expect(formatted).toContain("janelas-extras=auth.toomics.com/login");
     expect(formatted).toContain("quadros-login=toomics.com/kr/login{forms=1, user_id=1/0, user_pw=1/1, email=1/0, senha=1/1}");
     expect(formatted).toContain("etapa-login=preenchimento do e-mail");
+    expect(formatted).toContain("resultado após envio: campo-de-senha-ainda-visivel");
+    expect(report.results[0]?.browser?.authenticationAttempts?.[0]).toMatchObject({
+      postSubmitState: "campo-de-senha-ainda-visivel",
+      postSubmitPage: "toomics.com/kr/login",
+    });
     expect(state.writes).not.toHaveBeenCalled();
   });
 
