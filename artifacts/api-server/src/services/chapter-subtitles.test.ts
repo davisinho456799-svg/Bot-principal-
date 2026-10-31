@@ -126,10 +126,12 @@ describe("subtitle fallback layout", () => {
     expect(layout.rows[1].y).toBe(92 + layout.rows[0].height);
     expect(subtitleLines("a".repeat(120)).every(line => line.length <= 46)).toBe(true);
   });
-  it("places the subtitle under the episode number and escapes XML", () => {
+  it("labels the chapter, uses dark colors, and escapes subtitle XML", () => {
     const markup = buildSubtitleFallbackRow({ ...chapter, subtitlePt: 'A < B & "C"' }, 92, 164, true);
-    expect(markup).toContain(">36</text>");
+    expect(markup).toContain(">Cap. 36</text>");
     expect(markup).not.toContain(">EP ");
+    expect(markup).toContain('fill="#2b2d31"');
+    expect(markup).toContain('fill="#f2f3f5"');
     expect(markup).toContain("A &lt; B &amp; &quot;C&quot;");
     expect(markup).toContain('y="164"');
   });

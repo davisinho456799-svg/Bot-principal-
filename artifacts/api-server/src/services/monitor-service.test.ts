@@ -1,11 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import sharp from "sharp";
 import { addReleaseBanner, postStrip } from "./monitor-service";
+import { buildReleaseBannerMarkup } from "./release-banner";
 import { renderToptoonPairCard } from "./toptoon-pair-render";
 
 afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 
 describe("monitor release image", () => {
+  it("includes chapter labels in the monitor banner", () => {
+    const markup = buildReleaseBannerMarkup("Obra de teste", ["12", "13"]);
+    expect(markup).toContain("NEW CHAPTERS · 2 · CAP. 12, 13");
+  });
   it.each(["pairs", "mixed", "text", "normal"])("preserves automatic notification batches: %s", async mode => {
     vi.stubEnv("DISCORD_BOT_TOKEN", "unit-test-not-a-real-token");
     const red = await sharp({ create: { width: 40, height: 60, channels: 3, background: "#d43b35" } }).png().toBuffer();
@@ -181,6 +186,8 @@ describe("monitor release image", () => {
       Array.from(data.subarray((y * info.width + x) * info.channels, (y * info.width + x) * info.channels + 3));
 
     expect(info.width).toBe(920);
+    expect(pixel(5, 100)).toEqual([32, 33, 34]);
+    expect(pixel(50, 110)).toEqual([43, 45, 49]);
     expect(pixel(130, 120)).toEqual([212, 59, 53]);
   });
 
@@ -211,11 +218,33 @@ describe("monitor release image", () => {
       .png()
       .toBuffer();
 
-    const decorated = await addReleaseBanner(source, "Obra de teste", 2);
+    const decorated = await addReleaseBanner(source, "Obra de teste", ["12", "13"]);
 
     expect(decorated).not.toBeNull();
     const metadata = await sharp(decorated!).metadata();
     expect(metadata.width).toBe(320);
     expect(metadata.height).toBe(212);
+
+    const { data, info } = await sharp(decorated!)
+      .removeAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    expect(Array.from(data.subarray(0, info.channels))).toEqual([255, 250, 243]);
+  });
+
+
+  it("supports a dark release banner for synthetic parser images", async () => {
+    const source = await sharp({
+      create: { width: 320, height: 120, channels: 3, background: "#2b2d31" },
+    }).png().toBuffer();
+
+    const decorated = await addReleaseBanner(source, "Parser fallback", ["12"], "dark");
+
+    expect(decorated).not.toBeNull();
+    const { data, info } = await sharp(decorated!)
+      .removeAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    expect(Array.from(data.subarray(0, info.channels))).toEqual([32, 33, 34]);
   });
 });

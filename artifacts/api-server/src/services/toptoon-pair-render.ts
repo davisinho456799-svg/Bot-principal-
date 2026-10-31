@@ -15,7 +15,7 @@ export async function renderToptoonPairCard(chapter: ParsedChapter, images: [Buf
   const height = Math.max(minCardHeight, (chapter.releaseDate ? 110 : 86) + lines.length * 26);
   const text = `<svg width="1024" height="${height}" xmlns="http://www.w3.org/2000/svg">
     <rect width="100%" height="100%" fill="#202122"/>
-    <text x="${textX}" y="42" fill="#ffffff" font-family="Arial,sans-serif" font-size="26" font-weight="700">${xml(chapter.number)}</text>
+    <text x="${textX}" y="42" fill="#ffffff" font-family="Arial,sans-serif" font-size="26" font-weight="700">Cap. ${xml(chapter.number)}</text>
     ${lines.map((line, i) => `<text x="${textX}" y="${74 + i * 26}" fill="#b5b5b5" font-family="Arial,sans-serif" font-size="23">${xml(line)}</text>`).join("")}
     ${chapter.releaseDate ? `<text x="${textX}" y="${98 + lines.length * 26}" fill="#858585" font-family="Arial,sans-serif" font-size="18">${xml(chapter.releaseDate)}</text>` : ""}
     </svg>`;

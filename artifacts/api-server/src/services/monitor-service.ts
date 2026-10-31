@@ -21,7 +21,7 @@ import { buildSubtitleFallbackRow, buildSubtitleRowsLayout } from "./chapter-sub
 import { renderToptoonPairCard } from "./toptoon-pair-render";
 import { selectPairTestImage, type TestImageSelection } from "./monitor-test-fallback";
 import { fetchThumbnailBytes } from "./monitor-thumbnail-download";
-import { RELEASE_BANNER_HEIGHT, buildReleaseBannerMarkup, buildReleaseBannerSvg } from "./release-banner";
+import { RELEASE_BANNER_HEIGHT, buildReleaseBannerMarkup, buildReleaseBannerSvg, type ReleaseBannerTheme } from "./release-banner";
 import {
   buildChapterKey,
   genericParser,
@@ -450,14 +450,15 @@ async function buildStrip(
     const y = layout.rows[index].y;
     return buildSubtitleFallbackRow(chapter, y, layout.rows[index].height, Boolean(data));
   }).join("");
-  const baseSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="100%" height="100%" fill="#fffaf3"/>${includeBanner ? buildReleaseBannerMarkup(title, chapters.length) : ""}${imageRows}</svg>`;
+  const chapterNumbers = chapters.map(chapter => chapter.number);
+  const baseSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="100%" height="100%" fill="#202122"/>${includeBanner ? buildReleaseBannerMarkup(title, chapterNumbers, "dark") : ""}${imageRows}</svg>`;
   let output = await sharp(Buffer.from(baseSvg)).png().toBuffer();
   const composites = await Promise.all(images.map(async ({ data, chapter }, index) => {
     if (!data) return null;
     const thumbnail = await sharp(data)
       .resize(240, 120, {
         fit: "contain",
-        background: { r: 245, g: 240, b: 232, alpha: 1 },
+        background: { r: 43, g: 45, b: 49, alpha: 1 },
       })
       .png()
       .toBuffer();
@@ -484,7 +485,7 @@ class PairTestImageError extends Error {}
 async function buildPairTestStrip(title: string, chapters: ChapterCandidate[]): Promise<Buffer | null> {
   if (chapters.length !== 1) throw new PairTestImageError("O teste deve selecionar um único capítulo.");
   const card = await buildPairCard(chapters[0]);
-  return addReleaseBanner(card, title, 1);
+  return addReleaseBanner(card, title, [chapters[0].number], "dark");
 }
 
 async function buildPairCard(chapter: ChapterCandidate): Promise<Buffer> {
@@ -528,7 +529,7 @@ export async function buildAutomaticToptoonStrip(title: string, chapters: Chapte
   });
   const strip = await sharp({ create: { width: 1024, height: top, channels: 4, background: "#202122" } })
     .composite(composite).png().toBuffer();
-  const image = await addReleaseBanner(strip, title, chapters.length);
+  const image = await addReleaseBanner(strip, title, chapters.map(chapter => chapter.number), "dark");
   if (!image) throw new PairTestImageError("Não foi possível decorar a montagem automática.");
   return { image, primaryChapters, textChapters };
 }
@@ -536,7 +537,8 @@ export async function buildAutomaticToptoonStrip(title: string, chapters: Chapte
 export async function addReleaseBanner(
   image: Buffer,
   title: string,
-  chapterCount: number,
+  chapterNumbers: readonly string[],
+  theme: ReleaseBannerTheme = "light",
 ): Promise<Buffer | null> {
   const sharp = await getOptionalSharp();
   if (!sharp) return null;
@@ -546,7 +548,7 @@ export async function addReleaseBanner(
     if (!metadata.width || !metadata.height) return null;
 
     const banner = Buffer.from(
-      buildReleaseBannerSvg(metadata.width, title, chapterCount),
+      buildReleaseBannerSvg(metadata.width, title, chapterNumbers, theme),
     );
 
     const decorated = await sharp(image)
@@ -555,7 +557,7 @@ export async function addReleaseBanner(
         bottom: 0,
         left: 0,
         right: 0,
-        background: "#fffaf3",
+        background: theme === "dark" ? "#202122" : "#fffaf3",
       })
       .composite([{ input: banner, left: 0, top: 0 }])
       .png()
@@ -623,7 +625,7 @@ export async function postStrip(
           "Captura do navegador descartada: miniatura do Toomics contém apenas o logo",
         );
       } else {
-        browserImage = await addReleaseBanner(capturedImage, title, chapters.length);
+        browserImage = await addReleaseBanner(capturedImage, title, chapters.map(chapter => chapter.number));
       }
     } catch (error) {
       logger.warn({ err: error, title }, "Falha ao adicionar banner à captura; tentando fallback");
