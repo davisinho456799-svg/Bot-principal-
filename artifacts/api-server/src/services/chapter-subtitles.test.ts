@@ -126,6 +126,12 @@ describe("subtitle fallback layout", () => {
     expect(layout.rows[1].y).toBe(92 + layout.rows[0].height);
     expect(subtitleLines("a".repeat(120)).every(line => line.length <= 46)).toBe(true);
   });
+  it("keeps a small gap between thumbnails and trims excess bottom space", () => {
+    const layout = buildSubtitleRowsLayout([chapter, chapter], 92, 140, { rowGap: 8, bottomPadding: 16 });
+    expect(layout.rows[0].height).toBe(140);
+    expect(layout.rows[1].y).toBe(240);
+    expect(layout.height).toBe(396);
+  });
   it("labels the chapter, uses dark colors, and escapes subtitle XML", () => {
     const markup = buildSubtitleFallbackRow({ ...chapter, subtitlePt: 'A < B & "C"' }, 92, 164, true);
     expect(markup).toContain(">Cap. 36</text>");

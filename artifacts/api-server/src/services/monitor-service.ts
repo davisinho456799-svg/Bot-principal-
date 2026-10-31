@@ -420,10 +420,13 @@ async function buildStrip(
 ): Promise<Buffer | null> {
   const sharp = await getOptionalSharp();
   if (!sharp) return null;
-  const rowHeight = 164;
+  const rowHeight = 140;
   const width = 920;
   const headerHeight = includeBanner ? RELEASE_BANNER_HEIGHT : 0;
-  const layout = buildSubtitleRowsLayout(chapters, headerHeight, rowHeight);
+  const layout = buildSubtitleRowsLayout(chapters, headerHeight, rowHeight, {
+    rowGap: 8,
+    bottomPadding: 16,
+  });
   const height = layout.height;
   const images = await Promise.all(chapters.map(async (chapter) => ({
     chapter,

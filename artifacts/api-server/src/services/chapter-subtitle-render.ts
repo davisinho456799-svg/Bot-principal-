@@ -23,17 +23,23 @@ export function subtitleLines(text: string, limit = 46): string[] {
   return lines;
 }
 
-export function buildSubtitleRowsLayout(chapters: ParsedChapter[], headerHeight: number, rowHeight: number) {
+export function buildSubtitleRowsLayout(
+  chapters: ParsedChapter[],
+  headerHeight: number,
+  rowHeight: number,
+  options: { rowGap?: number; bottomPadding?: number } = {},
+) {
+  const { rowGap = 0, bottomPadding = 24 } = options;
   let y = headerHeight;
-  const rows = chapters.map(chapter => {
+  const rows = chapters.map((chapter, index) => {
     const displayedSubtitle = chapterSubtitleForDisplay(chapter);
     const lines = displayedSubtitle ? subtitleLines(displayedSubtitle).length : 0;
     const height = Math.max(rowHeight, (chapter.releaseDate ? 124 : 100) + lines * 26);
     const row = { y, height };
-    y += height;
+    y += height + (index < chapters.length - 1 ? rowGap : 0);
     return row;
   });
-  return { rows, height: y + 24 };
+  return { rows, height: y + bottomPadding };
 }
 
 export function buildSubtitleFallbackRow(chapter: ParsedChapter, y: number, height: number, hasThumbnail: boolean) {

@@ -186,6 +186,7 @@ describe("monitor release image", () => {
       Array.from(data.subarray((y * info.width + x) * info.channels, (y * info.width + x) * info.channels + 3));
 
     expect(info.width).toBe(920);
+    expect(info.height).toBe(248);
     expect(pixel(5, 100)).toEqual([32, 33, 34]);
     expect(pixel(50, 110)).toEqual([32, 33, 34]);
     expect(pixel(130, 95)).toEqual([212, 59, 53]);
