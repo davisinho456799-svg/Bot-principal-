@@ -36,6 +36,7 @@ export const detectedChaptersTable = pgTable(
     thumbnailUrl: text("thumbnail_url").notNull(),
     detectedAt: timestamp("detected_at", { withTimezone: true }).notNull().defaultNow(),
     publishedAt: timestamp("published_at", { withTimezone: true }),
+    deliveryPending: boolean("delivery_pending").notNull().default(false),
   },
   (table) => ({
     workChapterUnique: uniqueIndex("detected_chapters_work_key").on(

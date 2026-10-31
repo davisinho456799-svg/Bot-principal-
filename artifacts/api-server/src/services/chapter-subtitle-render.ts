@@ -1,0 +1,46 @@
+import type { ParsedChapter } from "./parsers/parser-types";
+
+const escapeXml = (value: string) => value.replace(/[<>&"']/g, c =>
+  ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;", "'": "&apos;" })[c]!);
+
+export function chapterSubtitleForDisplay(chapter: ParsedChapter): string | undefined {
+  return chapter.subtitleEn ?? chapter.subtitleKo ?? chapter.subtitlePt;
+}
+
+export function subtitleLines(text: string, limit = 46): string[] {
+  const lines: string[] = [];
+  let line = "";
+  for (const word of text.split(/\s+/)) {
+    for (const piece of word.match(new RegExp(`.{1,${limit}}`, "gu")) ?? []) {
+      if (line && [...`${line} ${piece}`].length > limit) {
+        lines.push(line);
+        line = "";
+      }
+      line = line ? `${line} ${piece}` : piece;
+    }
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+
+export function buildSubtitleRowsLayout(chapters: ParsedChapter[], headerHeight: number, rowHeight: number) {
+  let y = headerHeight;
+  const rows = chapters.map(chapter => {
+    const displayedSubtitle = chapterSubtitleForDisplay(chapter);
+    const lines = displayedSubtitle ? subtitleLines(displayedSubtitle).length : 0;
+    const height = Math.max(rowHeight, (chapter.releaseDate ? 124 : 100) + lines * 26);
+    const row = { y, height };
+    y += height;
+    return row;
+  });
+  return { rows, height: y + 24 };
+}
+
+export function buildSubtitleFallbackRow(chapter: ParsedChapter, y: number, height: number, hasThumbnail: boolean) {
+  const displayedSubtitle = chapterSubtitleForDisplay(chapter);
+  const lines = subtitleLines(displayedSubtitle ?? "");
+  return `${hasThumbnail ? "" : `<text x="52" y="${y + 70}" fill="#aeb0b4" font-family="Arial,sans-serif" font-size="18">Imagem indisponível</text>`}
+    <text x="308" y="${y + 42}" fill="#f2f3f5" font-family="Arial,sans-serif" font-size="25" font-weight="700">Cap. ${escapeXml(chapter.number)}</text>
+    ${lines.map((line, i) => `<text x="308" y="${y + 72 + i * 26}" fill="#d0d2d5" font-family="Arial,sans-serif" font-size="22">${escapeXml(line)}</text>`).join("")}
+    ${chapter.releaseDate ? `<text x="308" y="${y + 94 + lines.length * 26}" fill="#aeb0b4" font-family="Arial,sans-serif" font-size="16">${escapeXml(chapter.releaseDate)}</text>` : ""}`;
+}

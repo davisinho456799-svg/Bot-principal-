@@ -1,17 +1,16 @@
 # Erros e ajustes pendentes do bot
 
-Este arquivo é apenas uma lista para a próxima pessoa corrigir. A lógica do bot não foi alterada nesta etapa.
+Este arquivo reúne uma lista histórica de verificações. Não representa, por si só, falhas atuais do bot; confirme cada item no código e nos logs antes de alterar algo.
 
-## 1. Erro que impede o build
+## 1. Problema histórico de dependências (resolvido)
 
-- [ ] Corrigir o erro `Could not resolve "discord.js"` no `artifacts/api-server`.
-- [ ] Reinstalar ou alinhar as dependências do pacote do servidor com o `pnpm-lock.yaml`.
-- [ ] Confirmar que o `discord.js` está disponível no ambiente antes de iniciar o bot.
-- [ ] Depois disso, rodar o typecheck e o build novamente. Enquanto esse erro existir, o servidor não inicia.
+- [x] Resolver o erro `Could not resolve "discord.js"` no `artifacts/api-server`.
+- [x] Confirmar a disponibilidade de `discord.js` e validar typecheck, testes e build.
+- Em novas falhas, diagnosticar a resolução das dependências antes de reinstalar ou trocar versões.
 
 ## 2. Configuração obrigatória para executar o bot
 
-- [ ] Configurar `NEON_DATABASE_URL` ou `DATABASE_URL` com o PostgreSQL correto.
+- [ ] Confirmar que `DATABASE_URL` aponta para o PostgreSQL privado do Discloud em produção. Não usar o banco de desenvolvimento nem o antigo Neon para verificar os dados atuais do bot.
 - [ ] Configurar o token do Discord em `DISCORD_BOT_TOKEN` (os nomes antigos `Discord_bot_key` e `Discord_key` ainda aparecem como alternativas).
 - [ ] Confirmar que o banco recebeu todas as tabelas e alterações do schema antes de iniciar as notificações.
 - [ ] Conferir os logs de inicialização para garantir que o PostgreSQL e o Discord conectaram.

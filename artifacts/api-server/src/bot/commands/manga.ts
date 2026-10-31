@@ -17,6 +17,7 @@ import {
 import { searchMangaDexJp, getMangaDexById, type MangaDexResult } from "../mangadex.js";
 import { translateToPtBr, cleanDescription } from "../anilist.js";
 import { logger } from "../../lib/logger.js";
+import { respondTitleAutocomplete } from "../title-autocomplete.js";
 import {
   getTenraiMangaById,
   searchTenraiManga,
@@ -33,6 +34,7 @@ export const data = new SlashCommandBuilder()
       .setName("titulo")
       .setDescription("Nome do mangá (ex: One Piece, Berserk, Chainsaw Man)")
       .setRequired(true)
+      .setAutocomplete(true)
   )
   .addStringOption((opt) =>
     opt
@@ -53,97 +55,9 @@ export const data = new SlashCommandBuilder()
 
 // ─── Cache de autocomplete ────────────────────────────────────────────────────
 
-interface AutocompleteOption { name: string; value: string }
 type MangaDisplay = MangaDexResult & { provider: "MangaDex" | "Tenrai/MAL" };
-const autocompleteCache = new Map<string, { results: AutocompleteOption[]; ts: number }>();
-const CACHE_TTL = 30_000;
-const AUTOCOMPLETE_SOURCE_TIMEOUT = 1_200;
-
-async function withAutocompleteTimeout<T>(
-  source: string,
-  promise: Promise<T>,
-  fallback: T,
-): Promise<T> {
-  const startedAt = Date.now();
-  let timedOut = false;
-  let timer: NodeJS.Timeout | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<T>((resolve) => {
-        timer = setTimeout(() => {
-          timedOut = true;
-          resolve(fallback);
-        }, AUTOCOMPLETE_SOURCE_TIMEOUT);
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-    logger.info({
-      source,
-      durationMs: Date.now() - startedAt,
-      timedOut,
-    }, "Fonte de autocomplete finalizada");
-  }
-}
-
-async function respondAutocomplete(
-  interaction: AutocompleteInteraction,
-  results: AutocompleteOption[],
-): Promise<void> {
-  const startedAt = Date.now();
-  try {
-    await interaction.respond(results);
-    logger.info({
-      command: "manga",
-      optionCount: results.length,
-      respondDurationMs: Date.now() - startedAt,
-    }, "Resposta de autocomplete enviada");
-  } catch (err) {
-    logger.warn({ err, command: "manga" }, "Falha ao enviar resposta de autocomplete");
-    throw err;
-  }
-}
-
 export async function autocomplete(interaction: AutocompleteInteraction): Promise<void> {
-  const focused = interaction.options.getFocused();
-  if (!focused || focused.length < 2) {
-    await respondAutocomplete(interaction, []);
-    return;
-  }
-
-  const cached = autocompleteCache.get(focused);
-  if (cached && Date.now() - cached.ts < CACHE_TTL) {
-    await respondAutocomplete(interaction, cached.results);
-    return;
-  }
-
-  try {
-    const [mangaDexResult, tenraiResult] = await Promise.allSettled([
-      withAutocompleteTimeout("mangadex", searchMangaDexJp(focused, 10), []),
-      withAutocompleteTimeout("tenrai", searchTenraiManga(focused, "manga"), []),
-    ]);
-    const options: AutocompleteOption[] = [];
-    if (mangaDexResult.status === "fulfilled") {
-      options.push(...mangaDexResult.value.slice(0, 15).map((r) => ({
-        name: r.mainTitle.slice(0, 100),
-        value: `mangadex:${r.id}`,
-      })));
-    }
-    if (tenraiResult.status === "fulfilled") {
-      options.push(...tenraiResult.value.slice(0, 10).map((r) => ({
-        name: `${titleOfTenrai(r).slice(0, 90)} · Tenrai`,
-        value: `tenrai:${r.mal_id}`,
-      })));
-    }
-    const deduped = options.filter((option, index, all) =>
-      all.findIndex((item) => item.name.toLowerCase() === option.name.toLowerCase()) === index,
-    ).slice(0, 25);
-    autocompleteCache.set(focused, { results: deduped, ts: Date.now() });
-    await respondAutocomplete(interaction, deduped);
-  } catch {
-    await respondAutocomplete(interaction, []);
-  }
+  await respondTitleAutocomplete(interaction, "manga");
 }
 
 // ─── Status label ─────────────────────────────────────────────────────────────

@@ -1,4 +1,6 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, or } from "drizzle-orm";
+import { createHash } from "node:crypto";
+import type { Client } from "discord.js";
 import type sharp from "sharp";
 import { db } from "@workspace/db";
 import {
@@ -9,6 +11,17 @@ import {
   monitoredWorksTable,
 } from "@workspace/db/schema";
 import { logger } from "../lib/logger";
+import { loadMonitorDependency } from "../lib/monitor-dependencies";
+import { measureImageMonitorRound, type ImageMonitorTiming } from "./monitor-timing";
+import { monitorExecution } from "./monitor-execution.js";
+import { assertMonitorPlatformEnabled, isMonitorPlatformEnabled } from "./monitor-platform-settings.js";
+import { translateChapterSubtitles } from "./chapter-subtitle-translation";
+import { recordBotError } from "../bot/error-log.js";
+import { buildSubtitleFallbackRow, buildSubtitleRowsLayout } from "./chapter-subtitle-render";
+import { renderToptoonPairCard } from "./toptoon-pair-render";
+import { selectPairTestImage, type TestImageSelection } from "./monitor-test-fallback";
+import { fetchThumbnailBytes } from "./monitor-thumbnail-download";
+import { RELEASE_BANNER_HEIGHT, buildReleaseBannerMarkup, buildReleaseBannerSvg, type ReleaseBannerTheme } from "./release-banner";
 import {
   buildChapterKey,
   genericParser,
@@ -18,6 +31,7 @@ import {
   type ParserContext,
 } from "./parsers/index";
 import {
+  capturedGroupWithinLimit,
   openBrowserListing,
   type BrowserChapter,
   type BrowserListingSession,
@@ -29,6 +43,11 @@ import {
   isAbsurdChapterOutlier,
   numericChapterNumber,
 } from "./monitor-chapter-guard";
+import {
+  formatMonitorLinkWarning,
+  getMonitorLinkRedirect,
+  monitorLinkWarningKey,
+} from "./monitor-link-warning.js";
 
 type ChapterCandidate = ParsedChapter & {
   key: string;
@@ -36,33 +55,72 @@ type ChapterCandidate = ParsedChapter & {
   captureId?: string;
 };
 
+function captureSubtitles(chapters: ChapterCandidate[], platform: MonitorPlatform) {
+  return chapters.filter(chapter =>
+    chapter.captureId && (platform === "toomics" || chapter.subtitle)
+  ).map(chapter => ({
+    captureId: chapter.captureId!,
+    chapterNumber: platform === "toomics" ? chapter.number : undefined,
+    subtitleEn: chapter.subtitleEn,
+    subtitleKo: chapter.subtitleKo,
+    subtitlePt: chapter.subtitlePt,
+  }));
+}
+
 type ExistingChapter = {
   id: number;
   key: string;
   number: string;
   thumbnailUrl: string;
   publishedAt: Date | null;
+  deliveryPending: boolean;
 };
 
+type MonitorImageMode = "browser+banner" | "sharp+banner" | "primary+banner" | "none";
+
 const HISTORICAL_RELEASE_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1_000;
+export const MONITOR_LINK_DELTA_PENDING_STATUS = "Link atualizado — diferença de capítulos pendente";
+const MONITOR_LINK_DELTA_PREVIOUS_URL_MARKER = "|previous=";
+
+export function buildMonitorLinkDeltaPendingStatus(previousUrl?: string) {
+  return previousUrl
+    ? `${MONITOR_LINK_DELTA_PENDING_STATUS}${MONITOR_LINK_DELTA_PREVIOUS_URL_MARKER}${encodeURIComponent(previousUrl)}`
+    : MONITOR_LINK_DELTA_PENDING_STATUS;
+}
+
+function hasPendingLinkDelta(status: string | null | undefined) {
+  return status?.startsWith(MONITOR_LINK_DELTA_PENDING_STATUS) ?? false;
+}
+
+function getPendingLinkDeltaPreviousUrl(status: string | null | undefined) {
+  const markerIndex = status?.indexOf(MONITOR_LINK_DELTA_PREVIOUS_URL_MARKER) ?? -1;
+  if (markerIndex < 0 || !status) return null;
+  try {
+    const url = decodeURIComponent(
+      status.slice(markerIndex + MONITOR_LINK_DELTA_PREVIOUS_URL_MARKER.length),
+    );
+    return new URL(url).toString();
+  } catch {
+    return null;
+  }
+}
 
 type SharpFactory = typeof sharp;
 
 let sharpFactoryPromise: Promise<SharpFactory> | null = null;
-let sharpUnavailable = false;
 let sharpWarningLogged = false;
 
 async function getSharp(): Promise<SharpFactory> {
-  sharpFactoryPromise ??= import("sharp").then((module) => module.default);
+  sharpFactoryPromise ??= loadMonitorDependency("sharp")
+    .then((module) => (module as typeof import("sharp")).default)
+    .catch(error => { sharpFactoryPromise = null; throw error; });
   return sharpFactoryPromise;
 }
 
 async function getOptionalSharp(): Promise<SharpFactory | null> {
-  if (sharpUnavailable) return null;
   try {
     return await getSharp();
   } catch (error) {
-    sharpUnavailable = true;
     if (!sharpWarningLogged) {
       sharpWarningLogged = true;
       logger.warn(
@@ -152,6 +210,7 @@ function withChapterKeys(
 type ListingSession = {
   parser: string;
   candidates: ChapterCandidate[];
+  finalUrl?: string;
   captureSession?: BrowserListingSession;
 };
 
@@ -173,15 +232,18 @@ async function fetchListing(
   progress?: MonitorProgressReporter,
 ): Promise<ListingSession> {
   const platform = work.platform as MonitorPlatform;
+  assertMonitorPlatformEnabled(platform);
   const context: ParserContext = {
     listingUrl: work.listingUrl,
     platform,
     workTitle: work.title,
   };
 
+  let browserFinalUrl: string | undefined;
   try {
     await reportProgress(progress, "Abrindo a página com o navegador e procurando os cards de capítulos.");
     const browserListing = await openBrowserListing(work.listingUrl, platform);
+    browserFinalUrl = browserListing.diagnostics?.finalUrl;
     if (browserListing.candidates.length) {
       const browserCandidates = browserListing.candidates as BrowserChapter[];
       await reportProgress(
@@ -196,6 +258,7 @@ async function fetchListing(
           work.title,
           "Playwright browser",
         ),
+        finalUrl: browserFinalUrl,
         captureSession: browserListing,
       };
     }
@@ -257,23 +320,83 @@ async function fetchListing(
   return {
     parser: specificParser ? `${genericParser.name} (fallback)` : genericParser.name,
     candidates: withChapterKeys(genericChapters, platform, work.title, genericParser.name),
+    finalUrl: browserFinalUrl,
   };
 }
 
-async function downloadThumbnail(url: string): Promise<Buffer | null> {
+const TOOMICS_LOGO_PLACEHOLDER_SHA256 = "6e60bf68bbb9fa0eba2b72aa5cd659b4e88f182b32799e2b363cf1a1f560874b";
+const TOOMICS_LOGO_PLACEHOLDER_AVERAGE_HASH =
+  "0000000000000000000000000011110000111100000000000000000000000000";
+const TOOMICS_LOGO_HASH_MAX_DISTANCE = 2;
+const TOOMICS_LOGO_ASPECT_RATIO = 438 / 342;
+
+function isToomicsThumbnailUrl(url: string): boolean {
   try {
-    if (/fullversion|full[-_ ]?version|download[-_ ]?app|app[-_ ]?version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)|(?:^|[/._-])(?:banner|bnr)(?:[/._-]|$)/i.test(url)) {
+    const hostname = new URL(url).hostname.toLowerCase();
+    return hostname === "toomics.com" || hostname.endsWith(".toomics.com");
+  } catch {
+    return false;
+  }
+}
+
+async function isToomicsLogoPlaceholder(
+  url: string,
+  bytes: Buffer,
+  sharp: SharpFactory,
+): Promise<boolean> {
+  if (!isToomicsThumbnailUrl(url)) return false;
+  if (createHash("sha256").update(bytes).digest("hex") === TOOMICS_LOGO_PLACEHOLDER_SHA256) {
+    return true;
+  }
+
+  const metadata = await sharp(bytes, { limitInputPixels: 24_000_000 }).metadata();
+  if (!metadata.width || !metadata.height) return false;
+  const aspectRatio = metadata.width / metadata.height;
+  if (Math.abs(aspectRatio - TOOMICS_LOGO_ASPECT_RATIO) > 0.08) return false;
+
+  const { data } = await sharp(bytes, { limitInputPixels: 24_000_000 })
+    .resize(8, 8, { fit: "fill" })
+    .greyscale()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  if (data.length !== TOOMICS_LOGO_PLACEHOLDER_AVERAGE_HASH.length) return false;
+  const average = data.reduce((sum, value) => sum + value, 0) / data.length;
+  const averageHash = Array.from(data, value => value >= average ? "1" : "0").join("");
+  const distance = Array.from(averageHash, (bit, index) =>
+    bit === TOOMICS_LOGO_PLACEHOLDER_AVERAGE_HASH[index] ? 0 : 1,
+  ).reduce((sum, difference) => sum + difference, 0);
+  return distance <= TOOMICS_LOGO_HASH_MAX_DISTANCE;
+}
+
+async function isToomicsLogoPlaceholderUrl(url: string): Promise<boolean> {
+  if (!isToomicsThumbnailUrl(url)) return false;
+  try {
+    const sharp = await getOptionalSharp();
+    if (!sharp) return false;
+    const bytes = await fetchThumbnailBytes(url, { timeoutMs: 3_000, maxBytes: 2 * 1024 * 1024 });
+    return Boolean(bytes && await isToomicsLogoPlaceholder(url, bytes, sharp));
+  } catch {
+    return false;
+  }
+}
+
+async function downloadThumbnail(url: string, timeoutMs?: number): Promise<Buffer | null> {
+  try {
+    if (/fullversion|full[-_ ]?version|download[-_ ]?app|app[-_ ]?version|promotion|promo|advertisement|(?:^|[-_ ])banner(?:[-_ ]|$)|(?:^|[/._-])(?:banner|bnr|lock|locked|no[-_ ]?image|placeholder)(?:[/._-]|$)/i.test(url)) {
       return null;
     }
     const sharp = await getOptionalSharp();
     if (!sharp) return null;
-    const response = await fetch(url, { headers: { "User-Agent": "ChapterMonitor/1.0" } });
-    if (!response.ok) return null;
-    const bytes = Buffer.from(await response.arrayBuffer());
-    const metadata = await sharp(bytes).metadata();
+    const bytes = await fetchThumbnailBytes(url, { timeoutMs });
+    if (!bytes) return null;
+    if (await isToomicsLogoPlaceholder(url, bytes, sharp)) {
+      logger.warn({ host: new URL(url).hostname }, "Miniatura do Toomics rejeitada: imagem contém apenas o logo");
+      return null;
+    }
+    const metadata = await sharp(bytes, { limitInputPixels: 24_000_000 }).metadata();
     if (!metadata.width || !metadata.height) return null;
     if (metadata.width / metadata.height > 4.2) return null;
-    const stats = await sharp(bytes).stats();
+    const stats = await sharp(bytes, { limitInputPixels: 24_000_000 }).stats();
     const colorChannels = stats.channels.slice(0, 3);
     const alpha = stats.channels[3];
     const isFullyTransparent = Boolean(alpha && alpha.max < 8);
@@ -291,33 +414,58 @@ async function downloadThumbnail(url: string): Promise<Buffer | null> {
 async function buildStrip(
   title: string,
   chapters: ChapterCandidate[],
+  requireThumbnail = false,
+  includeBanner = true,
+  rejectedThumbnailUrls: ReadonlySet<string> = new Set(),
 ): Promise<Buffer | null> {
   const sharp = await getOptionalSharp();
   if (!sharp) return null;
   const rowHeight = 164;
   const width = 920;
-  const headerHeight = 92;
-  const height = headerHeight + chapters.length * rowHeight + 24;
+  const headerHeight = includeBanner ? RELEASE_BANNER_HEIGHT : 0;
+  const layout = buildSubtitleRowsLayout(chapters, headerHeight, rowHeight);
+  const height = layout.height;
   const images = await Promise.all(chapters.map(async (chapter) => ({
     chapter,
-    data: await downloadThumbnail(chapter.thumbnailUrl),
+    data: rejectedThumbnailUrls.has(chapter.thumbnailUrl)
+      ? null
+      : await downloadThumbnail(chapter.thumbnailUrl, requireThumbnail ? 10_000 : undefined),
   })));
+  if (images.every(image => !image.data)) {
+    if (requireThumbnail) {
+      logger.warn(
+        {
+          title,
+          chapters: images.map(({ chapter }) => ({
+            number: chapter.number,
+            hasThumbnailUrl: Boolean(chapter.thumbnailUrl?.trim()),
+          })),
+        },
+        "Miniatura principal ausente ou não utilizável; fallback de imagem não gerado",
+      );
+    }
+    return null;
+  }
   const imageRows = images.map(({ chapter, data }, index) => {
-    const y = headerHeight + index * rowHeight;
-    return `<rect x="24" y="${y}" width="872" height="140" rx="14" fill="#f5f0e8" stroke="#ded5c8"/><text x="52" y="${y + 78}" fill="#132b3f" font-family="Arial,sans-serif" font-size="25" font-weight="700">EP ${escapeXml(chapter.number)}</text>${data ? "" : `<text x="185" y="${y + 78}" fill="#7a746c" font-family="Arial,sans-serif" font-size="18">Thumbnail unavailable</text>`}`;
+    const y = layout.rows[index].y;
+    return buildSubtitleFallbackRow(chapter, y, layout.rows[index].height, Boolean(data));
   }).join("");
-  const baseSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="100%" height="100%" fill="#fffaf3"/><text x="34" y="44" fill="#132b3f" font-family="Arial,sans-serif" font-size="25" font-weight="700">${escapeXml(title)}</text><text x="34" y="70" fill="#d8624c" font-family="Arial,sans-serif" font-size="13" letter-spacing="2">NEW CHAPTERS · ${chapters.length}</text>${imageRows}</svg>`;
+  const chapterNumbers = chapters.map(chapter => chapter.number);
+  const baseSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="100%" height="100%" fill="#202122"/>${includeBanner ? buildReleaseBannerMarkup(title, chapterNumbers, "dark") : ""}${imageRows}</svg>`;
   let output = await sharp(Buffer.from(baseSvg)).png().toBuffer();
-  const composites = await Promise.all(images.map(async ({ data }, index) => {
+  const composites = await Promise.all(images.map(async ({ data, chapter }, index) => {
     if (!data) return null;
     const thumbnail = await sharp(data)
-      .resize(690, 120, { fit: "cover", position: "centre" })
+      .resize(240, 140, {
+        fit: "contain",
+        background: { r: 32, g: 33, b: 34, alpha: 1 },
+      })
       .png()
       .toBuffer();
     return {
       input: thumbnail,
-      left: 185,
-      top: headerHeight + index * rowHeight + 10,
+      left: 24,
+      top: layout.rows[index].y,
     };
   }));
   const validComposites = composites.filter(
@@ -332,11 +480,112 @@ async function buildStrip(
   return output;
 }
 
-function escapeXml(value: string) {
-  return value.replace(/[<>&'"]/g, (character) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", "'": "&apos;", "\"": "&quot;" })[character] ?? character);
+class PairTestImageError extends Error {}
+
+async function buildPairTestStrip(title: string, chapters: ChapterCandidate[]): Promise<Buffer | null> {
+  if (chapters.length !== 1) throw new PairTestImageError("O teste deve selecionar um único capítulo.");
+  const card = await buildPairCard(chapters[0]);
+  return addReleaseBanner(card, title, [chapters[0].number], "dark");
 }
 
-async function postStrip(
+async function buildPairCard(chapter: ChapterCandidate): Promise<Buffer> {
+  if (!chapter.extraThumbnailUrls) {
+    throw new PairTestImageError("O capítulo não tem duas miniaturas extras disponíveis.");
+  }
+  if (!await getOptionalSharp()) throw new PairTestImageError("O gerador de imagens (Sharp) não está disponível no worker.");
+  const images = await Promise.all(chapter.extraThumbnailUrls.map(url => downloadThumbnail(url, 10_000)));
+  if (!images[0] || !images[1]) {
+    const missing = images.flatMap((image, index) => image ? [] : [index + 2]);
+    throw new PairTestImageError(`Não consegui carregar a miniatura extra ${missing.join(" e ")}.`);
+  }
+  return renderToptoonPairCard(chapter, [images[0], images[1]]);
+}
+
+/** Preserve notification batches, with independent fallback for each chapter. */
+export async function buildAutomaticToptoonStrip(title: string, chapters: ChapterCandidate[]) {
+  const primaryChapters: string[] = [];
+  const textChapters: string[] = [];
+  const sharp = await getOptionalSharp();
+  if (!sharp) return { image: null, primaryChapters, textChapters: chapters.map(chapter => chapter.number) };
+  const rows: Array<{ input: Buffer; height: number }> = [];
+  for (const chapter of chapters) {
+    const selected = await selectPairTestImage({
+      renderPair: () => buildPairCard(chapter),
+      renderPrimary: () => buildStrip(title, [chapter], true, false),
+      onFailure: (stage, error) => logger.warn({ err: error, title, chapter: chapter.number, stage }, "Imagem automática indisponível; tentando reserva do mesmo capítulo"),
+    });
+    if (selected.selection === "primary") primaryChapters.push(chapter.number);
+    if (!selected.image) { textChapters.push(chapter.number); continue; }
+    const input = await sharp(selected.image).resize({ width: 1024 }).png().toBuffer();
+    const metadata = await sharp(input).metadata();
+    rows.push({ input, height: metadata.height! });
+  }
+  if (!rows.length) return { image: null, primaryChapters, textChapters };
+  let top = 0;
+  const composite = rows.map(row => {
+    const item = { input: row.input, left: 0, top };
+    top += row.height;
+    return item;
+  });
+  const strip = await sharp({ create: { width: 1024, height: top, channels: 4, background: "#202122" } })
+    .composite(composite).png().toBuffer();
+  const image = await addReleaseBanner(strip, title, chapters.map(chapter => chapter.number), "dark");
+  if (!image) throw new PairTestImageError("Não foi possível decorar a montagem automática.");
+  return { image, primaryChapters, textChapters };
+}
+
+export async function addReleaseBanner(
+  image: Buffer,
+  title: string,
+  chapterNumbers: readonly string[],
+  theme: ReleaseBannerTheme = "light",
+): Promise<Buffer | null> {
+  const sharp = await getOptionalSharp();
+  if (!sharp) return null;
+
+  try {
+    const metadata = await sharp(image).metadata();
+    if (!metadata.width || !metadata.height) return null;
+
+    const banner = Buffer.from(
+      buildReleaseBannerSvg(metadata.width, title, chapterNumbers, theme),
+    );
+
+    const decorated = await sharp(image)
+      .extend({
+        top: RELEASE_BANNER_HEIGHT,
+        bottom: 0,
+        left: 0,
+        right: 0,
+        background: theme === "dark" ? "#202122" : "#fffaf3",
+      })
+      .composite([{ input: banner, left: 0, top: 0 }])
+      .png()
+      .toBuffer();
+    const decoratedMetadata = await sharp(decorated).metadata();
+    if (
+      decoratedMetadata.width !== metadata.width ||
+      decoratedMetadata.height !== metadata.height + RELEASE_BANNER_HEIGHT
+    ) {
+      logger.warn(
+        {
+          originalWidth: metadata.width,
+          originalHeight: metadata.height,
+          decoratedWidth: decoratedMetadata.width,
+          decoratedHeight: decoratedMetadata.height,
+        },
+        "A captura decorada não recebeu o banner completo; usando fallback",
+      );
+      return null;
+    }
+    return decorated;
+  } catch (error) {
+    logger.warn({ err: error }, "Não foi possível adicionar o banner à captura do navegador");
+    return null;
+  }
+}
+
+export async function postStrip(
   channelId: string,
   title: string,
   chapters: ChapterCandidate[],
@@ -344,40 +593,151 @@ async function postStrip(
   total: number,
   isTest = false,
   capturedImage?: Buffer,
-): Promise<"browser" | "sharp" | "none"> {
+  pairTest = false,
+  progress?: MonitorProgressReporter,
+  editMessageId?: string,
+): Promise<MonitorImageMode> {
   const token = process.env.DISCORD_BOT_TOKEN;
   if (!token) throw new Error("DISCORD_BOT_TOKEN is not configured");
-  // The browser path sends the pixels rendered by the platform. The SVG/Sharp
-  // renderer remains as a last-resort compatibility fallback when a browser
-  // is unavailable or a page does not expose a stable card.
-  const png =
-    capturedImage ?? await buildStrip(title, chapters);
-  const imageMode = capturedImage ? "browser" : png ? "sharp" : "none";
+  // Both paths must use the same release banner. Browser captures contain only
+  // the real platform cards, while the Sharp path already renders its banner.
+  // Never send a raw browser capture: that was the source of inconsistent
+  // notifications where only some images showed "NEW CHAPTERS".
+  let browserImage: Buffer | null = null;
+  const rejectedToomicsThumbnailUrls = new Set<string>();
+  if (capturedImage) {
+    try {
+      const toomicsThumbnailUrls = [...new Set(
+        chapters.map(chapter => chapter.thumbnailUrl).filter(isToomicsThumbnailUrl),
+      )];
+      const placeholderMatches = await Promise.all(
+        toomicsThumbnailUrls.map(async url => [url, await isToomicsLogoPlaceholderUrl(url)] as const),
+      );
+      for (const [url, isPlaceholder] of placeholderMatches) {
+        if (isPlaceholder) rejectedToomicsThumbnailUrls.add(url);
+      }
+      const rejectedChapterNumbers = chapters
+        .filter(chapter => rejectedToomicsThumbnailUrls.has(chapter.thumbnailUrl))
+        .map(chapter => chapter.number);
+      if (rejectedChapterNumbers.length) {
+        logger.warn(
+          { title, chapterNumbers: rejectedChapterNumbers },
+          "Captura do navegador descartada: miniatura do Toomics contém apenas o logo",
+        );
+      } else {
+        browserImage = await addReleaseBanner(capturedImage, title, chapters.map(chapter => chapter.number));
+      }
+    } catch (error) {
+      logger.warn({ err: error, title }, "Falha ao adicionar banner à captura; tentando fallback");
+    }
+  }
+
+  let png = browserImage;
+  let primaryFallback = false;
+  let automaticFallbackNote = "";
+  if (pairTest && !isTest) {
+    if (!png) {
+      try {
+        const selected = await buildAutomaticToptoonStrip(title, chapters);
+        png = selected.image;
+        automaticFallbackNote = [
+          ...(selected.primaryChapters.length ? [`principal como reserva: capítulos ${selected.primaryChapters.join(", ")}`] : []),
+          ...(selected.textChapters.length ? [`somente texto: capítulos ${selected.textChapters.join(", ")}`] : []),
+        ].map(note => ` · ${note}`).join("");
+      } catch (error) {
+        logger.warn({ err: error, title }, "Montagem automática falhou; tentando imagens principais");
+        try {
+          png = await buildStrip(title, chapters, true);
+          primaryFallback = Boolean(png);
+        } catch (primaryError) {
+          logger.warn({ err: primaryError, title }, "Reserva principal indisponível; preservando o aviso em texto");
+          png = null;
+        }
+      }
+    }
+  } else if (pairTest) {
+    const selected = await selectPairTestImage({
+      captured: browserImage,
+      renderPair: () => buildPairTestStrip(title, chapters),
+      renderPrimary: () => buildStrip(title, chapters, true),
+      report: message => reportProgress(progress, message),
+      onFailure: (stage, error) => logger.warn({ err: error, title, stage }, "Falha na imagem do teste; tentando próxima reserva"),
+    });
+    png = selected.image;
+    primaryFallback = selected.selection === "primary";
+  } else if (!png) {
+    try {
+      png = await buildStrip(title, chapters, false, true, rejectedToomicsThumbnailUrls);
+    } catch (error) {
+      // Normal notifications may still deliver their textual release notice.
+      logger.warn({ err: error, title }, "Falha ao gerar imagem do monitor; enviando aviso sem anexo");
+      png = null;
+    }
+  }
+  const imageMode: MonitorImageMode = primaryFallback
+    ? "primary+banner"
+    : browserImage
+      ? "browser+banner"
+      : png
+        ? "sharp+banner"
+        : "none";
   const form = new FormData();
   const chapterSummary = chapters.length === 1
     ? `1 capítulo novo · capítulo ${chapters[0].number}`
     : `${chapters.length} capítulos novos · capítulos ${chapters.map((chapter) => chapter.number).join(", ")}`;
+  const messageContent = `${isTest ? "🧪 **TESTE** · " : ""}**${title}** · ${chapterSummary}${total > 1 ? ` · parte ${part}/${total}` : ""}`;
   if (!png) {
     logger.warn(
       { title, chapterNumbers: chapters.map((chapter) => chapter.number) },
-      "Sharp indisponível e nenhuma captura do navegador foi obtida; enviando notificação sem anexo",
+      "Nenhuma imagem do monitor foi obtida; enviando notificação sem anexo",
     );
   }
+  if (editMessageId && !png) {
+    throw new Error("Não consegui gerar uma imagem; a mensagem atual foi mantida sem alterações.");
+  }
+  const filename = `chapter-release-${isTest ? "test-" : ""}${Date.now()}-${part}.png`;
   form.append("payload_json", JSON.stringify({
-    content: `${isTest ? "🧪 **TESTE** · " : ""}**${title}** · ${chapterSummary}${total > 1 ? ` · parte ${part}/${total}` : ""}${png ? "" : " · imagem indisponível no modo leve"}`,
+    content: `${messageContent}${automaticFallbackNote}${primaryFallback ? " · imagem principal usada como reserva" : ""}${png ? "" : pairTest ? " · aviso em texto: imagens indisponíveis" : " · imagem indisponível no modo leve"}`,
+    ...(editMessageId ? {
+      embeds: [],
+      attachments: [{
+        id: "0",
+        filename,
+        description: `${title} · ${chapterSummary}`,
+      }],
+    } : {}),
     allowed_mentions: { parse: [] },
   }));
   if (png) {
     const pngArrayBuffer = new ArrayBuffer(png.byteLength);
     new Uint8Array(pngArrayBuffer).set(png);
     const pngBlob = new Blob([pngArrayBuffer], { type: "image/png" });
-    form.append("files[0]", pngBlob, `chapter-release-${isTest ? "test-" : ""}${Date.now()}-${part}.png`);
+    form.append("files[0]", pngBlob, filename);
   }
-  const response = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
-    method: "POST",
+  const messageUrl = `https://discord.com/api/v10/channels/${channelId}/messages${editMessageId ? `/${editMessageId}` : ""}`;
+  if (editMessageId) {
+    if (!/^\d{17,20}$/.test(editMessageId)) throw new Error("O ID da mensagem Discord é inválido.");
+    const existingResponse = await fetch(messageUrl, {
+      headers: { Authorization: `Bot ${token}` },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!existingResponse.ok) throw new Error(`Não consegui validar a mensagem que será substituída (HTTP ${existingResponse.status}).`);
+    const existing = await existingResponse.json();
+    if (
+      !existing.author?.bot ||
+      existing.channel_id !== channelId ||
+      existing.content !== messageContent
+    ) {
+      throw new Error("A mensagem não pertence ao bot ou não corresponde exatamente à obra e aos capítulos selecionados.");
+    }
+  }
+  const response = await fetch(messageUrl, {
+    method: editMessageId ? "PATCH" : "POST",
     headers: { Authorization: `Bot ${token}` },
     body: form,
+    signal: AbortSignal.timeout(30_000),
   });
+  void response.body?.cancel().catch(() => {});
   if (!response.ok) throw new Error(`Discord returned ${response.status}`);
   return imageMode;
 }
@@ -400,9 +760,222 @@ async function isUsableBrowserCapture(image: Buffer | undefined): Promise<boolea
   return image.readUInt32BE(16) >= 240 && image.readUInt32BE(20) >= 90;
 }
 
+export async function runResendNotification(
+  workId: number,
+  requestedChapter: string,
+  progress?: MonitorProgressReporter,
+): Promise<{ title: string; chapter: string; imageMode: MonitorImageMode; parser: string }> {
+  const [config] = await db.select().from(monitorConfigTable).limit(1);
+  if (!config?.discordChannelId) {
+    throw new Error("Nenhum canal do Discord foi configurado para o monitor.");
+  }
+
+  const [work] = await db
+    .select()
+    .from(monitoredWorksTable)
+    .where(eq(monitoredWorksTable.id, workId))
+    .limit(1);
+  if (!work) {
+    throw new Error(`Não encontrei nenhuma obra com o ID ${workId}. Use /monitor listar para conferir os IDs.`);
+  }
+
+  const wanted = chapterNumberIdentity(requestedChapter);
+  if (!wanted) {
+    throw new Error("Informe um número de capítulo válido.");
+  }
+
+  let listing: ListingSession | undefined;
+  try {
+    await reportProgress(progress, `Procurando o capítulo ${requestedChapter} de ${work.title}.`);
+    listing = await fetchListing(work, progress);
+
+    let chapter = listing.candidates.find(
+      (candidate) => chapterNumberIdentity(candidate.number) === wanted,
+    );
+
+    if (!chapter) {
+      const storedChapters = await db
+        .select({
+          chapterNumber: detectedChaptersTable.chapterNumber,
+          thumbnailUrl: detectedChaptersTable.thumbnailUrl,
+          chapterKey: detectedChaptersTable.chapterKey,
+        })
+        .from(detectedChaptersTable)
+        .where(eq(detectedChaptersTable.workId, work.id));
+      const stored = storedChapters.find(
+        (candidate) => chapterNumberIdentity(candidate.chapterNumber) === wanted,
+      );
+      if (stored) {
+        chapter = {
+          number: stored.chapterNumber,
+          thumbnailUrl: stored.thumbnailUrl,
+          key: stored.chapterKey,
+          parser: "histórico salvo",
+        };
+        await reportProgress(
+          progress,
+          "O capítulo não está na lista atual; usando a imagem salva no histórico do monitor.",
+        );
+      }
+    }
+
+    if (!chapter) {
+      throw new Error(
+        `Não encontrei o capítulo ${requestedChapter} na lista atual nem no histórico salvo de **${work.title}**.`,
+      );
+    }
+
+    const useToptoonPairs = work.platform === "toptoon";
+    if (useToptoonPairs) {
+      await reportProgress(progress, "Toptoon: tentando as miniaturas 2 e 3; se falharem, usando a principal do mesmo capítulo ou texto.");
+    }
+    await translateChapterSubtitles([chapter]);
+    let capturedImage: Buffer | undefined;
+    if (listing.captureSession && chapter.captureId) {
+      await reportProgress(progress, "Tentando capturar novamente o card renderizado.");
+      try {
+        const groups = await listing.captureSession.captureGroups(
+          [chapter.captureId], captureSubtitles([chapter], work.platform as MonitorPlatform), useToptoonPairs,
+        );
+        const group = groups.find((candidate) =>
+          candidate.chapterNumbers.some((number) => chapterNumberIdentity(number) === wanted),
+        );
+        if (group?.image && await isUsableBrowserCapture(group.image)) {
+          capturedImage = group.image;
+        }
+      } catch (error) {
+        logger.warn(
+          { err: error, workId: work.id, chapter: chapter.number },
+          "Falha ao recapturar capítulo para reenvio; usando thumbnail salva",
+        );
+      }
+    }
+
+    await reportProgress(progress, "Enviando novamente a notificação.");
+    const imageMode = await postStrip(
+      config.discordChannelId,
+      work.title,
+      [chapter],
+      1,
+      1,
+      false,
+      capturedImage,
+      useToptoonPairs,
+    );
+
+    return {
+      title: work.title,
+      chapter: chapter.number,
+      imageMode,
+      parser: listing.parser,
+    };
+  } finally {
+    await listing?.captureSession?.close().catch((error) => {
+      logger.warn({ err: error, workId: work.id }, "Falha ao fechar captura após reenvio");
+    });
+  }
+}
+
+export async function runResendGroupNotification(
+  workId: number,
+  requestedChapters: string[],
+  progress?: MonitorProgressReporter,
+  editMessageId?: string,
+): Promise<{ title: string; chapters: string[]; imageMode: MonitorImageMode; parser: string; edited: boolean }> {
+  const identities = requestedChapters.map(chapterNumberIdentity);
+  if (
+    requestedChapters.length < 2 ||
+    requestedChapters.length > 10 ||
+    identities.some(identity => !identity) ||
+    new Set(identities).size !== identities.length
+  ) {
+    throw new Error("Informe de 2 a 10 capítulos válidos, sem repetição.");
+  }
+  if (editMessageId && !/^\d{17,20}$/.test(editMessageId)) {
+    throw new Error("O ID da mensagem Discord é inválido.");
+  }
+
+  const [config] = await db.select().from(monitorConfigTable).limit(1);
+  if (!config?.discordChannelId) throw new Error("Nenhum canal do Discord foi configurado para o monitor.");
+  const [work] = await db.select().from(monitoredWorksTable)
+    .where(and(eq(monitoredWorksTable.id, workId), eq(monitoredWorksTable.active, true)))
+    .limit(1);
+  if (!work) throw new Error("A obra não está ativa; confira /monitor listar.");
+
+  let listing: ListingSession | undefined;
+  try {
+    await reportProgress(progress, `Procurando os capítulos ${requestedChapters.join(", ")} de ${work.title}.`);
+    listing = await fetchListing(work, progress);
+    const stored = await db.select({
+      chapterNumber: detectedChaptersTable.chapterNumber,
+      thumbnailUrl: detectedChaptersTable.thumbnailUrl,
+      chapterKey: detectedChaptersTable.chapterKey,
+    }).from(detectedChaptersTable).where(eq(detectedChaptersTable.workId, work.id));
+    const chapters = identities.map((identity, index) => {
+      const live = listing!.candidates.find(candidate => chapterNumberIdentity(candidate.number) === identity);
+      if (live) return live;
+      const saved = stored.find(candidate => chapterNumberIdentity(candidate.chapterNumber) === identity);
+      if (saved) {
+        return {
+          number: saved.chapterNumber,
+          thumbnailUrl: saved.thumbnailUrl,
+          key: saved.chapterKey,
+          parser: "histórico salvo",
+        };
+      }
+      throw new Error(`Não encontrei o capítulo ${requestedChapters[index]} na lista nem no histórico salvo de **${work.title}**.`);
+    });
+    await translateChapterSubtitles(chapters);
+    const useToptoonPairs = work.platform === "toptoon";
+    let capturedImage: Buffer | undefined;
+    if (listing.captureSession && chapters.every(chapter => chapter.captureId)) {
+      await reportProgress(progress, "Capturando o grupo pelo monitor para preservar o cartão original da plataforma.");
+      try {
+        const groups = await listing.captureSession.captureGroups(
+          chapters.map(chapter => chapter.captureId!),
+          captureSubtitles(chapters, work.platform as MonitorPlatform),
+          useToptoonPairs,
+        );
+        const selected = new Set(identities);
+        const exactGroup = groups.find(group =>
+          group.chapterNumbers.length === chapters.length &&
+          group.chapterNumbers.every(number => selected.has(chapterNumberIdentity(number))),
+        );
+        if (exactGroup && await isUsableBrowserCapture(exactGroup.image)) capturedImage = exactGroup.image;
+      } catch (error) {
+        logger.warn({ err: error, workId: work.id }, "Captura do grupo para reenvio falhou; usando o fallback do monitor");
+      }
+    }
+    const imageMode = await postStrip(
+      config.discordChannelId,
+      work.title,
+      chapters,
+      1,
+      1,
+      false,
+      capturedImage,
+      useToptoonPairs,
+      progress,
+      editMessageId,
+    );
+    return {
+      title: work.title,
+      chapters: chapters.map(chapter => chapter.number),
+      imageMode,
+      parser: listing.parser,
+      edited: Boolean(editMessageId),
+    };
+  } finally {
+    await listing?.captureSession?.close().catch(error => {
+      logger.warn({ err: error, workId }, "Falha ao fechar captura após reenvio agrupado");
+    });
+  }
+}
+
 export async function runTestNotification(
   progress?: MonitorProgressReporter,
   workId?: number,
+  topToonPairTest = false,
 ) {
   await reportProgress(progress, "Iniciando o teste da notificação.");
   const [config] = await db.select().from(monitorConfigTable).limit(1);
@@ -418,13 +991,17 @@ export async function runTestNotification(
     throw new Error("Não há nenhum título ativo no monitor para usar no teste.");
   }
 
+  const eligibleWorks = topToonPairTest ? works.filter(work => work.platform === "toptoon") : works;
   const work = workId === undefined
-    ? works[Math.floor(Math.random() * works.length)]
+    ? eligibleWorks[Math.floor(Math.random() * eligibleWorks.length)]
     : works.find((candidate) => candidate.id === workId);
   if (!work) {
     throw new Error(
-      `Não encontrei uma obra ativa com o ID ${workId}. Use /monitor listar para conferir os IDs.`,
+      "A obra selecionada não está mais ativa. Use /monitor listar para conferir a numeração atual.",
     );
+  }
+  if (topToonPairTest && work.platform !== "toptoon") {
+    throw new Error("O teste das imagens 2 e 3 está disponível somente para obras do Toptoon.");
   }
   await reportProgress(progress, `Obra escolhida: ${work.title}.`);
   const listing = await fetchListing(work, progress);
@@ -434,13 +1011,21 @@ export async function runTestNotification(
       throw new Error(`Não encontrei capítulos para o título "${work.title}".`);
     }
 
-    const chapter = candidates[Math.floor(Math.random() * candidates.length)]!;
+    const newest = [...candidates].sort((a, b) => Number(b.number) - Number(a.number));
+    const eligible = topToonPairTest
+      ? newest.filter(chapter => chapter.extraThumbnailUrls)
+      : candidates;
+    const chapter = topToonPairTest ? (eligible[0] ?? newest[0])! : eligible[Math.floor(Math.random() * eligible.length)]!;
+    if (topToonPairTest) await reportProgress(progress, "Tentando imagens 2 e 3, com a principal como reserva — o mesmo formato usado no monitor automático do Toptoon.");
+    await translateChapterSubtitles([chapter]);
     await reportProgress(progress, `Capítulo escolhido: ${chapter.number}. Parser final: ${parser}.`);
     let capturedImage: Buffer | undefined;
-    if (listing.captureSession && chapter.captureId) {
+    if (listing.captureSession && chapter.captureId && (!topToonPairTest || chapter.extraThumbnailUrls)) {
       await reportProgress(progress, "Tentando capturar o card real renderizado pelo site.");
       try {
-        const [group] = await listing.captureSession.captureGroups([chapter.captureId]);
+        const [group] = await listing.captureSession.captureGroups(
+          [chapter.captureId], captureSubtitles([chapter], work.platform as MonitorPlatform), topToonPairTest,
+        );
         if (await isUsableBrowserCapture(group?.image)) {
           capturedImage = group?.image;
           await reportProgress(progress, "Captura direta do card concluída.");
@@ -459,7 +1044,7 @@ export async function runTestNotification(
         await reportProgress(progress, "A captura direta falhou; usando fallback SVG/Sharp.");
       }
     } else {
-      await reportProgress(progress, "Não houve sessão de captura; usando fallback SVG/Sharp.");
+      await reportProgress(progress, "A captura direta não está disponível; tentando montagem SVG/Sharp e as reservas.");
     }
     await reportProgress(progress, "Montando e enviando a imagem para o canal do monitor.");
     const imageMode = await postStrip(
@@ -470,14 +1055,19 @@ export async function runTestNotification(
       1,
       true,
       capturedImage,
+      topToonPairTest,
+      progress,
     );
     await reportProgress(progress, `Mensagem enviada ao Discord (${imageMode}).`);
+    const imageSelection: TestImageSelection = imageMode === "none" ? "text"
+      : topToonPairTest && imageMode !== "primary+banner" ? "extras" : "primary";
 
     return {
       title: work.title,
       chapter: chapter.number,
       parser,
       captureMode: imageMode,
+      imageSelection,
       channelId: config.discordChannelId,
     };
   } finally {
@@ -485,15 +1075,85 @@ export async function runTestNotification(
   }
 }
 
-export async function runMonitor() {
+export async function runMonitor(client?: Client) {
+  return monitorExecution.runRegular(() => measureImageMonitorRound((timing) => runMonitorRound(timing, client)));
+}
+
+async function sendLinkRedirectWarning(
+  client: Client | undefined,
+  config: typeof monitorConfigTable.$inferSelect | undefined,
+  work: typeof monitoredWorksTable.$inferSelect,
+  inputUrl: string,
+  finalUrl?: string,
+) {
+  if (!client || !config?.discordChannelId) return;
+  const platform = work.platform as MonitorPlatform;
+  const redirect = getMonitorLinkRedirect(inputUrl, platform, finalUrl);
+  const content = formatMonitorLinkWarning(work.title, redirect);
+  if (!content) return;
+
+  const status = `Link redirect warning:${monitorLinkWarningKey(work.id, platform, inputUrl)}`;
+  const [alreadySent] = await db.select({ id: monitorActivityTable.id })
+    .from(monitorActivityTable)
+    .where(and(
+      eq(monitorActivityTable.workId, work.id),
+      eq(monitorActivityTable.status, status),
+    ))
+    .limit(1);
+  if (alreadySent) return;
+
+  try {
+    const channel = await client.channels.fetch(config.discordChannelId);
+    if (!channel?.isTextBased()) throw new Error("Monitor channel is not text-based");
+    const send = (channel as unknown as {
+      send?: (payload: { content: string; allowedMentions: { parse: string[] } }) => Promise<unknown>;
+    }).send;
+    if (!send) throw new Error("Monitor channel cannot receive messages");
+    await send.call(channel, { content, allowedMentions: { parse: [] } });
+    await db.insert(monitorActivityTable).values({
+      workId: work.id,
+      chapterCount: 0,
+      status,
+    });
+  } catch (error) {
+    logger.warn({ err: error, workId: work.id }, "Could not send monitor link redirect warning");
+  }
+}
+
+async function runMonitorRound(timing: ImageMonitorTiming, client?: Client) {
   const [config] = await db.select().from(monitorConfigTable).limit(1);
-  const works = await db.select().from(monitoredWorksTable).where(eq(monitoredWorksTable.active, true));
+  const works = (await db.select().from(monitoredWorksTable).where(eq(monitoredWorksTable.active, true)))
+    .filter(work => isMonitorPlatformEnabled(work.platform as MonitorPlatform));
   let chaptersFound = 0;
   let postsSent = 0;
   for (const work of works) {
+    const workTiming = timing.startWork(work.id, work.title);
+    const linkDeltaPending = hasPendingLinkDelta(work.lastStatus);
+    const previousLinkUrl = linkDeltaPending
+      ? getPendingLinkDeltaPreviousUrl(work.lastStatus)
+      : null;
     let listing: ListingSession | undefined;
+    let previousListing: ListingSession | undefined;
     try {
+      await sendLinkRedirectWarning(client, config, work, work.listingUrl);
       listing = await fetchListing(work);
+      await sendLinkRedirectWarning(client, config, work, work.listingUrl, listing.finalUrl);
+      let previousLinkNumbers: Set<string> | undefined;
+      if (linkDeltaPending && previousLinkUrl) {
+        await sendLinkRedirectWarning(client, config, work, previousLinkUrl);
+        previousListing = await fetchListing({ ...work, listingUrl: previousLinkUrl });
+        await sendLinkRedirectWarning(client, config, work, previousLinkUrl, previousListing.finalUrl);
+        if (previousListing.candidates.length === 0) {
+          throw new Error("The previous listing returned no usable chapters; link-difference check remains pending");
+        }
+        previousLinkNumbers = new Set(
+          previousListing.candidates.map((candidate) =>
+            chapterNumberIdentity(candidate.number),
+          ),
+        );
+        await previousListing.captureSession?.close();
+        previousListing = undefined;
+      }
       const { parser, candidates } = listing;
       const existing = await db
         .select({
@@ -502,6 +1162,7 @@ export async function runMonitor() {
           number: detectedChaptersTable.chapterNumber,
         thumbnailUrl: detectedChaptersTable.thumbnailUrl,
         publishedAt: detectedChaptersTable.publishedAt,
+        deliveryPending: detectedChaptersTable.deliveryPending,
         })
         .from(detectedChaptersTable)
         .where(eq(detectedChaptersTable.workId, work.id));
@@ -535,13 +1196,13 @@ export async function runMonitor() {
         const number = numericChapterNumber(chapter.number);
         return highestExisting !== null && number !== null && number <= highestExisting;
       };
-      const historical = previouslyUnseen.filter((candidate) =>
+      const historical = linkDeltaPending ? [] : previouslyUnseen.filter((candidate) =>
         isHistoricalRelease(candidate, checkedAt) ||
         isReleasedBeforePreviousCheck(candidate, work.lastCheckedAt) ||
         isReleasedBeforeMonitorCreation(candidate, work.createdAt) ||
         isAtOrBelowKnownChapter(candidate),
       );
-      let fresh = previouslyUnseen.filter((candidate) =>
+      let fresh = linkDeltaPending ? previouslyUnseen : previouslyUnseen.filter((candidate) =>
         !isHistoricalRelease(candidate, checkedAt) &&
         !isReleasedBeforePreviousCheck(candidate, work.lastCheckedAt) &&
         !isReleasedBeforeMonitorCreation(candidate, work.createdAt) &&
@@ -556,6 +1217,7 @@ export async function runMonitor() {
         .filter((number): number is number => number !== null);
       const highestFresh = freshNumbers.length ? Math.max(...freshNumbers) : null;
       if (
+        !linkDeltaPending &&
         fresh.length >= 5 &&
         fresh.every((chapter) => !chapter.releaseDate) &&
         highestExisting !== null &&
@@ -583,14 +1245,12 @@ export async function runMonitor() {
           chapter,
         ]),
       );
-      const pending = lastPublishedNumber === null
-        ? []
-        : existing
+      let pending = existing
           .filter((chapter) => {
             const number = numericChapterNumber(chapter.number);
             return chapter.publishedAt === null &&
               number !== null &&
-              number > lastPublishedNumber &&
+              (chapter.deliveryPending || (lastPublishedNumber !== null && number > lastPublishedNumber)) &&
               !isAbsurdChapterOutlier(chapter.number, highestExisting);
           })
           .map((chapter): ChapterCandidate =>
@@ -601,7 +1261,33 @@ export async function runMonitor() {
               parser: `${parser} recovery`,
             },
           );
-      const toPublish = [...pending, ...fresh];
+      if (previousLinkNumbers) {
+        const existingNumbers = new Set(
+          existing.map((chapter) => chapterNumberIdentity(chapter.number)),
+        );
+        const publishedNumbers = new Set(
+          existing
+            .filter((chapter) => chapter.publishedAt !== null)
+            .map((chapter) => chapterNumberIdentity(chapter.number)),
+        );
+        const linkDifference = safeCandidates.filter((candidate) => {
+          const identity = chapterNumberIdentity(candidate.number);
+          return !previousLinkNumbers.has(identity) && !publishedNumbers.has(identity);
+        });
+        fresh = linkDifference.filter(
+          (candidate) => !existingNumbers.has(chapterNumberIdentity(candidate.number)),
+        );
+        pending = linkDifference.filter((candidate) =>
+          existingNumbers.has(chapterNumberIdentity(candidate.number)),
+        );
+      }
+      const deliveryNumbers = new Set<string>();
+      const toPublish = [...pending, ...fresh].filter(chapter => {
+        const identity = chapterNumberIdentity(chapter.number);
+        if (deliveryNumbers.has(identity)) return false;
+        deliveryNumbers.add(identity);
+        return true;
+      });
 
       if (existing.length === 0 && work.lastCheckedAt == null) {
         await db.transaction(async (tx) => {
@@ -625,40 +1311,53 @@ export async function runMonitor() {
           await tx.update(monitoredWorksTable).set({
             chaptersSeen: existing.length + historical.length,
             lastCheckedAt: checkedAt,
-            lastStatus: historical.length
-              ? `${parser}: historical chapters ignored`
-              : safeCandidates.length < candidates.length
-                ? `${parser}: absurd chapter ignored`
-              : `${parser}: no new chapters`,
+            lastStatus: linkDeltaPending && safeCandidates.length === 0
+              ? buildMonitorLinkDeltaPendingStatus(previousLinkUrl ?? undefined)
+              : historical.length
+                ? `${parser}: historical chapters ignored`
+                : safeCandidates.length < candidates.length
+                  ? `${parser}: absurd chapter ignored`
+                : `${parser}: no new chapters`,
             updatedAt: checkedAt,
           }).where(eq(monitoredWorksTable.id, work.id));
         });
         continue;
       }
       chaptersFound += toPublish.length;
-      if (historical.length) {
-        await db.insert(detectedChaptersTable).values(historical.map((chapter) => ({
-          workId: work.id,
-          chapterKey: chapter.key,
-          chapterNumber: chapter.number,
-          thumbnailUrl: chapter.thumbnailUrl,
-          detectedAt: checkedAt,
-        })));
-      }
+      // Durable intent distinguishes actual deliveries from baseline snapshots.
+      await db.transaction(async tx => {
+        await migrateLegacyKeys(tx, work, existing);
+        if (historical.length) await tx.insert(detectedChaptersTable).values(historical.map(chapter => ({
+          workId: work.id, chapterKey: chapter.key, chapterNumber: chapter.number,
+          thumbnailUrl: chapter.thumbnailUrl, detectedAt: checkedAt,
+        }))).onConflictDoNothing();
+        if (fresh.length) await tx.insert(detectedChaptersTable).values(fresh.map(chapter => ({
+          workId: work.id, chapterKey: chapter.key, chapterNumber: chapter.number,
+          thumbnailUrl: chapter.thumbnailUrl, detectedAt: checkedAt, deliveryPending: true,
+        }))).onConflictDoNothing();
+        for (const chapter of pending) {
+          const matches = existing.filter(item => chapterNumberIdentity(item.number) === chapterNumberIdentity(chapter.number));
+          for (const item of matches) await tx.update(detectedChaptersTable)
+            .set({ deliveryPending: true }).where(and(eq(detectedChaptersTable.id, item.id), eq(detectedChaptersTable.workId, work.id)));
+        }
+      });
       if (!config?.discordChannelId) {
         await db.update(monitoredWorksTable).set({
-          chaptersSeen: existing.length + historical.length,
+          chaptersSeen: existing.length + historical.length + fresh.length,
           lastCheckedAt: checkedAt,
           lastStatus: `${parser}: new chapters found — choose a Discord channel`,
           updatedAt: checkedAt,
         }).where(eq(monitoredWorksTable.id, work.id));
         continue;
       }
+      await translateChapterSubtitles(toPublish);
       let capturedGroups: CapturedChapterGroup[] = [];
       if (listing.captureSession) {
         try {
           capturedGroups = await listing.captureSession.captureGroups(
             toPublish.map((chapter) => chapter.captureId).filter(Boolean) as string[],
+            captureSubtitles(toPublish, work.platform as MonitorPlatform),
+            work.platform === "toptoon",
           );
         } catch (error) {
           logger.warn(
@@ -669,6 +1368,13 @@ export async function runMonitor() {
       }
       const validCapturedGroups: CapturedChapterGroup[] = [];
       for (const group of capturedGroups) {
+        if (!capturedGroupWithinLimit(work.platform as MonitorPlatform, group.chapterNumbers.length)) {
+          logger.warn(
+            { workId: work.id, chapterNumbers: group.chapterNumbers },
+            "Captura agrupada excedeu o limite de capítulos por imagem; usando lotes de fallback",
+          );
+          continue;
+        }
         if (await isUsableBrowserCapture(group.image)) {
           validCapturedGroups.push(group);
         } else {
@@ -697,7 +1403,7 @@ export async function runMonitor() {
       }
 
       const groups: Array<{ chapters: ChapterCandidate[]; image?: Buffer }> = [];
-      const imageModes = new Set<"browser" | "sharp" | "none">();
+      const imageModes = new Set<MonitorImageMode>();
       const emittedDirectKeys = new Set<string>();
       let fallbackChapters: ChapterCandidate[] = [];
       const flushFallback = () => {
@@ -747,73 +1453,89 @@ export async function runMonitor() {
           groups.length,
           false,
           group.image,
+          work.platform === "toptoon",
         );
         imageModes.add(imageMode);
         postsSent++;
+        const notifiedAt = new Date();
+        // Confirm only this delivered group before attempting the next one.
+        await db.transaction(async tx => {
+          for (const chapter of group.chapters) {
+            const matches = existing.filter(item => chapterNumberIdentity(item.number) === chapterNumberIdentity(chapter.number));
+            await tx.update(detectedChaptersTable).set({ publishedAt: notifiedAt, deliveryPending: false })
+              .where(and(eq(detectedChaptersTable.workId, work.id), or(
+                eq(detectedChaptersTable.chapterKey, buildChapterKey(work.platform as MonitorPlatform, work.title, chapter.number)),
+                ...matches.map(item => eq(detectedChaptersTable.id, item.id)),
+              )));
+          }
+          const previousHistory = await tx
+            .select({ chapterNumber: monitorHistoryTable.chapterNumber })
+            .from(monitorHistoryTable)
+            .where(eq(monitorHistoryTable.workId, work.id));
+          const historyKeys = new Set(
+            previousHistory.map((item) => chapterNumberIdentity(item.chapterNumber)),
+          );
+          const historyToInsert = group.chapters.filter((chapter) => {
+            const key = chapterNumberIdentity(chapter.number);
+            if (historyKeys.has(key)) return false;
+            historyKeys.add(key);
+            return true;
+          });
+          if (historyToInsert.length) {
+            await tx.insert(monitorHistoryTable).values(historyToInsert.map((chapter) => ({
+              workId: work.id,
+              chapterNumber: chapter.number,
+              releaseDate: chapter.releaseDate ?? null,
+              notifiedAt,
+            })));
+          }
+          await tx.insert(monitorActivityTable).values({
+            workId: work.id,
+            chapterCount: group.chapters.length,
+            status: `Published (image: ${imageMode})`,
+            createdAt: notifiedAt,
+          });
+          await tx.update(monitoredWorksTable).set({
+            chaptersSeen: existing.length + historical.length + fresh.length,
+            lastPublishedAt: notifiedAt, updatedAt: notifiedAt,
+          }).where(eq(monitoredWorksTable.id, work.id));
+        });
       }
       await db.transaction(async (tx) => {
-        await migrateLegacyKeys(tx, work, existing);
-        if (fresh.length) {
-          await tx.insert(detectedChaptersTable).values(fresh.map((chapter) => ({
-            workId: work.id,
-            chapterKey: chapter.key,
-            chapterNumber: chapter.number,
-            thumbnailUrl: chapter.thumbnailUrl,
-            detectedAt: checkedAt,
-            publishedAt: checkedAt,
-          })));
-        }
-        for (const chapter of pending) {
-          const existingChapter = existing.find((item) =>
-            chapterNumberIdentity(item.number) === chapterNumberIdentity(chapter.number),
-          );
-          if (existingChapter) {
-            await tx
-              .update(detectedChaptersTable)
-              .set({ publishedAt: checkedAt })
-              .where(eq(detectedChaptersTable.id, existingChapter.id));
-          }
-        }
-
-        const previousHistory = await tx
-          .select({ chapterNumber: monitorHistoryTable.chapterNumber })
-          .from(monitorHistoryTable)
-          .where(eq(monitorHistoryTable.workId, work.id));
-        const historyKeys = new Set(
-          previousHistory.map((item) => chapterNumberIdentity(item.chapterNumber)),
-        );
-        const historyToInsert = toPublish.filter((chapter) => {
-          const key = chapterNumberIdentity(chapter.number);
-          if (historyKeys.has(key)) return false;
-          historyKeys.add(key);
-          return true;
-        });
-        if (historyToInsert.length) {
-          await tx.insert(monitorHistoryTable).values(historyToInsert.map((chapter) => ({
-            workId: work.id,
-            chapterNumber: chapter.number,
-            releaseDate: chapter.releaseDate ?? null,
-            notifiedAt: checkedAt,
-          })));
-        }
-        await tx.insert(monitorActivityTable).values({
-          workId: work.id,
-          chapterCount: toPublish.length,
-          status: `Published (image: ${[...imageModes].join("+")})`,
-        });
         await tx.update(monitoredWorksTable).set({
           chaptersSeen: existing.length + historical.length + fresh.length,
           lastCheckedAt: checkedAt,
-          lastPublishedAt: checkedAt,
           lastStatus: `${toPublish.length} new chapter${toPublish.length === 1 ? "" : "s"} published (image: ${[...imageModes].join("+")})`,
           updatedAt: checkedAt,
         }).where(eq(monitoredWorksTable.id, work.id));
       });
     } catch (error) {
       logger.warn({ err: error, workId: work.id }, "Work monitor failed");
-      await db.update(monitoredWorksTable).set({ lastCheckedAt: new Date(), lastStatus: "Check failed", updatedAt: new Date() }).where(eq(monitoredWorksTable.id, work.id));
+      void recordBotError({ source: "image_monitor", errorCode: "IMAGE_MONITOR_CHECK_FAILED",
+        error, context: { workId: work.id, channelId: config.discordChannelId } });
+      workTiming.fail(error);
+      await db.update(monitoredWorksTable).set({
+        lastCheckedAt: new Date(),
+        lastStatus: linkDeltaPending
+          ? buildMonitorLinkDeltaPendingStatus(previousLinkUrl ?? undefined)
+          : "Check failed",
+        updatedAt: new Date(),
+      }).where(eq(monitoredWorksTable.id, work.id));
     } finally {
-      await listing?.captureSession?.close();
+      try {
+        await listing?.captureSession?.close();
+      } catch (error) {
+        workTiming.fail(error);
+        throw error;
+      } finally {
+        try {
+          await previousListing?.captureSession?.close();
+        } catch (error) {
+          workTiming.fail(error);
+          throw error;
+        }
+        workTiming.finish();
+      }
     }
   }
   return { status: "completed", worksChecked: works.length, chaptersFound, postsSent };

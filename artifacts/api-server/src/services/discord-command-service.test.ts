@@ -1,0 +1,434 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChatInputCommandInteraction } from "discord.js";
+
+const state = vi.hoisted(() => ({
+  rows: [] as Array<{ id: number; active: boolean; title: string; platform: string; listingUrl: string; lastStatus: string | null }>,
+  action: "confirm" as "confirm" | "cancel" | "timeout" | "ack-failure",
+  onPrompt: undefined as (() => void) | undefined,
+  updates: vi.fn(),
+  insert: vi.fn(),
+  notification: vi.fn(),
+  diagnostic: vi.fn(),
+  resend: vi.fn(),
+  resendGroup: vi.fn(),
+  acknowledge: vi.fn(),
+  nextId: 11,
+}));
+
+vi.mock("drizzle-orm", () => ({
+  eq: (field: string, value: unknown) => ({ field, value }),
+  and: (...conditions: unknown[]) => ({ conditions }),
+}));
+vi.mock("@workspace/db/schema", () => ({
+  monitoredWorksTable: { id: "id", active: "active", listingUrl: "listingUrl" },
+  monitorConfigTable: { id: "id" },
+  monitorHistoryTable: {},
+}));
+vi.mock("@workspace/db", () => {
+  type Condition = { field?: string; value?: unknown; conditions?: Condition[] };
+  const matches = (row: Record<string, unknown>, condition: Condition): boolean =>
+    condition.conditions
+      ? condition.conditions.every((item) => matches(row, item))
+      : row[condition.field!] === condition.value;
+  return {
+    db: {
+      select: () => ({
+        from: () => ({
+          where: (condition: Condition) => ({
+            then: (resolve: (rows: typeof state.rows) => unknown) =>
+              Promise.resolve(state.rows.filter((row) => matches(row, condition))).then(resolve),
+            limit: async (count: number) => state.rows.filter((row) => matches(row, condition)).slice(0, count),
+          }),
+        }),
+      }),
+      insert: () => ({
+        values: (values: object) => ({
+          returning: async () => {
+            state.insert(values);
+            const row = { id: state.nextId++, active: true, lastStatus: null, ...values } as typeof state.rows[number];
+            state.rows.push(row);
+            return [row];
+          },
+        }),
+      }),
+      update: () => ({
+        set: (values: object) => ({
+          where: (condition: Condition) => ({
+            returning: async () => {
+              state.updates(values, condition);
+              const matched = state.rows.filter((row) => matches(row, condition));
+              matched.forEach((row) => Object.assign(row, values));
+              return matched;
+            },
+          }),
+        }),
+      }),
+    },
+  };
+});
+vi.mock("../lib/logger", () => ({ logger: { warn: vi.fn(), error: vi.fn() } }));
+vi.mock("./monitor-service.js", () => ({
+  MONITOR_LINK_DELTA_PENDING_STATUS: "Link atualizado — diferença de capítulos pendente",
+  buildMonitorLinkDeltaPendingStatus: (previousUrl?: string) =>
+    previousUrl
+      ? `Link atualizado — diferença de capítulos pendente|previous=${encodeURIComponent(previousUrl)}`
+      : "Link atualizado — diferença de capítulos pendente",
+  runMonitor: vi.fn(),
+  runTestNotification: state.notification,
+  runResendNotification: state.resend,
+  runResendGroupNotification: state.resendGroup,
+}));
+vi.mock("./monitor-diagnostic.js", () => ({
+  runMonitorDiagnostic: state.diagnostic,
+  formatMonitorDiagnostic: () => "Comparação dos tempos, sem notificações",
+}));
+
+import { executeManhwaCommand, monitorCommandDefinition } from "./discord-command-service.js";
+
+function interaction(
+  subcommand: string,
+  number: number | null = null,
+  pairTest = false,
+  stringOverrides: Record<string, string> = {},
+) {
+  let confirmationIds: string[] = [];
+  const message = {
+    awaitMessageComponent: vi.fn(async (options) => {
+      if (state.action === "timeout") throw new Error("collector timed out");
+      const button = {
+        user: { id: "owner" },
+        customId: confirmationIds[state.action === "cancel" ? 1 : 0],
+        deferUpdate: state.acknowledge,
+      };
+      expect(options.filter({ ...button, user: { id: "other" } })).toBe(false);
+      expect(options.filter({ ...button, customId: "unrelated" })).toBe(false);
+      expect(options.filter(button)).toBe(true);
+      return button;
+    }),
+  };
+  const fake = {
+    id: "interaction-1",
+    user: { id: "owner" },
+    deferred: true,
+    deferReply: vi.fn(async () => {}),
+    editReply: vi.fn(async (payload) => {
+      if (payload.components?.length) {
+        confirmationIds = payload.components[0].toJSON().components.map((button: { custom_id: string }) => button.custom_id);
+        state.onPrompt?.();
+      }
+      return message;
+    }),
+    options: {
+      getSubcommand: () => subcommand,
+      getInteger: () => number,
+      getBoolean: () => pairTest,
+      getString: (key: string) => ({
+        link: "https://www.lezhin.com/new",
+        nome: "D",
+        plataforma: "lezhin",
+        capitulo: "12.5",
+      capitulos: "28, 29, 30, 31, 32",
+      mensagem_id: "",
+        ...stringOverrides,
+      })[key],
+    },
+  };
+  return { fake, command: fake as unknown as ChatInputCommandInteraction };
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  state.rows = [
+    { id: 10, title: "C", active: true, platform: "lezhin", listingUrl: "https://example.test/c", lastStatus: "Check failed" },
+    { id: 2, title: "B", active: false, platform: "lezhin", listingUrl: "https://example.test/b", lastStatus: "Check failed: paused" },
+    { id: 1, title: "A", active: true, platform: "lezhin", listingUrl: "https://example.test/a", lastStatus: null },
+  ];
+  state.action = "confirm";
+  state.onPrompt = undefined;
+  state.nextId = 11;
+  state.acknowledge.mockResolvedValue(undefined);
+  state.notification.mockResolvedValue({ title: "C", chapter: "1", parser: "test", captureMode: "test" });
+  state.resend.mockResolvedValue({ title: "C", chapter: "12.5", parser: "test", imageMode: "none" });
+  state.resendGroup.mockResolvedValue({
+    title: "C", chapters: ["28", "29", "30", "31", "32"], parser: "test", imageMode: "browser+banner", edited: true,
+  });
+  state.diagnostic.mockResolvedValue({ results: [], worksSkipped: 0 });
+});
+
+describe("safe monitor commands", () => {
+  it("supports all-work diagnostics and resolves a selected display number to its immutable ID", async () => {
+    expect(monitorCommandDefinition.options?.some(o => o.name === "diagnostico")).toBe(true);
+    const all = interaction("diagnostico");
+    await executeManhwaCommand(all.command);
+    expect(state.diagnostic).toHaveBeenCalledWith(undefined);
+    await executeManhwaCommand(interaction("diagnostico", 2).command);
+    expect(state.diagnostic).toHaveBeenCalledWith(10);
+    expect(all.fake.editReply.mock.calls.at(-1)?.[0].content).toContain("Comparação");
+    expect(state.notification).not.toHaveBeenCalled();
+    expect(state.resend).not.toHaveBeenCalled();
+    expect(state.updates).not.toHaveBeenCalled();
+  });
+
+  it("attaches the selected diagnostic image only to the private response", async () => {
+    const image = Buffer.from("captured-image");
+    state.diagnostic.mockResolvedValue({ results: [], worksSkipped: 0, previewImage: image });
+    const { fake, command } = interaction("diagnostico", 2);
+
+    await executeManhwaCommand(command);
+
+    const response = fake.editReply.mock.calls.at(-1)?.[0];
+    expect(response.content).toContain("somente nesta resposta privada");
+    expect(response.files).toEqual([
+      { attachment: image, name: "monitor-preview-obra-2.png" },
+    ]);
+    expect(state.resend).not.toHaveBeenCalled();
+    expect(state.notification).not.toHaveBeenCalled();
+  });
+
+  it("does not run a diagnostic with an invalid work number", async () => {
+    await executeManhwaCommand(interaction("diagnostico", 99).command);
+    expect(state.diagnostic).not.toHaveBeenCalled();
+  });
+
+  it("does not expose database error messages in the private response", async () => {
+    state.diagnostic.mockRejectedValueOnce(new Error("secret-in-database-url"));
+    const { fake, command } = interaction("diagnostico");
+    await executeManhwaCommand(command);
+    expect(JSON.stringify(fake.editReply.mock.calls)).not.toContain("secret-in-database-url");
+  });
+  it("lists consecutive numbers, not the database IDs", async () => {
+    const { fake, command } = interaction("listar");
+    await executeManhwaCommand(command);
+    const content = fake.editReply.mock.calls[0][0].content;
+    expect(content).toContain("Nº 1 — A");
+    expect(content).toContain("Nº 2 — C");
+    expect(content).not.toContain("ID 10");
+    expect(content).not.toContain("— B");
+    expect(state.updates).not.toHaveBeenCalled();
+  });
+
+  it("tests the database ID selected by the current display number", async () => {
+    await executeManhwaCommand(interaction("teste", 2).command);
+    expect(state.notification).toHaveBeenCalledWith(expect.any(Function), 10, false);
+  });
+
+  it("resends using the immutable ID of the current display number", async () => {
+    await executeManhwaCommand(interaction("reenviar", 2).command);
+    expect(state.resend).toHaveBeenCalledWith(10, "12.5", expect.any(Function));
+  });
+
+  it("parses a unique numeric chapter group and rejects malformed or duplicate values", async () => {
+    const { parseResendGroupChapters } = await import("./discord-command-service.js");
+    expect(parseResendGroupChapters("028, 29 30,31,32")).toEqual(["28", "29", "30", "31", "32"]);
+    expect(() => parseResendGroupChapters("28,28")).toThrow(/repetidos/);
+    expect(() => parseResendGroupChapters("28-32")).toThrow(/números de capítulo/);
+    expect(() => parseResendGroupChapters("28")).toThrow(/2 a 10/);
+  });
+
+  it("supports grouped monitor resend and replacement of the specified bot message", async () => {
+    expect(monitorCommandDefinition.options?.some(option => option.name === "reenviar_grupo")).toBe(true);
+    const { fake, command } = interaction("reenviar_grupo", 2, false, {
+      capitulos: "28, 29, 30, 31, 32",
+      mensagem_id: "1559578352908501130",
+    });
+    await executeManhwaCommand(command);
+    expect(state.resendGroup).toHaveBeenCalledWith(
+      10,
+      ["28", "29", "30", "31", "32"],
+      expect.any(Function),
+      "1559578352908501130",
+    );
+    expect(fake.editReply.mock.calls.at(-1)?.[0].content).toContain("Mensagem atualizada");
+  });
+
+  it("renames only the confirmed work when numbers shift", async () => {
+    state.onPrompt = () => { state.rows.find((row) => row.id === 1)!.active = false; };
+    const { fake, command } = interaction("renomear", 2);
+    await executeManhwaCommand(command);
+    expect(fake.editReply.mock.calls[0][0].content).toContain("Renomear **C** (nº 2) para **D**");
+    expect(state.rows.find((row) => row.id === 10)!.title).toBe("D");
+    expect(state.rows.find((row) => row.id === 1)!.title).toBe("A");
+    expect(state.rows.find((row) => row.id === 10)!.active).toBe(true);
+    expect(state.updates).toHaveBeenCalledWith(
+      { title: "D", updatedAt: expect.any(Date) },
+      { conditions: [{ field: "id", value: 10 }, { field: "active", value: true }] },
+    );
+  });
+
+  it("edits only the selected work link after confirmation and preserves its history", async () => {
+    state.onPrompt = () => { state.rows.find((row) => row.id === 1)!.active = false; };
+    const { fake, command } = interaction("editar_link", 2);
+    await executeManhwaCommand(command);
+
+    expect(fake.editReply.mock.calls[0][0].content).toContain("Alterar o link de **C** (nº 2)");
+    expect(fake.editReply.mock.calls[0][0].content).toContain("O nome, a plataforma e o histórico de capítulos serão preservados");
+    expect(state.rows.find((row) => row.id === 10)!.listingUrl).toBe("https://www.lezhin.com/new");
+    expect(state.rows.find((row) => row.id === 10)!.title).toBe("C");
+    expect(state.rows.find((row) => row.id === 10)!.active).toBe(true);
+    expect(state.rows.find((row) => row.id === 1)!.listingUrl).toBe("https://example.test/a");
+    expect(state.updates).toHaveBeenCalledWith(
+      {
+        listingUrl: "https://www.lezhin.com/new",
+        lastStatus: "Link atualizado — diferença de capítulos pendente|previous=https%3A%2F%2Fexample.test%2Fc",
+        updatedAt: expect.any(Date),
+      },
+      { conditions: [{ field: "id", value: 10 }, { field: "active", value: true }] },
+    );
+  });
+
+  it("does not edit a link when the user cancels", async () => {
+    state.action = "cancel";
+    await executeManhwaCommand(interaction("editar_link", 2).command);
+    expect(state.updates).not.toHaveBeenCalled();
+    expect(state.rows.find((row) => row.id === 10)!.listingUrl).toBe("https://example.test/c");
+  });
+
+  it("rejects an invalid or already-used link without prompting", async () => {
+    const invalid = interaction("editar_link", 2, false, { link: "ftp://www.lezhin.com/new" });
+    await executeManhwaCommand(invalid.command);
+    expect(invalid.fake.editReply.mock.calls.at(-1)![0].content).toContain("http:// ou https://");
+    expect(invalid.fake.editReply.mock.calls.at(-1)![0].components).toEqual([]);
+
+    state.rows[1].listingUrl = "https://www.lezhin.com/new";
+    const duplicate = interaction("editar_link", 2);
+    await executeManhwaCommand(duplicate.command);
+    expect(duplicate.fake.editReply.mock.calls.at(-1)![0].content).toContain("já está cadastrado");
+    expect(duplicate.fake.editReply.mock.calls.at(-1)![0].components).toEqual([]);
+    expect(state.updates).not.toHaveBeenCalled();
+  });
+
+  it("does not rename when the user cancels", async () => {
+    state.action = "cancel";
+    await executeManhwaCommand(interaction("renomear", 2).command);
+    expect(state.updates).not.toHaveBeenCalled();
+    expect(state.rows.find((row) => row.id === 10)!.title).toBe("C");
+  });
+
+  it("preserves random tests when no number is specified", async () => {
+    await executeManhwaCommand(interaction("teste").command);
+    expect(state.notification).toHaveBeenCalledWith(expect.any(Function), undefined, false);
+  });
+
+  it("enables the two-image experiment only when explicitly selected", async () => {
+    await executeManhwaCommand(interaction("teste", 2, true).command);
+    expect(state.notification).toHaveBeenCalledWith(expect.any(Function), 10, true);
+  });
+
+  it.each([
+    ["primary", "primary+banner", "principal do mesmo capítulo (reserva)"],
+    ["extras", "sharp+banner", "duas extras (2 e 3)"],
+    ["text", "none", "somente texto"],
+  ])("identifies the actual image selected by the test: %s", async (imageSelection, captureMode, expected) => {
+    state.notification.mockResolvedValueOnce({ title: "C", chapter: "36", parser: "test", captureMode, imageSelection });
+    const { fake, command } = interaction("teste", 2, true);
+    await executeManhwaCommand(command);
+    expect(fake.editReply.mock.calls.at(-1)![0].content).toContain(`Imagem usada: ${expected}`);
+  });
+
+  it("preserves the completed test steps when image generation fails", async () => {
+    state.notification.mockImplementationOnce(async (progress) => {
+      await progress("Obra escolhida: C.");
+      await progress("Capítulo escolhido: 69.");
+      throw new Error("Miniatura extra 3 indisponível.");
+    });
+    const { fake, command } = interaction("teste", 2, true);
+    await executeManhwaCommand(command);
+    const final = fake.editReply.mock.calls.at(-1)![0].content;
+    expect(final).toContain("Teste não enviado");
+    expect(final).toContain("1. Obra escolhida: C.");
+    expect(final).toContain("2. Capítulo escolhido: 69.");
+    expect(final).toContain("Miniatura extra 3 indisponível.");
+  });
+
+  it("keeps long failure histories within Discord's limit and retains recent steps", async () => {
+    state.notification.mockImplementationOnce(async (progress) => {
+      for (let index = 0; index < 30; index++) await progress(`Etapa ${index}: ${"x".repeat(100)}`);
+      throw new Error("Falha final.");
+    });
+    const { fake, command } = interaction("teste", 2, true);
+    await executeManhwaCommand(command);
+    const final = fake.editReply.mock.calls.at(-1)![0].content;
+    expect(final.length).toBeLessThanOrEqual(2000);
+    expect(final).toContain("Etapa 29:");
+    expect(final).toContain("Falha final.");
+  });
+
+  it.each(["teste", "remover", "renomear", "editar_link", "reenviar"])("rejects an old internal ID for %s without falling back", async (command) => {
+    await executeManhwaCommand(interaction(command, 10).command);
+    expect(state.notification).not.toHaveBeenCalled();
+    expect(state.resend).not.toHaveBeenCalled();
+    expect(state.updates).not.toHaveBeenCalled();
+  });
+
+  it("pins removal to the confirmed ID even if numbers shift while confirming", async () => {
+    state.onPrompt = () => { state.rows.find((row) => row.id === 1)!.active = false; };
+    const { fake, command } = interaction("remover", 2);
+    await executeManhwaCommand(command);
+    expect(fake.editReply.mock.calls[0][0].content).toContain("**C** (nº 2)");
+    expect(state.updates).toHaveBeenCalledWith(
+      { active: false, updatedAt: expect.any(Date) },
+      { conditions: [{ field: "id", value: 10 }, { field: "active", value: true }] },
+    );
+    expect(state.acknowledge).toHaveBeenCalledTimes(1);
+    expect(state.acknowledge.mock.invocationCallOrder[0]).toBeLessThan(state.updates.mock.invocationCallOrder[0]);
+    expect(fake.editReply.mock.calls.at(-1)![0].components).toEqual([]);
+  });
+
+  it.each(["cancel", "timeout", "ack-failure"] as const)("never changes a work on %s", async (action) => {
+    state.action = action;
+    if (action === "ack-failure") state.acknowledge.mockRejectedValueOnce(new Error("acknowledgement failed"));
+    const command = interaction("remover", 2).command;
+    if (action === "ack-failure") await expect(executeManhwaCommand(command)).rejects.toThrow("acknowledgement failed");
+    else await executeManhwaCommand(command);
+    expect(state.updates).not.toHaveBeenCalled();
+  });
+
+  it("does not change another work if the selected work was already paused", async () => {
+    state.onPrompt = () => { state.rows.find((row) => row.id === 10)!.active = false; };
+    const { fake, command } = interaction("remover", 2);
+    await executeManhwaCommand(command);
+    expect(fake.editReply.mock.calls.at(-1)![0].content).toContain("Nenhuma outra obra foi alterada");
+    expect(state.rows.find((row) => row.id === 1)!.active).toBe(true);
+  });
+
+  it("uses the same numbers in the error list", async () => {
+    const { fake, command } = interaction("erros");
+    await executeManhwaCommand(command);
+    expect(fake.editReply.mock.calls[0][0].content).toContain("Nº 2");
+    expect(fake.editReply.mock.calls[0][0].content).not.toContain("**B**");
+  });
+
+  it("shows the current number of a newly added work", async () => {
+    const { fake, command } = interaction("adicionar");
+    await executeManhwaCommand(command);
+    expect(fake.editReply.mock.calls.at(-1)![0].content).toContain("Número atual da obra: 3");
+    expect(state.rows.find((row) => row.title === "D")!.id).toBe(11);
+  });
+
+  it("warns when adding a work with a non-direct URL", async () => {
+    const { fake, command } = interaction("adicionar", null, false, {
+      link: "https://www.google.com/url?url=https%3A%2F%2Ftoptoon.com%2Fcomic%2Fep_list%2Fwork",
+      plataforma: "toptoon",
+    });
+    await executeManhwaCommand(command);
+    expect(fake.editReply.mock.calls.at(-1)![0].content).toContain("Link não direto");
+    expect(fake.editReply.mock.calls.at(-1)![0].content).toContain("www.google.com");
+  });
+
+  it("warns before confirming a non-direct link edit", async () => {
+    state.rows.find((row) => row.id === 10)!.platform = "toptoon";
+    const { fake, command } = interaction("editar_link", 2, false, {
+      link: "https://www.google.com/url?url=https%3A%2F%2Ftoptoon.com%2Fcomic%2Fep_list%2Fwork",
+    });
+    await executeManhwaCommand(command);
+    expect(fake.editReply.mock.calls[0]![0].content).toContain("Link não direto");
+    expect(state.rows.find((row) => row.id === 10)!.listingUrl).toContain("google.com");
+  });
+
+  it("retains integer option names for compatibility but requires positive numbers", () => {
+    for (const name of ["remover", "teste", "renomear", "editar_link", "reenviar"]) {
+      const command = monitorCommandDefinition.options!.find((option) => option.name === name);
+      expect(command?.options?.[0]).toMatchObject({ type: 4, min_value: 1 });
+    }
+  });
+});

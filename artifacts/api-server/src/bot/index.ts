@@ -2,10 +2,7 @@ import { Client, Events, GatewayIntentBits } from "discord.js";
 import { logger } from "../lib/logger.js";
 import { registerBotLifecycle } from "./bootstrap.js";
 import { registerInteractionRouter } from "./interaction-router.js";
-import {
-  blockInteractionCallbacks,
-  isInteractionCallbackRoute,
-} from "./interaction-rate-limit.js";
+import { blockInteractionCallbacks } from "./interaction-rate-limit.js";
 
 const LOGIN_TIMEOUT_MS = 30_000;
 const RETRY_DELAY_MS = 10_000;
@@ -135,11 +132,11 @@ function createClient(token: string) {
   });
 
   client.rest.on("rateLimited", (rateLimitData) => {
-    if (isInteractionCallbackRoute(rateLimitData.route)) {
-      blockInteractionCallbacks(
-        Math.max(rateLimitData.timeToReset, rateLimitData.retryAfter),
-      );
-    }
+    // A route-local 429 must not pause callbacks for every autocomplete command.
+    blockInteractionCallbacks(
+      Math.max(rateLimitData.timeToReset, rateLimitData.retryAfter),
+      rateLimitData.global,
+    );
 
     logger.warn(
       {
@@ -206,7 +203,7 @@ export async function startBot() {
       logger.info({ attempt }, "Chamando client.login()...");
       await loginAndWaitForReady(client, normalizedToken);
       logger.info({ attempt }, "client.login() concluiu e ClientReady foi recebido");
-      return;
+      return client;
     } catch (error) {
       logger.error(
         { err: error, attempt },
