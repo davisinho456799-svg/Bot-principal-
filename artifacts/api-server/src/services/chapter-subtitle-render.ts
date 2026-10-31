@@ -39,8 +39,7 @@ export function buildSubtitleRowsLayout(chapters: ParsedChapter[], headerHeight:
 export function buildSubtitleFallbackRow(chapter: ParsedChapter, y: number, height: number, hasThumbnail: boolean) {
   const displayedSubtitle = chapterSubtitleForDisplay(chapter);
   const lines = subtitleLines(displayedSubtitle ?? "");
-  return `<rect x="24" y="${y}" width="872" height="${height - 24}" rx="14" fill="#2b2d31" stroke="#404249"/>
-    ${hasThumbnail ? "" : `<text x="52" y="${y + 70}" fill="#aeb0b4" font-family="Arial,sans-serif" font-size="18">Imagem indisponível</text>`}
+  return `${hasThumbnail ? "" : `<text x="52" y="${y + 70}" fill="#aeb0b4" font-family="Arial,sans-serif" font-size="18">Imagem indisponível</text>`}
     <text x="308" y="${y + 42}" fill="#f2f3f5" font-family="Arial,sans-serif" font-size="25" font-weight="700">Cap. ${escapeXml(chapter.number)}</text>
     ${lines.map((line, i) => `<text x="308" y="${y + 72 + i * 26}" fill="#d0d2d5" font-family="Arial,sans-serif" font-size="22">${escapeXml(line)}</text>`).join("")}
     ${chapter.releaseDate ? `<text x="308" y="${y + 94 + lines.length * 26}" fill="#aeb0b4" font-family="Arial,sans-serif" font-size="16">${escapeXml(chapter.releaseDate)}</text>` : ""}`;

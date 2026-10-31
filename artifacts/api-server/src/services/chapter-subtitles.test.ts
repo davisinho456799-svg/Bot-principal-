@@ -130,7 +130,7 @@ describe("subtitle fallback layout", () => {
     const markup = buildSubtitleFallbackRow({ ...chapter, subtitlePt: 'A < B & "C"' }, 92, 164, true);
     expect(markup).toContain(">Cap. 36</text>");
     expect(markup).not.toContain(">EP ");
-    expect(markup).toContain('fill="#2b2d31"');
+    expect(markup).not.toContain("<rect");
     expect(markup).toContain('fill="#f2f3f5"');
     expect(markup).toContain("A &lt; B &amp; &quot;C&quot;");
     expect(markup).toContain('y="164"');

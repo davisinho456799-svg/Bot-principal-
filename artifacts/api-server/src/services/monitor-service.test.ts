@@ -187,8 +187,10 @@ describe("monitor release image", () => {
 
     expect(info.width).toBe(920);
     expect(pixel(5, 100)).toEqual([32, 33, 34]);
-    expect(pixel(50, 110)).toEqual([43, 45, 49]);
+    expect(pixel(50, 110)).toEqual([32, 33, 34]);
+    expect(pixel(130, 95)).toEqual([212, 59, 53]);
     expect(pixel(130, 120)).toEqual([212, 59, 53]);
+    expect(pixel(130, 231)).toEqual([212, 59, 53]);
   });
 
   it("renders two portrait panels for the browser-less experiment, with no primary panel", async () => {

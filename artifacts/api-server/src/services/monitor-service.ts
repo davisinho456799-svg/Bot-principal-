@@ -456,16 +456,16 @@ async function buildStrip(
   const composites = await Promise.all(images.map(async ({ data, chapter }, index) => {
     if (!data) return null;
     const thumbnail = await sharp(data)
-      .resize(240, 120, {
+      .resize(240, 140, {
         fit: "contain",
-        background: { r: 43, g: 45, b: 49, alpha: 1 },
+        background: { r: 32, g: 33, b: 34, alpha: 1 },
       })
       .png()
       .toBuffer();
     return {
       input: thumbnail,
-      left: 40,
-      top: layout.rows[index].y + 10,
+      left: 24,
+      top: layout.rows[index].y,
     };
   }));
   const validComposites = composites.filter(
