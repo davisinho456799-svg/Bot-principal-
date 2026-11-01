@@ -1,0 +1,106 @@
+name: Deploy BotPrincipal to Discloud
+
+on:
+  push:
+    branches: [feature/light-bot-mode]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: discloud-bot-principal
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/feature/light-bot-mode'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out the exact revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Start deployment history
+        run: |
+          node --input-type=module <<'JS'
+          import { createDeploymentJournal } from "./scripts/discloud-deploy.mjs";
+          createDeploymentJournal({ revision: process.env.GITHUB_SHA }).record({ phase: "package.source", status: "started" });
+          JS
+
+      - name: Package tracked source without credentials or generated files
+        id: package
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import fnmatch, os, pathlib, subprocess, zipfile
+          config = pathlib.Path("discloud.config").read_text()
+          if "RAM=3072" not in config or "VLAN=true" not in config:
+              raise SystemExit("Unexpected production memory/private-network configuration")
+          if "@workspace/db run push" in config:
+              raise SystemExit("Automatic production schema changes are not allowed")
+          ignored = {".git", ".github", ".agents", ".local", ".cache",
+                     "attached_assets", "exports", "node_modules", "dist", "compiled-worker"}
+          patterns = ["*.zip", "*.log", "*.tsbuildinfo", "*.pem", "*.key"]
+          files = subprocess.check_output(["git", "ls-files", "-z"]).decode().split("\0")
+          count = 0
+          with zipfile.ZipFile("/tmp/discloud-upload.zip", "w", zipfile.ZIP_DEFLATED) as archive:
+              for name in filter(None, files):
+                  path = pathlib.Path(name)
+                  if ignored.intersection(path.parts) or path.name.startswith(".env") or any(
+                       part == ".build-history" or part.startswith((".build-stage-", ".promotion-")) for part in path.parts):
+                      continue
+                  if any(fnmatch.fnmatch(path.name, pattern) for pattern in patterns):
+                      continue
+                  if path.is_symlink():
+                      raise SystemExit("Tracked symlinks are not allowed in the deployment archive")
+                  archive.write(path, name)
+                  count += 1
+              archive.writestr("deploy-revision.txt", os.environ["GITHUB_SHA"] + "\n")
+          if pathlib.Path("/tmp/discloud-upload.zip").stat().st_size > 100 * 1024 * 1024:
+              raise SystemExit("Deployment archive exceeds the Discloud upload limit")
+          print(f"Packaged {count} tracked source files; no environment file included.")
+          PY
+
+      - name: Record packaging result
+        if: always()
+        env:
+          PACKAGE_STATUS: ${{ steps.package.outcome }}
+        run: |
+          node --input-type=module <<'JS'
+          import { createDeploymentJournal } from "./scripts/discloud-deploy.mjs";
+          createDeploymentJournal({ revision: process.env.GITHUB_SHA }).record({
+            phase: "package.source",
+            status: process.env.PACKAGE_STATUS === "success" ? "completed" : "failed"
+          });
+          JS
+
+      - name: Update the existing bot and verify the running revision
+        shell: bash
+        env:
+          DISCLOUD_TOKEN: ${{ secrets.DISCLOUD_TOKEN }}
+        run: |
+          node scripts/discloud-deploy.mjs
+
+      - name: Finalize deployment history
+        if: always()
+        env:
+          DEPLOYMENT_STATUS: ${{ job.status }}
+        run: |
+          node --input-type=module <<'JS'
+          import { createDeploymentJournal } from "./scripts/discloud-deploy.mjs";
+          createDeploymentJournal({ revision: process.env.GITHUB_SHA }).finish(
+            process.env.DEPLOYMENT_STATUS === "success" ? "success" : "failed"
+          );
+          JS
+
+      - name: Save sanitized deployment history
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: discloud-history-${{ github.sha }}
+          path: /tmp/discloud-deploy-history.json
+          retention-days: 30
+          if-no-files-found: error

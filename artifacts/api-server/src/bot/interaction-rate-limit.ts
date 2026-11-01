@@ -1,12 +1,7 @@
-const INTERACTION_CALLBACK_ROUTE = "/interactions/:id/:token/callback";
-
 let interactionCallbackBlockedUntil = 0;
 
-export function isInteractionCallbackRoute(route: unknown): boolean {
-  return String(route).includes(INTERACTION_CALLBACK_ROUTE);
-}
-
-export function blockInteractionCallbacks(durationMs: number): void {
+export function blockInteractionCallbacks(durationMs: number, isGlobal: boolean): void {
+  if (!isGlobal) return;
   if (!Number.isFinite(durationMs) || durationMs <= 0) return;
   interactionCallbackBlockedUntil = Math.max(
     interactionCallbackBlockedUntil,

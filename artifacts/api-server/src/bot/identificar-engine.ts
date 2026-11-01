@@ -5,7 +5,7 @@
  *   1. Trace.moe   — screenshot de anime com timestamp (confiança ≥ 90%)
  *   2. SauceNAO    — identificação genérica de origem de imagem
  *   3. IQDB        — reverse image search (Danbooru, Gelbooru, Zerochan…) + Danbooru API
- *   4. OCR + APIs  — extrai texto e pesquisa em AniList, MAL, Kitsu, AniDB, TMDB
+ *   4. OCR + APIs  — extrai texto e pesquisa em AniList, MAL, Kitsu, AniDB
  *   Fallback final: retorna melhor resultado do Trace.moe mesmo com baixa confiança
  */
 
@@ -17,7 +17,6 @@ import { searchAnime, cleanDescription, translateToPtBr } from "./anilist.js";
 import { searchJikanAnimeAny } from "./jikan.js";
 import { searchKitsu } from "./kitsu.js";
 import { searchAniDB } from "./anidb.js";
-import { searchAnimeMovieTMDB } from "./tmdb.js";
 
 // ─── Constantes ───────────────────────────────────────────────────────────────
 
@@ -364,13 +363,12 @@ async function tryOCRSearch(
   if (!ocrText || ocrText.trim().length < 3) return null;
 
   // Busca em paralelo em todos os serviços
-  const [anilistRes, jikanRes, kitsuRes, anidbRes, tmdbRes] =
+  const [anilistRes, jikanRes, kitsuRes, anidbRes] =
     await Promise.allSettled([
       searchAnime(ocrText).catch(() => []),
       searchJikanAnimeAny(ocrText).catch(() => []),
       searchKitsu(ocrText).catch(() => []),
       searchAniDB(ocrText).catch(() => []),
-      searchAnimeMovieTMDB(ocrText).catch(() => []),
     ]);
 
   const candidates: OCRCandidate[] = [];
@@ -497,32 +495,6 @@ async function tryOCRSearch(
         malId: null,
         anidbId: m.aid,
         links: [{ label: "AniDB", url: `https://anidb.net/anime/${m.aid}` }],
-        isAdult: false,
-      });
-    }
-  }
-
-  // ── TMDB ───────────────────────────────────────────────────────────────────
-  if (tmdbRes.status === "fulfilled") {
-    for (const m of tmdbRes.value.slice(0, 5)) {
-      const score = bestScore(ocrText, [m.title, m.originalTitle]);
-      if (score < OCR_SCORE_THRESHOLD) continue;
-
-      const synopsis = m.overview
-        ? await translateToPtBr(m.overview).catch(() => m.overview)
-        : null;
-
-      candidates.push({
-        score,
-        title: m.title ?? "?",
-        titleNative: m.originalTitle !== m.title ? m.originalTitle : null,
-        titleRomaji: null,
-        synopsis,
-        mediaType: "Movie",
-        anilistId: null,
-        malId: null,
-        anidbId: null,
-        links: [{ label: "TMDB", url: m.tmdbUrl }, ...(m.imdbUrl ? [{ label: "IMDb", url: m.imdbUrl }] : [])],
         isAdult: false,
       });
     }

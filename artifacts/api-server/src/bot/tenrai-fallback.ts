@@ -17,6 +17,7 @@ export interface TenraiAnime {
   url?: string | null;
   score?: number | null;
   episodes?: number | null;
+  duration?: string | null;
   synopsis?: string | null;
   genres?: TenraiGenre[];
   themes?: TenraiGenre[];

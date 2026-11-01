@@ -1,0 +1,7 @@
+dist
+tmp
+*.tsbuildinfo
+node_modules
+.build-history
+.build-stage-*
+.promotion-*
