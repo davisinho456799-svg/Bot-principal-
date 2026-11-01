@@ -454,7 +454,7 @@ async function buildStrip(
     return buildSubtitleFallbackRow(chapter, y, layout.rows[index].height, Boolean(data));
   }).join("");
   const chapterNumbers = chapters.map(chapter => chapter.number);
-  const baseSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="100%" height="100%" fill="#202122"/>${includeBanner ? buildReleaseBannerMarkup(title, chapterNumbers, "dark") : ""}${imageRows}</svg>`;
+  const baseSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="100%" height="100%" fill="#202122"/>${includeBanner ? buildReleaseBannerMarkup(title, chapterNumbers, "dark", width) : ""}${imageRows}</svg>`;
   let output = await sharp(Buffer.from(baseSvg)).png().toBuffer();
   const composites = await Promise.all(images.map(async ({ data, chapter }, index) => {
     if (!data) return null;
@@ -488,7 +488,7 @@ class PairTestImageError extends Error {}
 async function buildPairTestStrip(title: string, chapters: ChapterCandidate[]): Promise<Buffer | null> {
   if (chapters.length !== 1) throw new PairTestImageError("O teste deve selecionar um único capítulo.");
   const card = await buildPairCard(chapters[0]);
-  return addReleaseBanner(card, title, [chapters[0].number], "dark");
+  return addReleaseBanner(card, title, [chapters[0].number]);
 }
 
 async function buildPairCard(chapter: ChapterCandidate): Promise<Buffer> {
@@ -532,7 +532,7 @@ export async function buildAutomaticToptoonStrip(title: string, chapters: Chapte
   });
   const strip = await sharp({ create: { width: 1024, height: top, channels: 4, background: "#202122" } })
     .composite(composite).png().toBuffer();
-  const image = await addReleaseBanner(strip, title, chapters.map(chapter => chapter.number), "dark");
+  const image = await addReleaseBanner(strip, title, chapters.map(chapter => chapter.number));
   if (!image) throw new PairTestImageError("Não foi possível decorar a montagem automática.");
   return { image, primaryChapters, textChapters };
 }

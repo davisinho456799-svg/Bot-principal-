@@ -10,6 +10,11 @@ describe("monitor release image", () => {
   it("includes chapter labels in the monitor banner", () => {
     const markup = buildReleaseBannerMarkup("Obra de teste", ["12", "13"]);
     expect(markup).toContain("NEW CHAPTERS · 2 · CAP. 12, 13");
+    expect(markup).not.toContain("<rect");
+    const darkMarkup = buildReleaseBannerMarkup("Obra de teste", ["12", "13"], "dark");
+    expect(darkMarkup).toContain('<rect x="0" y="8" width="920" height="76" fill="#2b2d31"/>');
+    expect(darkMarkup).toContain('fill="#f2f3f5"');
+    expect(darkMarkup).toContain('fill="#d8624c"');
   });
   it.each(["pairs", "mixed", "text", "normal"])("preserves automatic notification batches: %s", async mode => {
     vi.stubEnv("DISCORD_BOT_TOKEN", "unit-test-not-a-real-token");
@@ -51,6 +56,11 @@ describe("monitor release image", () => {
     const png = Buffer.from(await image.arrayBuffer());
     const metadata = await sharp(png).metadata();
     expect(metadata.width).toBe(mode === "normal" ? 920 : 1024);
+    if (mode === "pairs" || mode === "mixed") {
+      const { data, info } = await sharp(png).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+      const bannerBackground = Array.from(data.subarray(10 * info.width * info.channels, 10 * info.width * info.channels + 3));
+      expect(bannerBackground).toEqual([255, 250, 243]);
+    }
     if (mode === "normal") {
       expect(requested.some(url => url.includes("extra"))).toBe(false);
     } else if (mode === "mixed") {
@@ -70,6 +80,37 @@ describe("monitor release image", () => {
     }
   });
 
+  it("keeps the manual Toptoon pair banner light", async () => {
+    vi.stubEnv("DISCORD_BOT_TOKEN", "unit-test-not-a-real-token");
+    const thumbnails = await Promise.all(["#d43b35", "#37a36b"].map(background =>
+      sharp({ create: { width: 40, height: 60, channels: 3, background } }).png().toBuffer(),
+    ));
+    let posted: FormData | undefined;
+    vi.stubGlobal("fetch", vi.fn(async (input: string, options?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("https://discord.com/api/")) {
+        posted = options?.body as FormData;
+        return new Response("", { status: 200 });
+      }
+      return new Response(new Uint8Array(url.includes("extra3") ? thumbnails[1] : thumbnails[0]));
+    }));
+
+    await postStrip("unit-test-channel", "Toptoon manual", [{
+      number: "36",
+      key: "toptoon-manual-36",
+      parser: "toptoon",
+      thumbnailUrl: "https://example.test/primary.png",
+      extraThumbnailUrls: ["https://example.test/extra2.png", "https://example.test/extra3.png"],
+    }], 1, 1, true, undefined, true);
+
+    const image = posted!.get("files[0]") as Blob;
+    const { data, info } = await sharp(Buffer.from(await image.arrayBuffer()))
+      .removeAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    const headerPixel = Array.from(data.subarray(10 * info.width * info.channels, 10 * info.width * info.channels + 3));
+    expect(headerPixel).toEqual([255, 250, 243]);
+  });
   it.each(["one-extra", "missing-extras", "no-images"])("delivers a notification after extra-image failure: %s", async failure => {
     vi.stubEnv("DISCORD_BOT_TOKEN", "unit-test-not-a-real-token");
     const thumbnail = await sharp({ create: { width: 40, height: 40, channels: 3, background: "#356da2" } }).png().toBuffer();
