@@ -12,7 +12,7 @@ describe("monitor release image", () => {
     expect(markup).toContain("NEW CHAPTERS · 2 · CAP. 12, 13");
     expect(markup).not.toContain("<rect");
     const darkMarkup = buildReleaseBannerMarkup("Obra de teste", ["12", "13"], "dark");
-    expect(darkMarkup).toContain('<rect x="0" y="8" width="920" height="76" fill="#2b2d31"/>');
+    expect(darkMarkup).toContain('<rect x="0" y="0" width="920" height="84" fill="#2b2d31"/>');
     expect(darkMarkup).toContain('fill="#f2f3f5"');
     expect(darkMarkup).toContain('fill="#d8624c"');
   });
@@ -69,13 +69,13 @@ describe("monitor release image", () => {
       expect(requested).not.toContain("https://example.test/36/primary.png");
       expect(requested).toContain("https://example.test/37/primary.png");
     } else {
-      expect(metadata.height).toBe(92 + 3 * 162);
+      expect(metadata.height).toBe(84 + 3 * 162);
       expect(requested.some(url => url.includes("primary"))).toBe(false);
       const { data, info } = await sharp(png).removeAlpha().raw().toBuffer({ resolveWithObject: true });
       const pixel = (x: number, y: number) => Array.from(data.subarray((y * info.width + x) * info.channels, (y * info.width + x) * info.channels + 3));
       for (let row = 0; row < 3; row++) {
-        expect(pixel(60, 92 + row * 162 + 70)).toEqual([212, 59, 53]);
-        expect(pixel(170, 92 + row * 162 + 70)).toEqual([55, 163, 107]);
+        expect(pixel(60, 84 + row * 162 + 70)).toEqual([212, 59, 53]);
+        expect(pixel(170, 84 + row * 162 + 70)).toEqual([55, 163, 107]);
       }
     }
   });
@@ -190,14 +190,14 @@ describe("monitor release image", () => {
       .toBuffer({ resolveWithObject: true });
     const pixel = (x: number, y: number) =>
       Array.from(data.subarray((y * info.width + x) * info.channels, (y * info.width + x) * info.channels + 3));
-    expect(pixel(160, 112)).toEqual([212, 59, 53]);
-    expect(pixel(160, 202)).toEqual([55, 163, 107]);
+    expect(pixel(130, 112)).toEqual([212, 59, 53]);
+    expect(pixel(130, 202)).toEqual([55, 163, 107]);
   });
 
   it("uses the same thumbnail-and-details card layout without a subtitle", async () => {
     vi.stubEnv("DISCORD_BOT_TOKEN", "unit-test-not-a-real-token");
     const thumbnail = await sharp({
-      create: { width: 40, height: 60, channels: 3, background: "#d43b35" },
+      create: { width: 120, height: 70, channels: 3, background: "#d43b35" },
     }).png().toBuffer();
     let posted: FormData | undefined;
     vi.stubGlobal("fetch", vi.fn(async (input: string, options?: RequestInit) => {
@@ -227,12 +227,11 @@ describe("monitor release image", () => {
       Array.from(data.subarray((y * info.width + x) * info.channels, (y * info.width + x) * info.channels + 3));
 
     expect(info.width).toBe(920);
-    expect(info.height).toBe(248);
-    expect(pixel(5, 100)).toEqual([32, 33, 34]);
-    expect(pixel(50, 110)).toEqual([32, 33, 34]);
+    expect(info.height).toBe(224);
+    expect(pixel(0, 110)).toEqual([212, 59, 53]);
     expect(pixel(130, 95)).toEqual([212, 59, 53]);
     expect(pixel(130, 120)).toEqual([212, 59, 53]);
-    expect(pixel(130, 231)).toEqual([212, 59, 53]);
+    expect(pixel(130, 223)).toEqual([212, 59, 53]);
   });
 
   it("renders two portrait panels for the browser-less experiment, with no primary panel", async () => {
@@ -267,7 +266,7 @@ describe("monitor release image", () => {
     expect(decorated).not.toBeNull();
     const metadata = await sharp(decorated!).metadata();
     expect(metadata.width).toBe(320);
-    expect(metadata.height).toBe(212);
+    expect(metadata.height).toBe(204);
 
     const { data, info } = await sharp(decorated!)
       .removeAlpha()
@@ -289,6 +288,6 @@ describe("monitor release image", () => {
       .removeAlpha()
       .raw()
       .toBuffer({ resolveWithObject: true });
-    expect(Array.from(data.subarray(0, info.channels))).toEqual([32, 33, 34]);
+    expect(Array.from(data.subarray(0, info.channels))).toEqual([43, 45, 49]);
   });
 });

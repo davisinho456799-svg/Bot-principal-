@@ -425,7 +425,7 @@ async function buildStrip(
   const headerHeight = includeBanner ? RELEASE_BANNER_HEIGHT : 0;
   const layout = buildSubtitleRowsLayout(chapters, headerHeight, rowHeight, {
     rowGap: 8,
-    bottomPadding: 16,
+    bottomPadding: 0,
   });
   const height = layout.height;
   const images = await Promise.all(chapters.map(async (chapter) => ({
@@ -467,7 +467,7 @@ async function buildStrip(
       .toBuffer();
     return {
       input: thumbnail,
-      left: 24,
+      left: 0,
       top: layout.rows[index].y,
     };
   }));

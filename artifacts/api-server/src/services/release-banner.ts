@@ -1,4 +1,4 @@
-export const RELEASE_BANNER_HEIGHT = 92;
+export const RELEASE_BANNER_HEIGHT = 84;
 export type ReleaseBannerTheme = "light" | "dark";
 
 const xml = (text: string) => text.replace(/[<>&'"]/g, character =>
@@ -13,12 +13,12 @@ export function buildReleaseBannerMarkup(
   const titleColor = theme === "dark" ? "#f2f3f5" : "#132b3f";
   const chapterColor = "#d8624c";
   const panel = theme === "dark"
-    ? `<rect x="0" y="8" width="${width}" height="76" fill="#2b2d31"/>`
+    ? `<rect x="0" y="0" width="${width}" height="84" fill="#2b2d31"/>`
     : "";
   const chapterLabel = chapterNumbers.length
     ? ` · CAP. ${chapterNumbers.map(xml).join(", ")}`
     : "";
-  return `${panel}<text x="34" y="44" fill="${titleColor}" font-family="Arial,sans-serif" font-size="25" font-weight="700">${xml(title)}</text><text x="34" y="70" fill="${chapterColor}" font-family="Arial,sans-serif" font-size="13" letter-spacing="2">NEW CHAPTERS · ${chapterNumbers.length}${chapterLabel}</text>`;
+  return `${panel}<text x="34" y="36" fill="${titleColor}" font-family="Arial,sans-serif" font-size="25" font-weight="700">${xml(title)}</text><text x="34" y="62" fill="${chapterColor}" font-family="Arial,sans-serif" font-size="13" letter-spacing="2">NEW CHAPTERS · ${chapterNumbers.length}${chapterLabel}</text>`;
 }
 
 export function buildReleaseBannerSvg(
